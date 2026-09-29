@@ -386,3 +386,50 @@ After the Structured Data foundation passed, Slice 2 added the minimum architect
 - server-side resolution of authorized Knowledge documents rather than accepting document IDs from a tool caller.
 
 This does not change the Slice 2 functional goal. Routing remains deterministic and no autonomous agent loop is introduced.
+
+
+### Structured Chat implementation checkpoint
+
+The next backend path is now implemented pending local runtime verification:
+
+```text
+Natural-language business question
+        ↓
+Deterministic Structured candidacy check
+        ↓
+Schema-aware bounded SQL planner
+        ↓
+Authorized source-ID validation
+        ↓
+structured.query governed tool
+        ↓
+SQLGlot policy + read-only database session
+        ↓
+Normalized structured Evidence
+        ↓
+Grounded answer synthesis
+```
+
+Important fail-closed behavior:
+
+- obvious non-Structured questions do not invoke the SQL planner;
+- the planner receives only authorized enabled/connected schema metadata;
+- model-selected source IDs are checked against server-authorized sources;
+- the planner may decline when the schema cannot support the request;
+- a declined Structured request returns no database evidence and does not fall through to a model-generated enterprise-data answer;
+- policy/execution failure produces a safe no-fabrication response;
+- database execution still occurs only through `structured.query`, never directly from planner output.
+
+Runtime Gate H/I coverage is available through:
+
+```bash
+python scripts/structured_chat_acceptance.py
+```
+
+The deterministic acceptance fact is:
+
+```text
+Blue Mountain Cafe total revenue = 325.00
+```
+
+The acceptance script also asks for an unsupported payroll metric and requires the request to fail closed with no evidence.
