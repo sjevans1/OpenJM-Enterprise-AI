@@ -15,7 +15,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   "dbgpt>=0.8.0rc1,<0.9",
   "dbgpt-ext[rag,storage_chromadb]>=0.8.0rc1,<0.9",
-  "sentence-transformers>=3.0"
+  "sentence-transformers>=3.0",
+  "pandas==2.2.3"
 ]
 
 [project.optional-dependencies]
