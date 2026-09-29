@@ -426,8 +426,8 @@ export default function App() {
                   <div className="eyebrow">Evidence layer</div>
                   <h2>Documents available to OpenJM</h2>
                   <p>
-                    Files uploaded here are parsed, chunked and indexed through the DB-GPT
-                    knowledge adapter. Chat retrieves from this evidence layer automatically.
+                    Files uploaded here are parsed, chunked and indexed into OpenJM’s governed
+                    knowledge layer. Chat retrieves from this evidence layer automatically.
                   </p>
                 </div>
                 <div className="metric-card">
