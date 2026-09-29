@@ -112,12 +112,13 @@ async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
 
+    connection_uri: str | None = None
     try:
         connection_uri = credential_vault.decrypt(source.connection_secret)
         await test_source_connection(source.engine, connection_uri)
     except (CredentialVaultError, DataSourceError) as exc:
         source.status = "error"
-        source.last_error = _safe_error(exc)
+        source.last_error = _safe_error(exc, connection_uri)
         await db.commit()
         return DataSourceTestResult(
             source_id=source.id,
@@ -149,12 +150,13 @@ async def refresh_source_schema(
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
 
+    connection_uri: str | None = None
     try:
         connection_uri = credential_vault.decrypt(source.connection_secret)
         tables = await discover_source_schema(source.engine, connection_uri)
     except (CredentialVaultError, DataSourceError) as exc:
         source.status = "error"
-        source.last_error = _safe_error(exc)
+        source.last_error = _safe_error(exc, connection_uri)
         await db.commit()
         raise HTTPException(status_code=400, detail=source.last_error) from exc
 
