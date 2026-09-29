@@ -61,3 +61,26 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(32), default="indexing")
     indexed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+
+class DataSource(Base):
+    __tablename__ = "data_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    name: Mapped[str] = mapped_column(String(240))
+    engine: Mapped[str] = mapped_column(String(32))
+    connection_secret: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="untested")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    schema_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    authorized_objects_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_schema_refresh: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
