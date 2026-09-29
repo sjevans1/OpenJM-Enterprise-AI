@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
 The setup script:
 
 - confirms the correct Git branch;
-- uses Python 3.12 or 3.11;
+- uses Python 3.11;
 - creates/preserves the local `.env`;
 - asks for the actual Hermes/OpenAI-compatible endpoint, model name and optional bearer key;
 - installs backend dependencies;
@@ -119,7 +119,7 @@ OPENJM_MODEL_NAME=hermes-agent
 
 ### 3. Start the backend
 
-Python 3.11 or 3.12 is recommended.
+Python 3.11 is currently required for Vertical Slice 1 because DB-GPT 0.8.2 pins aiohttp 3.8.4, which does not build on Python 3.12.
 
 With `uv`:
 
