@@ -114,12 +114,43 @@ The knowledge implementation is behind `KnowledgeEngine`, so it can later move t
 5. If no evidence clears the retrieval threshold, the request stays GENERAL.
 6. Evidence metadata is attached to the assistant response.
 
+## Vertical Slice 2 — governed structured data
+
+Vertical Slice 2 adds the third execution class:
+
+```text
+User
+  ↓
+Chat
+  ↓
+OpenJM Orchestrator
+  ↓
+STRUCTURED
+  ↓
+Authorized source + schema context
+  ↓
+SQL planner
+  ↓
+SQLGlot policy / rewrite
+  ↓
+Bounded read-only execution
+  ↓
+Structured evidence
+  ↓
+Model synthesis
+```
+
+The Structured Data Gateway owns source registration, credential protection, schema discovery, query policy, bounded execution and provenance. The browser never talks directly to a database.
+
+Initial adapters are SQLite and PostgreSQL. SQL must be validated independently of the model, restricted to one read-only statement, scoped to authorized schema objects, limited in row count and bounded by an execution timeout.
+
+See `docs/VERTICAL_SLICE_2.md` for the complete scope and acceptance contract.
+
 ## Next architecture phases
 
-After Vertical Slice 1 passes:
+After Vertical Slice 2 passes:
 
-1. Structured Data Gateway with source-scoped read-only credentials and SQLGlot policy.
-2. Four-way routing: GENERAL / KNOWLEDGE / STRUCTURED / HYBRID.
-3. Saved reports created from repeatable evidence plans.
-4. Enterprise identity and permission-aware retrieval.
-5. Automations and bounded agent workflows.
+1. Four-way routing with HYBRID document + structured-data evidence.
+2. Saved reports created from repeatable evidence plans.
+3. Enterprise identity and permission-aware retrieval/data access.
+4. Automations and bounded agent workflows.
