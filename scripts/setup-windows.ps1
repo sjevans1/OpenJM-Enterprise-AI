@@ -58,18 +58,13 @@ try {
     Pop-Location
 }
 
-Write-Step "Selecting Python 3.12 or 3.11"
+Write-Step "Selecting Python 3.11"
 $PythonLauncherArgs = $null
 try {
-    & py -3.12 --version | Out-Host
-    $PythonLauncherArgs = @("-3.12")
+    & py -3.11 --version | Out-Host
+    $PythonLauncherArgs = @("-3.11")
 } catch {
-    try {
-        & py -3.11 --version | Out-Host
-        $PythonLauncherArgs = @("-3.11")
-    } catch {
-        throw "Python 3.11 or 3.12 was not found through the Windows py launcher."
-    }
+    throw "Python 3.11 was not found through the Windows py launcher. OpenJM Vertical Slice 1 currently requires Python 3.11 because DB-GPT 0.8.2 pins aiohttp 3.8.4, which is not compatible with Python 3.12."
 }
 
 Write-Step "Checking Node.js and npm"
