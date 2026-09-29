@@ -161,7 +161,13 @@ class StructuredPlanner:
 
         lowered = " ".join(message.lower().split())
         message_terms = set(re.findall(r"[a-z0-9]+", lowered))
-        return bool(message_terms & self._schema_terms(sources))
+
+        # A single schema token can easily be an ordinary English word (for
+        # example, a "name" column). Requiring at least two schema-term hits
+        # prevents general conversation such as "Hello, my name is Sam" from
+        # being misrouted to STRUCTURED while retaining explicit business-cue
+        # routing through looks_structured().
+        return len(message_terms & self._schema_terms(sources)) >= 2
 
     @staticmethod
     def _schema_context(sources: list[DataSource]) -> str:
