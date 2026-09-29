@@ -104,13 +104,55 @@ class DBGPTKnowledgeEngine:
         evidence.sort(key=sort_key, reverse=True)
         return evidence[: self.settings.rag_top_k]
 
+    def _force_delete_chroma_collection(self, collection_name: str) -> None:
+        """Delete a Chroma collection directly when DB-GPT leaves it behind.
+
+        DB-GPT 0.8.2's ChromaStore.delete_vector_name() can no-op because its
+        collection-existence check compares a string name with the objects
+        returned by Chroma's list_collections(). OpenJM verifies the deletion
+        and uses Chroma's public PersistentClient API only as a cleanup fallback.
+        """
+        from chromadb import PersistentClient, Settings
+
+        persist_dir = self.settings.vector_path / "chromadb"
+        client = PersistentClient(
+            path=str(persist_dir),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        try:
+            client.delete_collection(collection_name)
+        except Exception as exc:
+            # Chroma raises when the collection is already gone. Treat that as
+            # success only when a follow-up listing confirms absence.
+            names = {
+                item if isinstance(item, str) else getattr(item, "name", None)
+                for item in client.list_collections()
+            }
+            if collection_name in names:
+                raise exc
+
     async def delete(self, document_id: str) -> None:
+        collection_name = self._collection_name(document_id)
         try:
             store = self._store(document_id)
-            await asyncio.to_thread(
-                store.delete_vector_name,
-                self._collection_name(document_id),
-            )
+            await asyncio.to_thread(store.delete_vector_name, collection_name)
+
+            # Verify the upstream adapter actually removed the data. If it did
+            # not, use Chroma's public client API as a narrow cleanup fallback.
+            still_exists = await asyncio.to_thread(store.vector_name_exists)
+            if still_exists:
+                await asyncio.to_thread(
+                    self._force_delete_chroma_collection,
+                    collection_name,
+                )
+
+            # Final verification: a document delete must not leave retrievable
+            # vectors behind.
+            verify_store = self._store(document_id)
+            if await asyncio.to_thread(verify_store.vector_name_exists):
+                raise RuntimeError(
+                    f"Chroma collection {collection_name} still contains vectors"
+                )
         except Exception as exc:
             raise KnowledgeEngineError(
                 f"DB-GPT vector deletion failed for {document_id}: {exc}"
