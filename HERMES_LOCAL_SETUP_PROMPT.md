@@ -23,7 +23,11 @@ Act as the local implementation/operator for the user's machine. Your immediate 
 3. Switch to `build/vertical-slice-1`.
 4. Confirm you are NOT on `main`.
 5. Inspect `.env.example`, `README.md`, `docs/ARCHITECTURE.md`, and `docs/ACCEPTANCE.md`.
-6. Determine the actual local Hermes/OpenAI-compatible API endpoint, current model identifier, and whether it requires a bearer/API key. Do not guess these values.
+6. The validated local Vertical Slice 1 model target is already known:
+   - base URL: `http://127.0.0.1:18080/v1`
+   - model: `gemma-4-12b-local`
+   - runtime: local Gemma 4 12B worker
+   Verify that this worker is healthy and determine whether its bearer key is required, but do not replace these known endpoint/model values with the stale 8642/hermes-agent defaults.
 7. Configure the repo's local `.env` with those actual values. Never commit `.env` or secrets.
 8. Run the Windows setup script:
 
