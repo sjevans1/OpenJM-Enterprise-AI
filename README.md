@@ -186,14 +186,27 @@ python scripts/acceptance.py \
   --delete-after-test
 ```
 
+For Vertical Slice 2, create and validate the deterministic structured-data source:
+
+```bash
+python scripts/structured_foundation.py
+```
+
+Then validate natural-language Structured Chat, grounded SQL evidence, unsupported-schema handling and disabled-source fail-closed behavior:
+
+```bash
+python scripts/structured_chat_acceptance.py
+```
+
 ## Product UI
 
 OpenJM exposes only implemented product workflows:
 
-- **Chat** — persistent conversations, routing, answers and evidence.
-- **Knowledge** — governed document upload/index state.
+- **Chat** — persistent conversations with GENERAL, KNOWLEDGE and STRUCTURED routing.
+- **Knowledge** — governed document upload/index state and evidence-backed retrieval.
+- **Data** — encrypted source registration, connection testing, schema discovery and governed read-only structured access.
 
-Vertical Slice 2 will enable **Data** as the next real product workflow. **Reports, Automations and Administration** remain future capabilities until their implementation phases.
+**Reports, Automations and Administration** remain future capabilities until their implementation phases.
 
 There is no primary Jobs screen and no raw MMR/relevance debugging workflow in the user product.
 
