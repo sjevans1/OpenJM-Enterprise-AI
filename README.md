@@ -44,6 +44,47 @@ build/vertical-slice-1
 
 Do not merge the branch until the acceptance checks in `docs/ACCEPTANCE.md` pass.
 
+## Windows quick start
+
+For the user's current Windows setup, the preferred path is now scripted.
+
+From the repository root on `build/vertical-slice-1`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
+```
+
+The setup script:
+
+- confirms the correct Git branch;
+- uses Python 3.12 or 3.11;
+- creates/preserves the local `.env`;
+- asks for the actual Hermes/OpenAI-compatible endpoint, model name and optional bearer key;
+- installs backend dependencies;
+- runs backend unit tests;
+- installs frontend dependencies;
+- performs a production frontend build.
+
+Then start both services:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-windows.ps1
+```
+
+Run the memory acceptance check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows.ps1
+```
+
+Run memory + real document ingestion/catalog acceptance:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows.ps1 -Document "C:\full\path\to\test-document.pdf"
+```
+
+If Hermes will perform the local setup, hand it `HERMES_LOCAL_SETUP_PROMPT.md`. That prompt explicitly prohibits direct pushes to `main`, fake success, scope expansion, and merging before the acceptance gates pass.
+
 ## Local development
 
 ### 1. Clone and switch to the build branch
