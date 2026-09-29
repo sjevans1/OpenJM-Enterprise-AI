@@ -24,6 +24,13 @@ class StructuredPlan:
     rationale: str
 
 
+@dataclass(frozen=True)
+class StructuredPlanningResult:
+    candidate: bool
+    plan: StructuredPlan | None = None
+    rationale: str = ""
+
+
 STRUCTURED_CUES = (
     "revenue",
     "sales",
@@ -198,10 +205,10 @@ class StructuredPlanner:
         message: str,
         db: AsyncSession,
         user_id: str,
-    ) -> StructuredPlan | None:
+    ) -> StructuredPlanningResult:
         sources = await self._sources(db, user_id)
         if not self.is_candidate(message, sources):
-            return None
+            return StructuredPlanningResult(candidate=False)
 
         allowed_ids = {source.id for source in sources}
         prompt = (
@@ -231,7 +238,11 @@ class StructuredPlanner:
         payload = self._extract_json(raw)
         use_structured = payload.get("use_structured")
         if use_structured is not True:
-            return None
+            rationale = payload.get("rationale", "")
+            return StructuredPlanningResult(
+                candidate=True,
+                rationale=rationale if isinstance(rationale, str) else "",
+            )
 
         source_id = payload.get("source_id")
         sql = payload.get("sql")
@@ -246,9 +257,13 @@ class StructuredPlanner:
         if not isinstance(rationale, str):
             rationale = ""
 
-        return StructuredPlan(
-            source_id=source_id,
-            sql=sql.strip(),
+        return StructuredPlanningResult(
+            candidate=True,
+            plan=StructuredPlan(
+                source_id=source_id,
+                sql=sql.strip(),
+                rationale=rationale.strip(),
+            ),
             rationale=rationale.strip(),
         )
 
