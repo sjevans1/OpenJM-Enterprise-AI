@@ -132,15 +132,16 @@ async def test_planner_returns_authorized_structured_plan(session, monkeypatch):
 
     monkeypatch.setattr(planner.model_gateway, "chat", fake_chat)
 
-    plan = await planner.plan(
+    decision = await planner.plan(
         "What is the total revenue for Blue Mountain Cafe?",
         session,
         "local-admin",
     )
 
-    assert plan is not None
-    assert plan.source_id == "source-1"
-    assert "SELECT" in plan.sql
+    assert decision.candidate is True
+    assert decision.plan is not None
+    assert decision.plan.source_id == "source-1"
+    assert "SELECT" in decision.plan.sql
 
 
 @pytest.mark.asyncio
@@ -185,10 +186,12 @@ async def test_planner_can_decline_structured_route(session, monkeypatch):
 
     monkeypatch.setattr(planner.model_gateway, "chat", fake_chat)
 
-    plan = await planner.plan(
+    decision = await planner.plan(
         "Explain our customer philosophy",
         session,
         "local-admin",
     )
 
-    assert plan is None
+    assert decision.candidate is True
+    assert decision.plan is None
+    assert "schema" in decision.rationale.lower()
