@@ -14,12 +14,13 @@ def fail(message: str) -> int:
     return 1
 
 
-def assert_no_secret(payload: object) -> bool:
-    text = str(payload).lower()
+def assert_no_secret(payload: object, connection_uri: str) -> bool:
+    text = str(payload)
+    lowered = text.lower()
     return (
-        "connection_uri" not in text
-        and "connection_secret" not in text
-        and "structured-demo.db?" not in text
+        "connection_uri" not in lowered
+        and "connection_secret" not in lowered
+        and connection_uri not in text
     )
 
 
@@ -52,7 +53,7 @@ def main() -> int:
     created.raise_for_status()
     source = created.json()
     source_id = source["id"]
-    if not assert_no_secret(source):
+    if not assert_no_secret(source, connection_uri):
         return fail("source creation response exposed connection credentials")
     print("PASS source registration:", source_id)
 
@@ -70,13 +71,13 @@ def main() -> int:
     expected = {"customers", "products", "orders", "order_items"}
     if names != expected:
         return fail(f"unexpected schema inventory: {sorted(names)}")
-    if not assert_no_secret(refresh_body):
+    if not assert_no_secret(refresh_body, connection_uri):
         return fail("schema refresh response exposed connection credentials")
     print("PASS schema discovery:", ", ".join(sorted(names)))
 
     fetched = client.get(f"{base}/api/data/sources/{source_id}")
     fetched.raise_for_status()
-    if not assert_no_secret(fetched.json()):
+    if not assert_no_secret(fetched.json(), connection_uri):
         return fail("source GET exposed connection credentials")
     print("PASS credential redaction contract")
 
