@@ -187,7 +187,7 @@ async def test_planner_can_decline_structured_route(session, monkeypatch):
     monkeypatch.setattr(planner.model_gateway, "chat", fake_chat)
 
     decision = await planner.plan(
-        "Explain our customer philosophy",
+        "What is the total payroll bonus this month?",
         session,
         "local-admin",
     )
