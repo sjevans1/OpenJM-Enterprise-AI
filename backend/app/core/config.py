@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     rag_top_k: int = 5
     rag_score_threshold: float = 0.25
 
+    credential_encryption_key: str = ""
+    credential_key_file: Path = REPO_ROOT / "data" / "credentials.key"
+    structured_max_rows: int = 200
+    structured_timeout_seconds: int = 20
+
     dev_user_id: str = "local-admin"
 
     @field_validator("database_url", mode="after")
@@ -56,7 +61,7 @@ class Settings(BaseSettings):
                 return f"{scheme}:///{resolved}"
         return value
 
-    @field_validator("upload_dir", "vector_path", mode="after")
+    @field_validator("upload_dir", "vector_path", "credential_key_file", mode="after")
     @classmethod
     def resolve_repo_relative_paths(cls, value: Path) -> Path:
         if value.is_absolute():
@@ -66,6 +71,7 @@ class Settings(BaseSettings):
     def ensure_directories(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.vector_path.mkdir(parents=True, exist_ok=True)
+        self.credential_key_file.parent.mkdir(parents=True, exist_ok=True)
         (REPO_ROOT / "data").mkdir(parents=True, exist_ok=True)
 
 

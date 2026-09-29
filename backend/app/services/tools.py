@@ -1,0 +1,379 @@
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from time import perf_counter
+from typing import Any, Protocol
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import DataSource, Document
+from app.schemas import Evidence
+from app.services.execution_trace import (
+    complete_execution_trace,
+    start_execution_trace,
+)
+from app.services.knowledge import knowledge_engine
+from app.services.structured_executor import execute_structured_query
+
+
+class ToolError(RuntimeError):
+    pass
+
+
+class ToolNotFoundError(ToolError):
+    pass
+
+
+class ToolPermissionError(ToolError):
+    pass
+
+
+class ToolApprovalRequiredError(ToolError):
+    pass
+
+
+class ToolInputError(ToolError):
+    pass
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str
+    description: str
+    operation_class: str
+    risk_level: str
+    requires_approval: bool
+    required_permissions: frozenset[str] = frozenset()
+    input_schema: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolContext:
+    user_id: str
+    permissions: frozenset[str] = frozenset()
+    approval_granted: bool = False
+    conversation_id: str | None = None
+    request_id: str = field(default_factory=lambda: str(uuid4()))
+    route: str | None = None
+    model_name: str | None = None
+    db: AsyncSession | None = None
+
+
+@dataclass
+class ToolResult:
+    evidence: list[Evidence] = field(default_factory=list)
+    output: dict[str, Any] = field(default_factory=dict)
+    trace_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class Tool(Protocol):
+    spec: ToolSpec
+
+    async def execute(
+        self,
+        context: ToolContext,
+        payload: dict[str, Any],
+    ) -> ToolResult:
+        ...
+
+
+def _with_evidence_id(evidence: Evidence) -> Evidence:
+    if evidence.evidence_id:
+        return evidence
+    return evidence.model_copy(update={"evidence_id": str(uuid4())})
+
+
+class ToolRegistry:
+    """Deterministic registry and governance boundary for OpenJM capabilities."""
+
+    def __init__(self) -> None:
+        self._tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -> None:
+        name = tool.spec.name.strip()
+        if not name:
+            raise ValueError("Tool name cannot be empty")
+        if name in self._tools:
+            raise ValueError(f"Tool already registered: {name}")
+        self._tools[name] = tool
+
+    def get(self, name: str) -> Tool:
+        try:
+            return self._tools[name]
+        except KeyError as exc:
+            raise ToolNotFoundError(f"Unknown or unregistered tool: {name}") from exc
+
+    def specs(self) -> tuple[ToolSpec, ...]:
+        return tuple(tool.spec for tool in self._tools.values())
+
+    @staticmethod
+    def _enforce(spec: ToolSpec, context: ToolContext) -> None:
+        missing = spec.required_permissions - context.permissions
+        if missing:
+            raise ToolPermissionError(
+                f"Tool {spec.name} requires permissions: {', '.join(sorted(missing))}"
+            )
+        if spec.requires_approval and not context.approval_granted:
+            raise ToolApprovalRequiredError(
+                f"Tool {spec.name} requires explicit approval"
+            )
+
+    async def execute(
+        self,
+        name: str,
+        context: ToolContext,
+        payload: dict[str, Any],
+    ) -> ToolResult:
+        tool = self.get(name)
+        invocation_id = str(uuid4())
+        trace = None
+        started = perf_counter()
+        planned_sql = (
+            str(payload.get("sql"))
+            if isinstance(payload.get("sql"), str)
+            else None
+        )
+
+        if context.db is not None:
+            trace = await start_execution_trace(
+                context.db,
+                request_id=context.request_id,
+                tool_invocation_id=invocation_id,
+                user_id=context.user_id,
+                conversation_id=context.conversation_id,
+                route=context.route,
+                tool_name=tool.spec.name,
+                operation_class=tool.spec.operation_class,
+                risk_level=tool.spec.risk_level,
+                requires_approval=tool.spec.requires_approval,
+                model_name=context.model_name,
+                payload=payload,
+                planned_sql=planned_sql,
+            )
+
+        try:
+            self._enforce(tool.spec, context)
+            result = await tool.execute(context, payload)
+            result.evidence = [_with_evidence_id(item) for item in result.evidence]
+        except (ToolPermissionError, ToolApprovalRequiredError) as exc:
+            if trace is not None and context.db is not None:
+                await complete_execution_trace(
+                    context.db,
+                    trace,
+                    status="denied",
+                    validation_decision="denied",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    error_class=exc.__class__.__name__,
+                )
+            raise
+        except Exception as exc:
+            if trace is not None and context.db is not None:
+                await complete_execution_trace(
+                    context.db,
+                    trace,
+                    status="failed",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    error_class=exc.__class__.__name__,
+                )
+            raise
+
+        if trace is not None and context.db is not None:
+            metadata = result.trace_metadata
+            await complete_execution_trace(
+                context.db,
+                trace,
+                status="succeeded",
+                source_id=metadata.get("source_id"),
+                executed_sql=metadata.get("executed_sql"),
+                validation_decision=metadata.get("validation_decision", "allowed"),
+                policy_decision=metadata.get("policy_decision"),
+                row_limit=metadata.get("row_limit"),
+                duration_ms=int((perf_counter() - started) * 1000),
+                evidence_ids=[
+                    item.evidence_id
+                    for item in result.evidence
+                    if item.evidence_id is not None
+                ],
+                processing_location=metadata.get("processing_location"),
+                metadata={
+                    key: value
+                    for key, value in metadata.items()
+                    if key
+                    not in {
+                        "source_id",
+                        "executed_sql",
+                        "validation_decision",
+                        "policy_decision",
+                        "row_limit",
+                        "processing_location",
+                    }
+                },
+            )
+
+        return result
+
+
+class KnowledgeSearchTool:
+    spec = ToolSpec(
+        name="knowledge.search",
+        description="Retrieve authorized evidence from indexed OpenJM knowledge.",
+        operation_class="READ",
+        risk_level="LOW",
+        requires_approval=False,
+        required_permissions=frozenset({"knowledge.read"}),
+        input_schema={"query": "string"},
+    )
+
+    async def execute(
+        self,
+        context: ToolContext,
+        payload: dict[str, Any],
+    ) -> ToolResult:
+        query = payload.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise ToolInputError("knowledge.search requires a non-empty query")
+        if context.db is None:
+            raise ToolInputError("knowledge.search requires a database session")
+
+        documents = (
+            await context.db.execute(
+                select(Document)
+                .where(
+                    Document.user_id == context.user_id,
+                    Document.status == "ready",
+                    Document.indexed.is_(True),
+                )
+                .order_by(Document.created_at.desc())
+            )
+        ).scalars().all()
+        refs = [(item.id, item.original_name) for item in documents]
+        evidence = await knowledge_engine.retrieve(query, refs)
+        normalized = [
+            item.model_copy(
+                update={
+                    "evidence_id": item.evidence_id or str(uuid4()),
+                    "provenance": {
+                        **item.provenance,
+                        "tool": self.spec.name,
+                        "retrieval_mode": "semantic",
+                    },
+                    "access_context": {
+                        **item.access_context,
+                        "user_id": context.user_id,
+                    },
+                    "processing_location": item.processing_location or "local",
+                    "observed_at": item.observed_at or datetime.now(timezone.utc),
+                }
+            )
+            for item in evidence
+        ]
+        return ToolResult(
+            evidence=normalized,
+            output={"evidence_count": len(normalized)},
+            trace_metadata={"processing_location": "local"},
+        )
+
+
+class StructuredQueryTool:
+    spec = ToolSpec(
+        name="structured.query",
+        description="Execute one governed read-only query against an authorized source.",
+        operation_class="READ",
+        risk_level="MODERATE",
+        requires_approval=False,
+        required_permissions=frozenset({"structured.read"}),
+        input_schema={"source_id": "string", "sql": "string"},
+    )
+
+    async def execute(
+        self,
+        context: ToolContext,
+        payload: dict[str, Any],
+    ) -> ToolResult:
+        if context.db is None:
+            raise ToolInputError("structured.query requires a database session")
+
+        source_id = payload.get("source_id")
+        sql = payload.get("sql")
+        if not isinstance(source_id, str) or not source_id:
+            raise ToolInputError("structured.query requires source_id")
+        if not isinstance(sql, str) or not sql.strip():
+            raise ToolInputError("structured.query requires SQL")
+
+        result = await context.db.execute(
+            select(DataSource).where(
+                DataSource.id == source_id,
+                DataSource.user_id == context.user_id,
+            )
+        )
+        source = result.scalars().first()
+        if source is None:
+            raise ToolPermissionError("Data source is unavailable or unauthorized")
+
+        query_result = await execute_structured_query(source, sql)
+        preview_rows = [list(row) for row in query_result.rows[:20]]
+        passage = json.dumps(
+            {
+                "columns": list(query_result.columns),
+                "rows": preview_rows,
+                "row_count": query_result.row_count,
+                "truncated": query_result.truncated,
+            },
+            default=str,
+        )
+
+        evidence = Evidence(
+            evidence_id=str(uuid4()),
+            source_type="structured_query",
+            source_id=source.id,
+            title=source.name,
+            passage=passage,
+            provenance={
+                "tool": self.spec.name,
+                "engine": source.engine,
+                "executed_sql": query_result.sql,
+            },
+            access_context={"user_id": context.user_id},
+            processing_location="local",
+            observed_at=datetime.now(timezone.utc),
+            metadata={
+                "sql": query_result.sql,
+                "columns": list(query_result.columns),
+                "row_count": query_result.row_count,
+                "truncated": query_result.truncated,
+                "row_limit": query_result.policy.row_limit,
+                "tables": list(query_result.policy.tables),
+            },
+        )
+
+        return ToolResult(
+            evidence=[evidence],
+            output={
+                "columns": list(query_result.columns),
+                "rows": [list(row) for row in query_result.rows],
+                "row_count": query_result.row_count,
+                "truncated": query_result.truncated,
+            },
+            trace_metadata={
+                "source_id": source.id,
+                "executed_sql": query_result.sql,
+                "validation_decision": "allowed",
+                "policy_decision": "read_only_allowed",
+                "row_limit": query_result.policy.row_limit,
+                "processing_location": "local",
+                "tables": list(query_result.policy.tables),
+                "truncated": query_result.truncated,
+            },
+        )
+
+
+def build_tool_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(KnowledgeSearchTool())
+    registry.register(StructuredQueryTool())
+    return registry
+
+
+tool_registry = build_tool_registry()

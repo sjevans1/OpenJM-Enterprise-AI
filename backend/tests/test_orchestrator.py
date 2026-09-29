@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db import Base
 from app.models import Document
 from app.schemas import Evidence
+from app.services.structured_planner import StructuredPlan, StructuredPlanningResult
+from app.services.tools import ToolResult
 from app.services.orchestrator import OpenJMOrchestrator
 from app.services import orchestrator as orchestrator_module
 
@@ -107,3 +109,118 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
     assert plan.execution_class == "knowledge"
     assert plan.direct_answer is None
     assert plan.evidence[0].source_id == "doc-2"
+
+
+
+@pytest.mark.asyncio
+async def test_structured_plan_routes_through_governed_tool(session, monkeypatch):
+    async def fake_plan(message, db, user_id):
+        return StructuredPlanningResult(
+            candidate=True,
+            plan=StructuredPlan(
+                source_id="source-1",
+                sql="SELECT 325.0 AS revenue",
+                rationale="Use the authorized business source.",
+            ),
+        )
+
+    captured = {}
+
+    async def fake_execute(name, context, payload):
+        captured["name"] = name
+        captured["permissions"] = context.permissions
+        captured["route"] = context.route
+        captured["payload"] = payload
+        return ToolResult(
+            evidence=[
+                Evidence(
+                    evidence_id="evidence-1",
+                    source_type="structured_query",
+                    source_id="source-1",
+                    title="Demo Source",
+                    passage='{"columns":["revenue"],"rows":[[325.0]],"row_count":1}',
+                    metadata={"sql": "SELECT 325.0 AS revenue LIMIT 200"},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.structured_planner,
+        "plan",
+        fake_plan,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.tool_registry,
+        "execute",
+        fake_execute,
+    )
+
+    plan = await OpenJMOrchestrator().plan(
+        "What is the total revenue for Blue Mountain Cafe?",
+        session,
+        "local-admin",
+        conversation_id="conversation-1",
+    )
+
+    assert plan.execution_class == "structured"
+    assert plan.direct_answer is None
+    assert plan.evidence[0].source_type == "structured_query"
+    assert captured["name"] == "structured.query"
+    assert "structured.read" in captured["permissions"]
+    assert captured["route"] == "structured"
+    assert captured["payload"]["source_id"] == "source-1"
+
+
+@pytest.mark.asyncio
+async def test_structured_planner_failure_returns_safe_no_execution_answer(
+    session,
+    monkeypatch,
+):
+    async def fail_plan(message, db, user_id):
+        raise orchestrator_module.StructuredPlannerError("bad model output")
+
+    monkeypatch.setattr(
+        orchestrator_module.structured_planner,
+        "plan",
+        fail_plan,
+    )
+
+    plan = await OpenJMOrchestrator().plan(
+        "Show total customer revenue",
+        session,
+        "local-admin",
+    )
+
+    assert plan.execution_class == "structured"
+    assert plan.evidence == []
+    assert plan.direct_answer is not None
+    assert "No database query was executed" in plan.direct_answer
+
+
+
+@pytest.mark.asyncio
+async def test_structured_schema_decline_fails_closed(session, monkeypatch):
+    async def decline_plan(message, db, user_id):
+        return StructuredPlanningResult(
+            candidate=True,
+            plan=None,
+            rationale="The authorized schema has no payroll table.",
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.structured_planner,
+        "plan",
+        decline_plan,
+    )
+
+    plan = await OpenJMOrchestrator().plan(
+        "What is the total payroll bonus this month?",
+        session,
+        "local-admin",
+    )
+
+    assert plan.execution_class == "structured"
+    assert plan.evidence == []
+    assert plan.direct_answer is not None
+    assert "No database query was executed" in plan.direct_answer
+    assert "no database value was fabricated" in plan.direct_answer

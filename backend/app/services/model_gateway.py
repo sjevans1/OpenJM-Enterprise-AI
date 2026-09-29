@@ -15,7 +15,13 @@ class OpenAICompatibleModelGateway:
     def __init__(self) -> None:
         self.settings = get_settings()
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> str:
         base_url = self.settings.model_base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -25,9 +31,11 @@ class OpenAICompatibleModelGateway:
         payload: dict[str, Any] = {
             "model": self.settings.model_name,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": temperature,
             "stream": False,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         try:
             async with httpx.AsyncClient(

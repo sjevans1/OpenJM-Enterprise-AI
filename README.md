@@ -4,9 +4,9 @@ Clean rebuild of the OpenJM enterprise AI platform.
 
 The previous Hermes-generated repository is treated as reference material only. This repository establishes the product and architecture from scratch around a proven vertical slice rather than a collection of disconnected screens.
 
-## Vertical Slice 1
+## Vertical Slice 1 — complete
 
-The first build proves this path end to end:
+Vertical Slice 1 is merged to `main` and proves this path end to end:
 
 ```text
 User
@@ -34,21 +34,21 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 ## Repository workflow
 
-`main` is the baseline.
+`main` is the baseline. Vertical Slice 1 is merged.
 
 Current implementation work is on:
 
 ```text
-build/vertical-slice-1
+build/vertical-slice-2-structured-data
 ```
 
-Do not merge the branch until the acceptance checks in `docs/ACCEPTANCE.md` pass.
+Vertical Slice 2 adds governed read-only relational data access. See `docs/VERTICAL_SLICE_2.md` and `docs/ACCEPTANCE.md` before implementation or merge.
 
 ## Windows quick start
 
 For the user's current Windows setup, the preferred path is now scripted.
 
-From the repository root on `build/vertical-slice-1`:
+From the repository root on the current build branch:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
@@ -92,7 +92,7 @@ If Hermes will perform the local setup, hand it `HERMES_LOCAL_SETUP_PROMPT.md`. 
 ```bash
 git clone https://github.com/sjevans1/OpenJM-Enterprise-AI.git
 cd OpenJM-Enterprise-AI
-git switch build/vertical-slice-1
+git switch build/vertical-slice-2-structured-data
 ```
 
 ### 2. Configure the backend
@@ -128,7 +128,7 @@ If the local worker requires a bearer key, set `OPENJM_MODEL_API_KEY` only in th
 
 ### 3. Start the backend
 
-Python 3.11 is currently required for Vertical Slice 1 because DB-GPT 0.8.2 pins aiohttp 3.8.4, which does not build on Python 3.12.
+Python 3.11 is currently required because DB-GPT 0.8.2 pins aiohttp 3.8.4, which does not build on Python 3.12.
 
 With `uv`:
 
@@ -186,14 +186,27 @@ python scripts/acceptance.py \
   --delete-after-test
 ```
 
+For Vertical Slice 2, create and validate the deterministic structured-data source:
+
+```bash
+python scripts/structured_foundation.py
+```
+
+Then validate natural-language Structured Chat, grounded SQL evidence, unsupported-schema handling and disabled-source fail-closed behavior:
+
+```bash
+python scripts/structured_chat_acceptance.py
+```
+
 ## Product UI
 
-Vertical Slice 1 deliberately exposes only real product workflows:
+OpenJM exposes only implemented product workflows:
 
-- **Chat** — persistent conversations, routing, answers and evidence.
-- **Knowledge** — governed document upload/index state.
+- **Chat** — persistent conversations with GENERAL, KNOWLEDGE and STRUCTURED routing.
+- **Knowledge** — governed document upload/index state and evidence-backed retrieval.
+- **Data** — encrypted source registration, connection testing, schema discovery and governed read-only structured access.
 
-The intended future information architecture is already visible for **Data, Reports, Automations and Administration**, but those capabilities remain disabled until their implementation phases.
+**Reports, Automations and Administration** remain future capabilities until their implementation phases.
 
 There is no primary Jobs screen and no raw MMR/relevance debugging workflow in the user product.
 
@@ -203,6 +216,7 @@ See:
 
 - `docs/ARCHITECTURE.md`
 - `docs/ACCEPTANCE.md`
+- `docs/VERTICAL_SLICE_2.md`
 
 ## Build rules
 

@@ -4,6 +4,11 @@ export type Evidence = {
   title: string
   passage: string
   score?: number | null
+  evidence_id?: string | null
+  provenance?: Record<string, unknown>
+  access_context?: Record<string, unknown>
+  processing_location?: string | null
+  observed_at?: string | null
   metadata: Record<string, unknown>
 }
 
@@ -31,7 +36,7 @@ export type ChatResponse = {
   conversation_id: string
   message_id: string
   answer: string
-  execution_class: 'general' | 'knowledge'
+  execution_class: 'general' | 'knowledge' | 'structured'
   evidence: Evidence[]
 }
 
@@ -43,6 +48,49 @@ export type DocumentRecord = {
   status: string
   indexed: boolean
   created_at: string
+}
+
+export type DataColumnSchema = {
+  name: string
+  type: string
+  nullable: boolean
+  primary_key: boolean
+}
+
+export type DataForeignKeySchema = {
+  constrained_columns: string[]
+  referred_schema?: string | null
+  referred_table: string
+  referred_columns: string[]
+}
+
+export type DataTableSchema = {
+  schema_name: string
+  name: string
+  qualified_name: string
+  columns: DataColumnSchema[]
+  primary_key: string[]
+  foreign_keys: DataForeignKeySchema[]
+}
+
+export type DataSourceRecord = {
+  id: string
+  name: string
+  engine: 'sqlite' | 'postgresql'
+  status: string
+  enabled: boolean
+  tables: DataTableSchema[]
+  last_error?: string | null
+  last_schema_refresh?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type DataSourceCreate = {
+  name: string
+  engine: 'sqlite' | 'postgresql'
+  connection_uri: string
+  enabled: boolean
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -89,6 +137,39 @@ export const api = {
 
   deleteDocument: (id: string) =>
     request<{ deleted: boolean }>(`/api/knowledge/documents/${id}`, {
+      method: 'DELETE',
+    }),
+
+  dataSources: () => request<DataSourceRecord[]>('/api/data/sources'),
+
+  createDataSource: (payload: DataSourceCreate) =>
+    request<DataSourceRecord>('/api/data/sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  testDataSource: (id: string) =>
+    request<{ source_id: string; status: string; ok: boolean; detail: string }>(
+      `/api/data/sources/${id}/test`,
+      { method: 'POST' },
+    ),
+
+  refreshDataSource: (id: string) =>
+    request<{ source: DataSourceRecord; table_count: number }>(
+      `/api/data/sources/${id}/refresh`,
+      { method: 'POST' },
+    ),
+
+  setDataSourceEnabled: (id: string, enabled: boolean) =>
+    request<DataSourceRecord>(`/api/data/sources/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }),
+
+  deleteDataSource: (id: string) =>
+    request<{ deleted: boolean; source_id: string }>(`/api/data/sources/${id}`, {
       method: 'DELETE',
     }),
 }

@@ -50,3 +50,58 @@ The first production-facing shell must:
 Any endpoint that reports ingestion, retrieval, generation or execution as successful must have performed the real operation.
 
 Stubs may exist only behind explicit test/development implementations and must be visibly named as such.
+
+
+## Gate F — structured data source
+
+1. Register the deterministic demo database.
+2. Test the connection successfully.
+3. Discover/refresh schema metadata.
+4. Confirm the expected tables and columns are visible in Data.
+5. Confirm read APIs never return the stored connection secret or decrypted URI.
+
+## Gate G — enforced read-only SQL
+
+1. A valid SELECT succeeds.
+2. INSERT, UPDATE and DELETE are rejected before execution.
+3. DDL and multi-statement SQL are rejected before execution.
+4. Queries are bounded by a server-side maximum row count.
+5. A requested/model LIMIT above the maximum is capped.
+6. Execution timeout protection is enabled.
+
+Any database mutation is a blocking failure.
+
+## Gate H — structured grounded answer
+
+1. Ask a natural-language question whose answer exists only in the acceptance database.
+2. The orchestrator must return `structured`.
+3. Generated SQL must use only authorized schema objects.
+4. The SQL must pass server-side policy.
+5. The query result must match the deterministic seeded value.
+6. The assistant answer must state the correct value.
+7. The response must include structured evidence containing the source identity and executed SQL.
+
+## Gate I — source scope and hallucination resistance
+
+1. Ask about a nonexistent or unauthorized table/column.
+2. OpenJM must not execute invented SQL and must not fabricate a result.
+3. Disable or remove the source.
+4. OpenJM must no longer access it.
+5. A structured-looking request must not fall through to GENERAL solely because every matching source is disabled; it must fail closed without database evidence or fabricated enterprise values.
+
+Vertical Slice 2 must also keep Gates A–E green as regression coverage.
+
+
+## Slice 2 architecture seam checks
+
+These checks support Gates F–I and must not replace them:
+
+1. Registered tools are discoverable deterministically.
+2. Unknown/unregistered tools cannot execute.
+3. Required tool permissions are enforced by application code.
+4. Approval-required tools cannot execute without explicit approval.
+5. Structured execution produces normalized OpenJM Evidence.
+6. Structured execution creates a persisted ExecutionTrace.
+7. Trace records route/tool/source/policy/timing/result-bound/evidence identifiers without storing database credentials.
+8. Knowledge tool resolves authorized documents server-side rather than trusting caller-supplied document IDs.
+9. No autonomous agent loop or model-controlled permission/risk metadata is introduced.

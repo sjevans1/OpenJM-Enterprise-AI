@@ -127,6 +127,7 @@ async def chat(
         message=request.message,
         db=db,
         user_id=settings.dev_user_id,
+        conversation_id=conversation.id,
     )
 
     if conversation.title == "New conversation":
