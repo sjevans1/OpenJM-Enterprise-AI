@@ -340,3 +340,33 @@ Vertical Slice 2 is complete only when all of the following are true:
 - Data is a real product workflow;
 - regression tests for Vertical Slice 1 remain green;
 - automated acceptance proves the structured path end to end.
+
+
+## Foundation implementation status
+
+The first backend foundation is now implemented on the Vertical Slice 2 branch:
+
+- `DataSource` persistence model;
+- Fernet-encrypted connection credentials with a server-owned key;
+- SQLite/PostgreSQL connection normalization;
+- connection testing;
+- schema/table/column/PK/FK discovery;
+- safe source APIs that never return saved connection credentials;
+- SQLGlot single-statement/read-only/source-scope policy;
+- server-side row limits;
+- dangerous-function deny list;
+- bounded structured query executor;
+- database-session read-only mode (SQLite `PRAGMA query_only`, PostgreSQL `SET TRANSACTION READ ONLY`);
+- deterministic SQLite acceptance database;
+- foundation runtime smoke script;
+- unit coverage for encryption, discovery, SQL policy and execution.
+
+With the backend running, create and validate the deterministic source with:
+
+```bash
+python scripts/structured_foundation.py
+```
+
+Use `--keep-source` to retain and re-enable the demo source for the upcoming structured Chat/planner work.
+
+The next implementation step is the structured planner/orchestrator path and structured evidence contract, followed by the Data UI.
