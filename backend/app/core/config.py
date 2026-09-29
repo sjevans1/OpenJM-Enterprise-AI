@@ -26,10 +26,10 @@ class Settings(BaseSettings):
     database_url: str = _sqlite_url_for(REPO_ROOT / "data" / "openjm.db")
     upload_dir: Path = REPO_ROOT / "data" / "uploads"
 
-    model_base_url: str = "http://127.0.0.1:8642/v1"
+    model_base_url: str = "http://127.0.0.1:18080/v1"
     model_api_key: str = ""
-    model_name: str = "hermes-agent"
-    model_timeout_seconds: int = 120
+    model_name: str = "gemma-4-12b-local"
+    model_timeout_seconds: int = 300
 
     knowledge_enabled: bool = True
     vector_path: Path = REPO_ROOT / "data" / "vector"
