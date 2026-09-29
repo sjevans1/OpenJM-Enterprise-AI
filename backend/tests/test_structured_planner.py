@@ -221,3 +221,21 @@ async def test_planner_fails_closed_without_enabled_source(session, monkeypatch)
     assert decision.candidate is True
     assert decision.plan is None
     assert "no authorized enabled" in decision.rationale.lower()
+
+
+
+def test_general_conversation_is_not_structured_from_single_schema_term():
+    planner = StructuredPlanner()
+    source = DataSource(
+        id="source-1",
+        user_id="local-admin",
+        name="Demo",
+        engine="sqlite",
+        connection_secret="encrypted",
+        status="connected",
+        enabled=True,
+        schema_json=encode_schema(demo_schema()),
+    )
+
+    assert not planner.is_candidate("Hello, my name is Sam.", [source])
+    assert not planner.is_candidate("Please remember my name.", [source])
