@@ -154,3 +154,34 @@ After Vertical Slice 2 passes:
 2. Saved reports created from repeatable evidence plans.
 3. Enterprise identity and permission-aware retrieval/data access.
 4. Automations and bounded agent workflows.
+
+
+## Agent-ready governed tool seam
+
+Vertical Slice 2 remains deterministic. It does not introduce autonomous planning loops or multi-agent orchestration.
+
+From Slice 2 onward, executable enterprise capabilities are represented behind a minimal OpenJM-owned tool contract:
+
+```text
+OpenJM Orchestrator
+        │
+        ▼
+ Governed Tool Registry
+        │
+   ┌────┴─────────┐
+   ▼              ▼
+knowledge.search  structured.query
+   │              │
+   └──────┬───────┘
+          ▼
+   Common Evidence
+          │
+          ▼
+ Grounded Generation
+```
+
+Each registered capability carries deterministic application metadata for operation class, risk level, approval requirement and required permissions. The model cannot change this metadata.
+
+Tool execution can create a generic execution trace containing safe request hashes, route, selected tool, source, policy/validation outcome, timing, result bounds and evidence IDs. Plaintext credentials and connection secrets are not trace inputs.
+
+This seam is intentionally small. Hybrid composition is deferred to Vertical Slice 3, and autonomous agent planning/tool selection remains a later bounded-runtime capability.
