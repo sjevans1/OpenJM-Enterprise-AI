@@ -85,7 +85,7 @@ class OpenJMOrchestrator:
         conversation_id: str | None,
     ) -> ExecutionPlan | None:
         try:
-            proposal = await structured_planner.plan(message, db, user_id)
+            decision = await structured_planner.plan(message, db, user_id)
         except StructuredPlannerError:
             return ExecutionPlan(
                 execution_class="structured",
@@ -97,9 +97,20 @@ class OpenJMOrchestrator:
                 ),
             )
 
-        if proposal is None:
+        if not decision.candidate:
             return None
+        if decision.plan is None:
+            return ExecutionPlan(
+                execution_class="structured",
+                system_prompt="",
+                direct_answer=(
+                    "This appears to require structured enterprise data, but the "
+                    "authorized schema does not support a safe answer to this question. "
+                    "No database query was executed and no database value was fabricated."
+                ),
+            )
 
+        proposal = decision.plan
         context = ToolContext(
             user_id=user_id,
             permissions=frozenset({"structured.read"}),
