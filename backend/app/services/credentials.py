@@ -19,7 +19,9 @@ class CredentialVault:
         key_file: Path | None = None,
     ) -> None:
         settings = get_settings()
-        configured_key = key or settings.credential_encryption_key
+        configured_key = (
+            settings.credential_encryption_key if key is None else key
+        )
         self.key_file = key_file or settings.credential_key_file
         self._key = self._resolve_key(configured_key)
 
