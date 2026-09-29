@@ -34,6 +34,20 @@ class StructuredPlanningResult:
 STRUCTURED_CUES = (
     "revenue",
     "sales",
+    "profit",
+    "margin",
+    "expense",
+    "expenses",
+    "cost",
+    "costs",
+    "budget",
+    "balance",
+    "receivable",
+    "receivables",
+    "payable",
+    "payables",
+    "payroll",
+    "bonus",
     "orders",
     "order ",
     "customers",
@@ -125,10 +139,8 @@ class StructuredPlanner:
                     )
         return terms
 
-    def is_candidate(self, message: str, sources: list[DataSource]) -> bool:
-        if not sources:
-            return False
-
+    @staticmethod
+    def looks_structured(message: str) -> bool:
         lowered = " ".join(message.lower().split())
         if not lowered:
             return False
@@ -139,11 +151,17 @@ class StructuredPlanner:
         cue_hits = sum(1 for cue in STRUCTURED_CUES if cue in lowered)
         if definition_like and cue_hits < 2:
             return False
+        return cue_hits > 0
 
+    def is_candidate(self, message: str, sources: list[DataSource]) -> bool:
+        if self.looks_structured(message):
+            return True
+        if not sources:
+            return False
+
+        lowered = " ".join(message.lower().split())
         message_terms = set(re.findall(r"[a-z0-9]+", lowered))
-        schema_overlap = bool(message_terms & self._schema_terms(sources))
-
-        return cue_hits > 0 or schema_overlap
+        return bool(message_terms & self._schema_terms(sources))
 
     @staticmethod
     def _schema_context(sources: list[DataSource]) -> str:
@@ -209,6 +227,14 @@ class StructuredPlanner:
         sources = await self._sources(db, user_id)
         if not self.is_candidate(message, sources):
             return StructuredPlanningResult(candidate=False)
+        if not sources:
+            return StructuredPlanningResult(
+                candidate=True,
+                rationale=(
+                    "No authorized enabled structured-data source is currently "
+                    "available for this request."
+                ),
+            )
 
         allowed_ids = {source.id for source in sources}
         prompt = (
