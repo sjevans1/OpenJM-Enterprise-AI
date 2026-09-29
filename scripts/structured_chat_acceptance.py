@@ -89,6 +89,42 @@ def main() -> int:
     print("PASS grounded revenue answer:", body["answer"])
     print("PASS structured evidence + SQL provenance")
 
+    disabled = client.patch(
+        f"{base}/api/data/sources/{source_id}",
+        json={"enabled": False},
+    )
+    disabled.raise_for_status()
+    if disabled.json().get("enabled") is not False:
+        return fail("source did not disable")
+
+    while_disabled = client.post(
+        f"{base}/api/chat",
+        json={
+            "message": "What is the total revenue for Blue Mountain Cafe?"
+        },
+    )
+    while_disabled.raise_for_status()
+    disabled_body = while_disabled.json()
+    if disabled_body.get("execution_class") != "structured":
+        return fail(
+            "structured enterprise-data request fell through to GENERAL while source disabled"
+        )
+    if disabled_body.get("evidence"):
+        return fail("disabled source returned structured evidence")
+    disabled_answer = disabled_body.get("answer", "").lower()
+    if "no database query was executed" not in disabled_answer:
+        return fail("disabled source did not fail closed with no-execution answer")
+    print("PASS disabled source remains STRUCTURED and fails closed")
+
+    reenabled = client.patch(
+        f"{base}/api/data/sources/{source_id}",
+        json={"enabled": True},
+    )
+    reenabled.raise_for_status()
+    if reenabled.json().get("enabled") is not True:
+        return fail("source did not re-enable")
+    print("PASS source re-enabled")
+
     unsupported = client.post(
         f"{base}/api/chat",
         json={
