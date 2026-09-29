@@ -269,7 +269,7 @@ export default function App() {
           <div className="status-dot" />
           <div>
             <strong>Local workspace</strong>
-            <span>DB-GPT knowledge enabled</span>
+            <span>Knowledge layer enabled</span>
           </div>
         </div>
       </aside>
@@ -396,7 +396,7 @@ export default function App() {
                 </button>
               </form>
               <div className="composer-caption">
-                Server-side conversation history • DB-GPT-backed knowledge retrieval
+                Server-side conversation history • Governed knowledge retrieval
               </div>
             </div>
           </>
