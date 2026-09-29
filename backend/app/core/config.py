@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = REPO_ROOT / ".env"
 
 
+def _sqlite_url_for(path: Path) -> str:
+    resolved = path.resolve()
+    return f"sqlite+aiosqlite:///{resolved.as_posix()}"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
@@ -17,7 +23,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = f"sqlite+aiosqlite:///{REPO_ROOT / 'data' / 'openjm.db'}"
+    database_url: str = _sqlite_url_for(REPO_ROOT / "data" / "openjm.db")
     upload_dir: Path = REPO_ROOT / "data" / "uploads"
 
     model_base_url: str = "http://127.0.0.1:8642/v1"
@@ -33,6 +39,29 @@ class Settings(BaseSettings):
     rag_score_threshold: float = 0.25
 
     dev_user_id: str = "local-admin"
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def resolve_relative_sqlite_url(cls, value: str) -> str:
+        """Anchor repo-local SQLite URLs even when .env uses ./data/..."""
+        prefixes = (
+            "sqlite+aiosqlite:///./",
+            "sqlite:///./",
+        )
+        for prefix in prefixes:
+            if value.startswith(prefix):
+                relative = value[len(prefix):]
+                resolved = (REPO_ROOT / relative).resolve().as_posix()
+                scheme = prefix.split(":///")[0]
+                return f"{scheme}:///{resolved}"
+        return value
+
+    @field_validator("upload_dir", "vector_path", mode="after")
+    @classmethod
+    def resolve_repo_relative_paths(cls, value: Path) -> Path:
+        if value.is_absolute():
+            return value
+        return (REPO_ROOT / value).resolve()
 
     def ensure_directories(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
