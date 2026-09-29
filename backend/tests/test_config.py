@@ -8,6 +8,7 @@ def test_relative_paths_are_anchored_to_repo_root():
         database_url="sqlite+aiosqlite:///./data/test-openjm.db",
         upload_dir=Path("./data/test-uploads"),
         vector_path=Path("./data/test-vector"),
+        credential_key_file=Path("./data/test-credentials.key"),
     )
 
     expected_db = (REPO_ROOT / "data" / "test-openjm.db").resolve().as_posix()
@@ -15,3 +16,4 @@ def test_relative_paths_are_anchored_to_repo_root():
     assert settings.database_url == f"sqlite+aiosqlite:///{expected_db}"
     assert settings.upload_dir == (REPO_ROOT / "data" / "test-uploads").resolve()
     assert settings.vector_path == (REPO_ROOT / "data" / "test-vector").resolve()
+    assert settings.credential_key_file == (REPO_ROOT / "data" / "test-credentials.key").resolve()
