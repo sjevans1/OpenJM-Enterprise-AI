@@ -103,19 +103,28 @@ Copy the example environment file:
 cp .env.example .env
 ```
 
-The defaults expect an OpenAI-compatible model endpoint at:
+The validated Vertical Slice 1 development target on the current workstation is the local Gemma 4 12B worker:
 
 ```text
-http://127.0.0.1:8642/v1
+http://127.0.0.1:18080/v1
 ```
 
-For Hermes, update these values if your local API server uses a different model, port or bearer token:
+with model identifier:
+
+```text
+gemma-4-12b-local
+```
+
+Use:
 
 ```env
-OPENJM_MODEL_BASE_URL=http://127.0.0.1:8642/v1
+OPENJM_MODEL_BASE_URL=http://127.0.0.1:18080/v1
 OPENJM_MODEL_API_KEY=
-OPENJM_MODEL_NAME=hermes-agent
+OPENJM_MODEL_NAME=gemma-4-12b-local
+OPENJM_MODEL_TIMEOUT_SECONDS=300
 ```
+
+If the local worker requires a bearer key, set `OPENJM_MODEL_API_KEY` only in the local `.env`; never commit it. These are validated development defaults for this workstation, not a product limitation—the model gateway remains interchangeable with other OpenAI-compatible local runtimes.
 
 ### 3. Start the backend
 
