@@ -13,6 +13,11 @@ class Evidence(BaseModel):
     title: str
     passage: str
     score: float | None = None
+    evidence_id: str | None = None
+    provenance: dict = Field(default_factory=dict)
+    access_context: dict = Field(default_factory=dict)
+    processing_location: str | None = None
+    observed_at: datetime | None = None
     metadata: dict = Field(default_factory=dict)
 
 
