@@ -98,6 +98,13 @@ async def execute_structured_query(
 
     async def _execute() -> tuple[tuple[str, ...], tuple[tuple[Any, ...], ...]]:
         async with source_engine.connect() as conn:
+            # Defense in depth: the SQL policy blocks writes before execution,
+            # and the database session is also switched to read-only mode.
+            if source.engine == "sqlite":
+                await conn.exec_driver_sql("PRAGMA query_only = ON")
+            elif source.engine == "postgresql":
+                await conn.execute(text("SET TRANSACTION READ ONLY"))
+
             result = await conn.execute(text(policy.sql))
             columns = tuple(str(key) for key in result.keys())
             rows = tuple(tuple(row) for row in result.fetchall())
