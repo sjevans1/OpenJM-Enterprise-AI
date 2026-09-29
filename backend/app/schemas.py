@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-ExecutionClass = Literal["general", "knowledge"]
+ExecutionClass = Literal["general", "knowledge", "structured"]
 
 
 class Evidence(BaseModel):
@@ -61,3 +61,66 @@ class DocumentOut(BaseModel):
 
 class IngestResponse(DocumentOut):
     pass
+
+
+
+DataEngine = Literal["sqlite", "postgresql"]
+
+
+class DataSourceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=240)
+    engine: DataEngine
+    connection_uri: str = Field(min_length=1, max_length=4000)
+    enabled: bool = True
+
+
+class DataSourceEnabledUpdate(BaseModel):
+    enabled: bool
+
+
+class DataColumnSchema(BaseModel):
+    name: str
+    type: str
+    nullable: bool
+    primary_key: bool = False
+
+
+class DataForeignKeySchema(BaseModel):
+    constrained_columns: list[str] = Field(default_factory=list)
+    referred_schema: str | None = None
+    referred_table: str
+    referred_columns: list[str] = Field(default_factory=list)
+
+
+class DataTableSchema(BaseModel):
+    schema_name: str
+    name: str
+    qualified_name: str
+    columns: list[DataColumnSchema] = Field(default_factory=list)
+    primary_key: list[str] = Field(default_factory=list)
+    foreign_keys: list[DataForeignKeySchema] = Field(default_factory=list)
+
+
+class DataSourceOut(BaseModel):
+    id: str
+    name: str
+    engine: DataEngine
+    status: str
+    enabled: bool
+    tables: list[DataTableSchema] = Field(default_factory=list)
+    last_error: str | None = None
+    last_schema_refresh: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DataSourceTestResult(BaseModel):
+    source_id: str
+    status: str
+    ok: bool
+    detail: str
+
+
+class DataSourceSchemaRefreshResult(BaseModel):
+    source: DataSourceOut
+    table_count: int
