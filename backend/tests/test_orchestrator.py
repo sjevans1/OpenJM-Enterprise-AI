@@ -195,3 +195,32 @@ async def test_structured_planner_failure_returns_safe_no_execution_answer(
     assert plan.evidence == []
     assert plan.direct_answer is not None
     assert "No database query was executed" in plan.direct_answer
+
+
+
+@pytest.mark.asyncio
+async def test_structured_schema_decline_fails_closed(session, monkeypatch):
+    async def decline_plan(message, db, user_id):
+        return StructuredPlanningResult(
+            candidate=True,
+            plan=None,
+            rationale="The authorized schema has no payroll table.",
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.structured_planner,
+        "plan",
+        decline_plan,
+    )
+
+    plan = await OpenJMOrchestrator().plan(
+        "What is the total payroll bonus this month?",
+        session,
+        "local-admin",
+    )
+
+    assert plan.execution_class == "structured"
+    assert plan.evidence == []
+    assert plan.direct_answer is not None
+    assert "No database query was executed" in plan.direct_answer
+    assert "no database value was fabricated" in plan.direct_answer
