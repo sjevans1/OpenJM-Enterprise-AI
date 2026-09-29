@@ -107,6 +107,7 @@ def test_structured_candidate_uses_business_cues():
         [source],
     )
     assert not planner.is_candidate("What is revenue?", [source])
+    assert planner.looks_structured("What is the total payroll bonus this month?")
 
 
 @pytest.mark.asyncio
@@ -195,3 +196,28 @@ async def test_planner_can_decline_structured_route(session, monkeypatch):
     assert decision.candidate is True
     assert decision.plan is None
     assert "schema" in decision.rationale.lower()
+
+
+
+@pytest.mark.asyncio
+async def test_planner_fails_closed_without_enabled_source(session, monkeypatch):
+    source = await add_source(session, source_id="disabled-source")
+    source.enabled = False
+    await session.commit()
+
+    planner = StructuredPlanner()
+
+    async def should_not_call_model(*args, **kwargs):
+        raise AssertionError("model planner should not run without an eligible source")
+
+    monkeypatch.setattr(planner.model_gateway, "chat", should_not_call_model)
+
+    decision = await planner.plan(
+        "What is the total revenue for Blue Mountain Cafe?",
+        session,
+        "local-admin",
+    )
+
+    assert decision.candidate is True
+    assert decision.plan is None
+    assert "no authorized enabled" in decision.rationale.lower()
