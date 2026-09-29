@@ -89,3 +89,18 @@ Any database mutation is a blocking failure.
 4. OpenJM must no longer access it.
 
 Vertical Slice 2 must also keep Gates A–E green as regression coverage.
+
+
+## Slice 2 architecture seam checks
+
+These checks support Gates F–I and must not replace them:
+
+1. Registered tools are discoverable deterministically.
+2. Unknown/unregistered tools cannot execute.
+3. Required tool permissions are enforced by application code.
+4. Approval-required tools cannot execute without explicit approval.
+5. Structured execution produces normalized OpenJM Evidence.
+6. Structured execution creates a persisted ExecutionTrace.
+7. Trace records route/tool/source/policy/timing/result-bound/evidence identifiers without storing database credentials.
+8. Knowledge tool resolves authorized documents server-side rather than trusting caller-supplied document IDs.
+9. No autonomous agent loop or model-controlled permission/risk metadata is introduced.
