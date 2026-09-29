@@ -20,15 +20,15 @@ import {
 import {
   api,
   type Conversation,
+  type DataSourceRecord,
   type DocumentRecord,
   type Evidence,
   type Message,
 } from './api'
 
-type View = 'chat' | 'knowledge'
+type View = 'chat' | 'knowledge' | 'data'
 
 const futureNav = [
-  { label: 'Data', icon: Database },
   { label: 'Reports', icon: Gauge },
   { label: 'Automations', icon: Workflow },
   { label: 'Administration', icon: Settings },
@@ -43,6 +43,60 @@ function formatBytes(bytes: number) {
 function relativeDate(value: string) {
   const date = new Date(value)
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function StructuredEvidenceBody({ item }: { item: Evidence }) {
+  let payload: { columns?: unknown; rows?: unknown; row_count?: unknown; truncated?: unknown } = {}
+  try {
+    payload = JSON.parse(item.passage)
+  } catch {
+    return <div className="evidence-passage">{item.passage}</div>
+  }
+
+  const columns = Array.isArray(payload.columns)
+    ? payload.columns.map((value) => String(value))
+    : []
+  const rows = Array.isArray(payload.rows) ? payload.rows : []
+  const sql = typeof item.metadata?.sql === 'string' ? item.metadata.sql : null
+  const rowCount = typeof item.metadata?.row_count === 'number'
+    ? item.metadata.row_count
+    : typeof payload.row_count === 'number'
+      ? payload.row_count
+      : rows.length
+
+  return (
+    <div className="structured-evidence">
+      <div className="structured-evidence-meta">
+        <span>{rowCount} row{rowCount === 1 ? '' : 's'}</span>
+        {item.processing_location && <span>{item.processing_location}</span>}
+        {payload.truncated === true && <span>Result bounded</span>}
+      </div>
+      {columns.length > 0 && rows.length > 0 && (
+        <div className="structured-result-scroll">
+          <table className="structured-result-table">
+            <thead>
+              <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 20).map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {(Array.isArray(row) ? row : [row]).map((cell, cellIndex) => (
+                    <td key={cellIndex}>{String(cell ?? '')}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {sql && (
+        <div className="sql-provenance">
+          <span>Executed read-only query</span>
+          <code>{sql}</code>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
@@ -61,7 +115,11 @@ function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
             <span className="evidence-title">{item.title}</span>
             <ChevronRight size={14} className="summary-chevron" />
           </summary>
-          <div className="evidence-passage">{item.passage}</div>
+          {item.source_type === 'structured_query' ? (
+            <StructuredEvidenceBody item={item} />
+          ) : (
+            <div className="evidence-passage">{item.passage}</div>
+          )}
         </details>
       ))}
     </div>
@@ -79,6 +137,13 @@ export default function App() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [uploading, setUploading] = useState(false)
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
+  const [dataSources, setDataSources] = useState<DataSourceRecord[]>([])
+  const [dataError, setDataError] = useState<string | null>(null)
+  const [dataBusyId, setDataBusyId] = useState<string | null>(null)
+  const [creatingSource, setCreatingSource] = useState(false)
+  const [sourceName, setSourceName] = useState('')
+  const [sourceEngine, setSourceEngine] = useState<'sqlite' | 'postgresql'>('sqlite')
+  const [sourceUri, setSourceUri] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -98,9 +163,18 @@ export default function App() {
     }
   }
 
+  const loadDataSources = async () => {
+    try {
+      setDataSources(await api.dataSources())
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Unable to load data sources')
+    }
+  }
+
   useEffect(() => {
     loadConversations()
     loadDocuments()
+    loadDataSources()
   }, [])
 
   const openConversation = async (id: string) => {
@@ -190,6 +264,61 @@ export default function App() {
     }
   }
 
+  const createDataSource = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!sourceName.trim() || !sourceUri.trim() || creatingSource) return
+
+    setCreatingSource(true)
+    setDataError(null)
+    try {
+      const created = await api.createDataSource({
+        name: sourceName.trim(),
+        engine: sourceEngine,
+        connection_uri: sourceUri.trim(),
+        enabled: true,
+      })
+      const test = await api.testDataSource(created.id)
+      if (test.ok) {
+        await api.refreshDataSource(created.id)
+      } else {
+        setDataError(test.detail)
+      }
+      setSourceName('')
+      setSourceUri('')
+      await loadDataSources()
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Unable to connect data source')
+    } finally {
+      setCreatingSource(false)
+    }
+  }
+
+  const runSourceAction = async (
+    sourceId: string,
+    action: 'test' | 'refresh' | 'toggle' | 'delete',
+    enabled?: boolean,
+  ) => {
+    setDataBusyId(sourceId)
+    setDataError(null)
+    try {
+      if (action === 'test') {
+        const result = await api.testDataSource(sourceId)
+        if (!result.ok) setDataError(result.detail)
+      } else if (action === 'refresh') {
+        await api.refreshDataSource(sourceId)
+      } else if (action === 'toggle') {
+        await api.setDataSourceEnabled(sourceId, Boolean(enabled))
+      } else if (action === 'delete') {
+        await api.deleteDataSource(sourceId)
+      }
+      await loadDataSources()
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Data source action failed')
+    } finally {
+      setDataBusyId(null)
+    }
+  }
+
   const activeExecutionClass = useMemo(() => {
     const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
     return lastAssistant?.execution_class
@@ -228,6 +357,14 @@ export default function App() {
             <FolderOpen size={17} />
             Knowledge
             <span className="count-pill">{documents.length}</span>
+          </button>
+          <button
+            className={view === 'data' ? 'nav-item active' : 'nav-item'}
+            onClick={() => setView('data')}
+          >
+            <Database size={17} />
+            Data
+            <span className="count-pill">{dataSources.length}</span>
           </button>
 
           <div className="nav-divider" />
@@ -269,7 +406,7 @@ export default function App() {
           <div className="status-dot" />
           <div>
             <strong>Local workspace</strong>
-            <span>Knowledge layer enabled</span>
+            <span>Knowledge + structured data enabled</span>
           </div>
         </div>
       </aside>
@@ -291,6 +428,8 @@ export default function App() {
                   <span className={`route-badge ${activeExecutionClass}`}>
                     {activeExecutionClass === 'knowledge' ? (
                       <FileText size={14} />
+                    ) : activeExecutionClass === 'structured' ? (
+                      <Database size={14} />
                     ) : (
                       <Sparkles size={14} />
                     )}
@@ -309,14 +448,14 @@ export default function App() {
                   <div className="eyebrow">OpenJM Enterprise AI</div>
                   <h2>Ask across your work.</h2>
                   <p>
-                    Conversations persist on the server. When your question is supported by
-                    indexed knowledge, OpenJM retrieves evidence before the model answers.
+                    Conversations persist on the server. OpenJM can ground answers in indexed
+                    knowledge or authorized read-only business data before the model responds.
                   </p>
                   <div className="prompt-grid">
                     {[
                       'What documents do you have loaded?',
                       'Summarize the key points in my indexed documents.',
-                      'Hello, my name is Sam. Please remember that for this conversation.',
+                      'What is the total revenue for Blue Mountain Cafe?',
                     ].map((prompt) => (
                       <button
                         key={prompt}
@@ -396,11 +535,11 @@ export default function App() {
                 </button>
               </form>
               <div className="composer-caption">
-                Server-side conversation history • Governed knowledge retrieval
+                Server-side conversation history • Governed knowledge • Read-only structured data
               </div>
             </div>
           </>
-        ) : (
+        ) : view === 'knowledge' ? (
           <>
             <header className="workspace-header">
               <div>
@@ -478,6 +617,174 @@ export default function App() {
                         <Trash2 size={15} />
                       </button>
                     </div>
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
+            <header className="workspace-header">
+              <div>
+                <div className="eyebrow">Governed structured data</div>
+                <h1>Data</h1>
+              </div>
+              <span className="system-badge">
+                <ShieldCheck size={14} />
+                Read-only execution
+              </span>
+            </header>
+
+            <section className="data-stage">
+              <div className="data-intro">
+                <div>
+                  <div className="eyebrow">Authorized sources</div>
+                  <h2>Connect business data to OpenJM</h2>
+                  <p>
+                    OpenJM stores source credentials encrypted, discovers schema metadata, and
+                    executes only validated read-only queries through its governed data layer.
+                    Saved credentials are never returned to the browser.
+                  </p>
+                </div>
+                <div className="data-metrics">
+                  <div>
+                    <span>Sources</span>
+                    <strong>{dataSources.length}</strong>
+                  </div>
+                  <div>
+                    <span>Connected</span>
+                    <strong>{dataSources.filter((source) => source.status === 'connected').length}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {dataError && <div className="error-banner data-error">{dataError}</div>}
+
+              <form className="source-form" onSubmit={createDataSource}>
+                <div className="source-form-heading">
+                  <div>
+                    <strong>Add data source</strong>
+                    <span>SQLite and PostgreSQL are supported in Vertical Slice 2.</span>
+                  </div>
+                </div>
+                <label>
+                  <span>Display name</span>
+                  <input
+                    value={sourceName}
+                    onChange={(event) => setSourceName(event.target.value)}
+                    placeholder="e.g. Finance warehouse"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Engine</span>
+                  <select
+                    value={sourceEngine}
+                    onChange={(event) => setSourceEngine(event.target.value as 'sqlite' | 'postgresql')}
+                  >
+                    <option value="sqlite">SQLite</option>
+                    <option value="postgresql">PostgreSQL</option>
+                  </select>
+                </label>
+                <label className="source-uri-field">
+                  <span>Connection URI</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={sourceUri}
+                    onChange={(event) => setSourceUri(event.target.value)}
+                    placeholder={sourceEngine === 'sqlite' ? 'sqlite:///data/client.db' : 'postgresql://user:password@host/database'}
+                    required
+                  />
+                  <small>The URI is encrypted server-side and is not displayed again after submission.</small>
+                </label>
+                <button className="primary-action source-submit" type="submit" disabled={creatingSource}>
+                  <Plus size={16} />
+                  {creatingSource ? 'Connecting…' : 'Connect source'}
+                </button>
+              </form>
+
+              <div className="source-list">
+                {dataSources.length === 0 ? (
+                  <div className="data-empty">
+                    <Database size={30} />
+                    <strong>No data sources connected</strong>
+                    <span>Add an authorized relational source to enable grounded structured questions in Chat.</span>
+                  </div>
+                ) : (
+                  dataSources.map((source) => (
+                    <article className="source-card" key={source.id}>
+                      <div className="source-card-header">
+                        <div className="source-identity">
+                          <div className="source-icon"><Database size={18} /></div>
+                          <div>
+                            <strong>{source.name}</strong>
+                            <span>{source.engine === 'postgresql' ? 'PostgreSQL' : 'SQLite'} · {source.tables.length} table{source.tables.length === 1 ? '' : 's'}</span>
+                          </div>
+                        </div>
+                        <div className="source-state">
+                          <span className={source.enabled ? 'source-enabled' : 'source-disabled'}>
+                            {source.enabled ? 'Enabled' : 'Disabled'}
+                          </span>
+                          <span className={`source-status ${source.status}`}>{source.status}</span>
+                        </div>
+                      </div>
+
+                      {source.last_error && <div className="source-error">{source.last_error}</div>}
+
+                      <div className="source-actions">
+                        <button
+                          onClick={() => runSourceAction(source.id, 'test')}
+                          disabled={dataBusyId === source.id}
+                        >
+                          Test connection
+                        </button>
+                        <button
+                          onClick={() => runSourceAction(source.id, 'refresh')}
+                          disabled={dataBusyId === source.id}
+                        >
+                          Refresh schema
+                        </button>
+                        <button
+                          onClick={() => runSourceAction(source.id, 'toggle', !source.enabled)}
+                          disabled={dataBusyId === source.id}
+                        >
+                          {source.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          className="danger-text"
+                          onClick={() => runSourceAction(source.id, 'delete')}
+                          disabled={dataBusyId === source.id}
+                        >
+                          Delete
+                        </button>
+                      </div>
+
+                      <div className="source-schema">
+                        {source.tables.length === 0 ? (
+                          <span className="schema-empty">No schema discovered yet. Test the connection and refresh schema.</span>
+                        ) : (
+                          source.tables.map((table) => (
+                            <details className="schema-table-card" key={table.qualified_name}>
+                              <summary>
+                                <span>{table.qualified_name}</span>
+                                <small>{table.columns.length} columns</small>
+                                <ChevronRight size={14} className="summary-chevron" />
+                              </summary>
+                              <div className="schema-columns">
+                                {table.columns.map((column) => (
+                                  <div key={column.name}>
+                                    <code>{column.name}</code>
+                                    <span>{column.type}</span>
+                                    {column.primary_key && <strong>PK</strong>}
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          ))
+                        )}
+                      </div>
+                    </article>
                   ))
                 )}
               </div>
