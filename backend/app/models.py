@@ -103,6 +103,8 @@ class ExecutionTrace(Base):
     source_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
     input_hash: Mapped[str] = mapped_column(String(64))
+    planned_sql: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_sql: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_decision: Mapped[str | None] = mapped_column(String(64), nullable=True)
     policy_decision: Mapped[str | None] = mapped_column(String(64), nullable=True)
     row_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
