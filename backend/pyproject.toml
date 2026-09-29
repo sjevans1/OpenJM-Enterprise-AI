@@ -16,7 +16,9 @@ dependencies = [
   "dbgpt>=0.8.0rc1,<0.9",
   "dbgpt-ext[rag,storage_chromadb]>=0.8.0rc1,<0.9",
   "sentence-transformers>=3.0",
-  "pandas==2.2.3"
+  "pandas==2.2.3",
+  "cryptography>=43.0",
+  "sqlglot>=25.0"
 ]
 
 [project.optional-dependencies]
