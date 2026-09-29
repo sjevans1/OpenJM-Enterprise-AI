@@ -433,3 +433,23 @@ Blue Mountain Cafe total revenue = 325.00
 ```
 
 The acceptance script also asks for an unsupported payroll metric and requires the request to fail closed with no evidence.
+
+
+### Data UI implementation checkpoint
+
+The customer-facing Data workspace is now implemented pending local/browser verification.
+
+It includes:
+
+- Data enabled in primary navigation;
+- source counts and connected-source status;
+- SQLite/PostgreSQL connection form;
+- password-style connection-URI input with no credential redisplay;
+- automatic connection test and schema refresh after successful source creation;
+- source test / refresh / enable-disable / delete controls;
+- schema inventory with expandable tables and columns;
+- structured execution badge in Chat;
+- structured evidence rendering with bounded result rows and executed read-only SQL provenance;
+- updated product copy reflecting governed Knowledge + Structured Data capabilities.
+
+The frontend must still pass production build and manual/browser acceptance before Slice 2 is considered UI-complete.
