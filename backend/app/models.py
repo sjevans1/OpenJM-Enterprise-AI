@@ -84,3 +84,35 @@ class DataSource(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, onupdate=now_utc
     )
+
+
+
+class ExecutionTrace(Base):
+    __tablename__ = "execution_traces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(String(36), index=True, default=new_id)
+    tool_invocation_id: Mapped[str] = mapped_column(String(36), default=new_id)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    route: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tool_name: Mapped[str] = mapped_column(String(128), index=True)
+    operation_class: Mapped[str] = mapped_column(String(32))
+    risk_level: Mapped[str] = mapped_column(String(32))
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    validation_decision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_decision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    row_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="started")
+    error_class: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    evidence_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_location: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
