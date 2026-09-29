@@ -8,7 +8,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DataSource
+from app.models import DataSource, Document
 from app.schemas import Evidence
 from app.services.execution_trace import (
     complete_execution_trace,
@@ -223,10 +223,7 @@ class KnowledgeSearchTool:
         risk_level="LOW",
         requires_approval=False,
         required_permissions=frozenset({"knowledge.read"}),
-        input_schema={
-            "query": "string",
-            "document_refs": "array[tuple[document_id,title]]",
-        },
+        input_schema={"query": "string"},
     )
 
     async def execute(
@@ -235,22 +232,23 @@ class KnowledgeSearchTool:
         payload: dict[str, Any],
     ) -> ToolResult:
         query = payload.get("query")
-        document_refs = payload.get("document_refs")
         if not isinstance(query, str) or not query.strip():
             raise ToolInputError("knowledge.search requires a non-empty query")
-        if not isinstance(document_refs, list):
-            raise ToolInputError("knowledge.search requires document_refs")
+        if context.db is None:
+            raise ToolInputError("knowledge.search requires a database session")
 
-        refs: list[tuple[str, str]] = []
-        for item in document_refs:
-            if (
-                not isinstance(item, (list, tuple))
-                or len(item) != 2
-                or not all(isinstance(value, str) for value in item)
-            ):
-                raise ToolInputError("Invalid knowledge document reference")
-            refs.append((item[0], item[1]))
-
+        documents = (
+            await context.db.execute(
+                select(Document)
+                .where(
+                    Document.user_id == context.user_id,
+                    Document.status == "ready",
+                    Document.indexed.is_(True),
+                )
+                .order_by(Document.created_at.desc())
+            )
+        ).scalars().all()
+        refs = [(item.id, item.original_name) for item in documents]
         evidence = await knowledge_engine.retrieve(query, refs)
         normalized = [
             item.model_copy(
