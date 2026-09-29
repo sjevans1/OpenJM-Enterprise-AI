@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db import Base
 from app.models import Document
 from app.schemas import Evidence
-from app.services.structured_planner import StructuredPlan
+from app.services.structured_planner import StructuredPlan, StructuredPlanningResult
 from app.services.tools import ToolResult
 from app.services.orchestrator import OpenJMOrchestrator
 from app.services import orchestrator as orchestrator_module
@@ -115,10 +115,13 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
 @pytest.mark.asyncio
 async def test_structured_plan_routes_through_governed_tool(session, monkeypatch):
     async def fake_plan(message, db, user_id):
-        return StructuredPlan(
-            source_id="source-1",
-            sql="SELECT 325.0 AS revenue",
-            rationale="Use the authorized business source.",
+        return StructuredPlanningResult(
+            candidate=True,
+            plan=StructuredPlan(
+                source_id="source-1",
+                sql="SELECT 325.0 AS revenue",
+                rationale="Use the authorized business source.",
+            ),
         )
 
     captured = {}
