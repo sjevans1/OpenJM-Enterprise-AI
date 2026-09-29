@@ -87,6 +87,7 @@ Any database mutation is a blocking failure.
 2. OpenJM must not execute invented SQL and must not fabricate a result.
 3. Disable or remove the source.
 4. OpenJM must no longer access it.
+5. A structured-looking request must not fall through to GENERAL solely because every matching source is disabled; it must fail closed without database evidence or fabricated enterprise values.
 
 Vertical Slice 2 must also keep Gates A–E green as regression coverage.
 
