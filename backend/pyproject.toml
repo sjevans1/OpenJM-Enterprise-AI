@@ -13,7 +13,8 @@ dependencies = [
   "pydantic-settings>=2.4",
   "httpx>=0.27",
   "python-multipart>=0.0.9",
-  "dbgpt-app[rag,storage_chromadb]>=0.7.3",
+  "dbgpt>=0.8.0rc1,<0.9",
+  "dbgpt-ext[rag,storage_chromadb]>=0.8.0rc1,<0.9",
   "sentence-transformers>=3.0"
 ]
 
