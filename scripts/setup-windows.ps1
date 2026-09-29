@@ -80,12 +80,12 @@ if (-not (Test-Path $EnvFile)) {
 }
 
 if (-not $ModelBaseUrl) {
-    $entered = Read-Host "Hermes/OpenAI-compatible base URL [http://127.0.0.1:8642/v1]"
-    $ModelBaseUrl = if ([string]::IsNullOrWhiteSpace($entered)) { "http://127.0.0.1:8642/v1" } else { $entered.Trim() }
+    $entered = Read-Host "OpenAI-compatible base URL [http://127.0.0.1:18080/v1]"
+    $ModelBaseUrl = if ([string]::IsNullOrWhiteSpace($entered)) { "http://127.0.0.1:18080/v1" } else { $entered.Trim() }
 }
 if (-not $ModelName) {
-    $entered = Read-Host "Model name exposed by the endpoint [hermes-agent]"
-    $ModelName = if ([string]::IsNullOrWhiteSpace($entered)) { "hermes-agent" } else { $entered.Trim() }
+    $entered = Read-Host "Model name exposed by the endpoint [gemma-4-12b-local]"
+    $ModelName = if ([string]::IsNullOrWhiteSpace($entered)) { "gemma-4-12b-local" } else { $entered.Trim() }
 }
 if (-not $ModelApiKey) {
     $ModelApiKey = Read-Host "Bearer/API key (press Enter if the local endpoint does not require one)"
