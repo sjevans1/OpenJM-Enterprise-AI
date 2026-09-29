@@ -176,6 +176,16 @@ To also test real DB-GPT ingestion and the document catalog:
 python scripts/acceptance.py --document /path/to/test-document.pdf
 ```
 
+To automate the full document-grounded Gate C plus deletion negative test:
+
+```bash
+python scripts/acceptance.py \
+  --document /path/to/test-document.txt \
+  --question "What is the unique fact in this document?" \
+  --expect "expected-answer-fragment" \
+  --delete-after-test
+```
+
 ## Product UI
 
 Vertical Slice 1 deliberately exposes only real product workflows:
