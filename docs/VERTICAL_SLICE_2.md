@@ -370,3 +370,19 @@ python scripts/structured_foundation.py
 Use `--keep-source` to retain and re-enable the demo source for the upcoming structured Chat/planner work.
 
 The next implementation step is the structured planner/orchestrator path and structured evidence contract, followed by the Data UI.
+
+
+### Agent-ready architecture seam
+
+After the Structured Data foundation passed, Slice 2 added the minimum architecture needed to avoid a later rewrite:
+
+- generic `ToolSpec`, `ToolContext`, `ToolResult` and `ToolRegistry`;
+- deterministic permission and approval enforcement;
+- registered `knowledge.search` and `structured.query` adapters;
+- extension of the existing OpenJM `Evidence` contract with optional provenance/access/processing fields;
+- generic persisted `ExecutionTrace` records;
+- safe input hashing rather than storing raw tool payloads;
+- structured execution traces containing planned/executed SQL, policy result, row bound and evidence IDs;
+- server-side resolution of authorized Knowledge documents rather than accepting document IDs from a tool caller.
+
+This does not change the Slice 2 functional goal. Routing remains deterministic and no autonomous agent loop is introduced.
