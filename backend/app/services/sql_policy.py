@@ -101,8 +101,19 @@ def validate_and_rewrite_sql(
             raise SQLPolicyError(f"Function {name} is not allowed")
 
     normalized_allowed = {item.lower() for item in allowed_tables}
+    cte_names = {
+        str(cte.alias_or_name).lower()
+        for cte in query.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
     referenced_tables = tuple(
-        sorted({_table_name(table) for table in query.find_all(exp.Table)})
+        sorted(
+            {
+                _table_name(table)
+                for table in query.find_all(exp.Table)
+                if table.name.lower() not in cte_names
+            }
+        )
     )
     if not referenced_tables:
         raise SQLPolicyError("Structured queries must reference an authorized table")
@@ -133,12 +144,19 @@ def validate_and_rewrite_sql(
                 aliases[table.alias.lower()] = canonical
 
         all_columns = set().union(*normalized_columns.values()) if normalized_columns else set()
+        select_aliases = {
+            str(alias.alias).lower()
+            for alias in query.find_all(exp.Alias)
+            if alias.alias
+        }
         for column in query.find_all(exp.Column):
             name = column.name.lower()
             if name == "*":
                 continue
             qualifier = (column.table or "").lower()
             if qualifier:
+                if qualifier in cte_names:
+                    continue
                 canonical = aliases.get(qualifier, qualifier)
                 candidates = (
                     normalized_columns.get(canonical)
@@ -148,7 +166,7 @@ def validate_and_rewrite_sql(
                     raise SQLPolicyError(
                         f"Query references unknown column: {column.sql(dialect=dialect)}"
                     )
-            elif name not in all_columns:
+            elif name not in all_columns and name not in select_aliases:
                 raise SQLPolicyError(f"Query references unknown column: {column.name}")
 
     existing_limit = _limit_value(query)
