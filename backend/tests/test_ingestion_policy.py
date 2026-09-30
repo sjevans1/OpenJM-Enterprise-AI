@@ -184,6 +184,12 @@ def test_ingestion_uses_policy(monkeypatch):
         def load_from_knowledge(cls, **kwargs):
             return cls(**kwargs)
 
+        def get_chunks(self):
+            # Phase D enrichment seam: production assemblers expose the
+            # pre-persist chunk list; the fake returns an empty list so
+            # enrich_chunks has nothing to touch.
+            return []
+
         def persist(self):
             return ["id"]
 
