@@ -91,6 +91,8 @@ Any database mutation is a blocking failure.
 
 Vertical Slice 2 must also keep Gates A–E green as regression coverage.
 
+Runtime structured acceptance scripts require an isolated data-source catalog. They must fail fast when pre-existing sources are present rather than silently selecting, disabling, or deleting unrelated sources. Any acceptance source created by the script must be cleaned up on both success and failure unless an explicit keep-source diagnostic option is used.
+
 
 ## Slice 2 architecture seam checks
 
