@@ -48,7 +48,11 @@ class DBGPTKnowledgeEngine:
             raise KnowledgeEngineError("Knowledge engine is disabled")
 
         try:
-            knowledge = KnowledgeFactory.from_file_path(str(file_path))
+            if file_path.suffix.lower() == '.docx':
+                from app.services.docx_extractor import OpenJMDocxKnowledge
+                knowledge = OpenJMDocxKnowledge(file_path=str(file_path))
+            else:
+                knowledge = KnowledgeFactory.from_file_path(str(file_path))
             assembler = EmbeddingAssembler.load_from_knowledge(
                 knowledge=knowledge,
                 chunk_parameters=ChunkParameters(chunk_strategy="CHUNK_BY_SIZE"),
