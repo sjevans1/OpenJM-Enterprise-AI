@@ -39,19 +39,19 @@ def test_docx_extractor_preserves_paragraphs_and_tables():
         # Check that the table is converted to markdown and present
         # The markdown table should look like:
         # | A | B |
-        # |---|---|
+        # | --- | --- |
         # | 1,425 | C |
         assert '| A | B |' in content
-        assert '|---|---|' in content
+        assert '| --- | --- |' in content
         assert '| 1,425 | C |' in content
         
         # Check that the specific value is present
         assert '1,425' in content
         
         # Check that the order is approximately correct (header separator comes after header row)
-        # We'll do a simple check: the string '| A | B |' appears before '|---|---|'
-        assert content.index('| A | B |') < content.index('|---|---|')
-        assert content.index('|---|---|') < content.index('| 1,425 | C |')
+        # We'll do a simple check: the string '| A | B |' appears before '| --- | --- |'
+        assert content.index('| A | B |') < content.index('| --- | --- |')
+        assert content.index('| --- | --- |') < content.index('| 1,425 | C |')
         
     finally:
         os.unlink(tmp_path)
