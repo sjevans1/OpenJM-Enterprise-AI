@@ -152,10 +152,20 @@ def enrich_chunks(
             chunk.chunk_id = str(uuid.uuid4())
         chunk_ids.append(chunk.chunk_id)
 
+    storage_prefix = f"{document_id}_"
     for index, chunk in enumerate(chunks):
         metadata: dict = chunk.metadata or {}
         previous_chunk_id = chunk_ids[index - 1] if index > 0 else None
         next_chunk_id = chunk_ids[index + 1] if index < len(chunk_ids) - 1 else None
+
+        # Storage-filename scrub (ingestion side). Loaders derive loader-owned
+        # keys (e.g. Markdown ``title``) from the on-disk path, which for
+        # uploads is the UUID-prefixed stored name. Replace any such value
+        # with the authoritative original filename before persisting.
+        for key in list(metadata.keys()):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.startswith(storage_prefix):
+                metadata[key] = source_name
 
         # Server-owned structural fields always overwrite.
         metadata["document_id"] = document_id
@@ -209,13 +219,19 @@ def enrich_chunks(
     return chunks
 
 
-def sanitize_for_evidence(metadata: dict, source_name: str) -> dict:
+def sanitize_for_evidence(
+    metadata: dict, source_name: str, document_id: str | None = None
+) -> dict:
     """Return metadata safe for customer-facing Evidence.
 
     * Drops/replaces internal filesystem paths in ``source`` (loaders store
       ``self._path`` there, which is an on-server path). The value is
       replaced with the server-known source_name so citation context is
       preserved without leaking the host filesystem.
+    * Replaces UUID-prefixed storage filenames (``{document_id}_``) in any
+      metadata value with the authoritative original filename (covers
+      loader-derived keys such as Markdown ``title`` on chunks indexed
+      before this fix, and any future loader that derives from the path).
     * Leaves all server-owned structural keys untouched.
     * Leaves legacy metadata keys untouched (backward compatibility).
     """
@@ -223,13 +239,18 @@ def sanitize_for_evidence(metadata: dict, source_name: str) -> dict:
     if not metadata:
         return {}
     cleaned = dict(metadata)
-    source = cleaned.get("source")
-    if isinstance(source, str) and _looks_like_path(source):
-        cleaned["source"] = source_name
-    # Defense in depth: any value that still embeds the server upload dir or
-    # vector path must not leave the host.
+    storage_prefix = f"{document_id}_" if document_id else None
+
     for key, value in list(cleaned.items()):
-        if isinstance(value, str) and _looks_like_path(value):
+        if not isinstance(value, str):
+            continue
+        if storage_prefix and value.startswith(storage_prefix):
+            cleaned[key] = source_name
+        elif key == "source" and _looks_like_path(value):
+            cleaned[key] = source_name
+        elif _looks_like_path(value) and key in ("source", "title"):
+            # only rewrite loader path-derived keys; never rewrite arbitrary
+            # user content that merely contains a slash
             cleaned[key] = source_name
     return cleaned
 

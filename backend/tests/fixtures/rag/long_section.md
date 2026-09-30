@@ -7,14 +7,16 @@ given the 2,000-character passage cap applied in the retrieval path.
 
 The Markdown header strategy (CHUNK_BY_MARKDOWN_HEADER) emits one chunk per
 section, and internally re-splits an oversized section with a recursive
-CharacterTextSplitter at chunk_size=4000 / chunk_overlap=200. So a single
-section longer than 4,000 characters is split into multiple chunks of up to
-4,000 characters each. The recursive splitter preserves source order, so a
-fact near the end of the section lands in the LAST chunk. That last chunk is
-then re-ranked and returned with a relevance score. Because retrieval is
-semantic (embedding-similarity), the last chunk does not necessarily score
-high enough to beat the score threshold (0.25 by default) or to fall within
-the top_k results, even when the fact itself is the exact answer.
+CharacterTextSplitter. Measured Phase D result: that internal fallback
+inherits the OpenJM policy's 512/50 chunk size/overlap (not the splitter
+constructor's 4000/200 defaults), so a section longer than 512 characters is
+split into multiple bounded chunks of at most ~512 characters. The recursive
+splitter preserves source order, so a fact near the end of the section lands
+in one of the LAST chunks. That chunk is then ranked by semantic similarity
+and returned if it clears the score threshold (0.25) and top_k. In the
+measured Phase D run the fact survived retrieval into the Evidence passage,
+because chunk size (512+50) stays well below the 2,000-character passage
+cap, so no head-truncation could drop it.
 
 This is the passage-limit / context-window loss failure mode Phase D must
 document, and it must NOT be papered over by retries or by lowering the

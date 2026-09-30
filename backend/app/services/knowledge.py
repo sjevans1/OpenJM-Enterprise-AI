@@ -78,9 +78,11 @@ class DBGPTKnowledgeEngine:
             embedding_fn=self.embedding_fn,
         )
 
-    async def ingest(self, document_id: str, file_path: Path) -> None:
+    async def ingest(
+        self, document_id: str, file_path: Path, source_name: str | None = None
+    ) -> None:
         await self.ingest_with_strategy(
-            document_id, file_path, strategy_override=None
+            document_id, file_path, strategy_override=None, source_name=source_name
         )
 
     async def ingest_with_strategy(
@@ -89,15 +91,24 @@ class DBGPTKnowledgeEngine:
         file_path: Path,
         strategy_override: str | None = None,
         extra_params: dict | None = None,
+        source_name: str | None = None,
     ) -> None:
         """Ingest one document under the OpenJM ingestion policy.
 
         ``strategy_override`` and ``extra_params`` exist for the isolated
         comparison harness only; the production ``ingest`` path always
         lets the policy decide.
+
+        ``source_name`` is the customer-visible original filename from the
+        upload record. When omitted (direct benchmark/test calls), it
+        defaults to ``file_path.name`` so existing callers stay backward
+        compatible.
         """
         if not self.settings.knowledge_enabled:
             raise KnowledgeEngineError("Knowledge engine is disabled")
+
+        if source_name is None:
+            source_name = file_path.name
 
         try:
             decision = ingestion_policy().for_document(file_path)
@@ -118,11 +129,10 @@ class DBGPTKnowledgeEngine:
             # enrichment fields are server-owned and derived from server
             # identities or detected document structure; nothing is fabricated.
             chunks = assembler.get_chunks()
-            original_name = file_path.name
             enrich_chunks(
                 chunks,
                 document_id=document_id,
-                source_name=original_name,
+                source_name=source_name,
                 policy_name=decision.policy_name,
             )
             await asyncio.to_thread(assembler.persist)
@@ -163,7 +173,7 @@ class DBGPTKnowledgeEngine:
                 # the ``source`` metadata key (and the path can also appear in
                 # ``title`` for PDF). Sanitize before exposing; server-owned
                 # structural keys are preserved untouched.
-                metadata = sanitize_for_evidence(metadata, title)
+                metadata = sanitize_for_evidence(metadata, title, document_id)
                 evidence.append(
                     Evidence(
                         source_type="document",
