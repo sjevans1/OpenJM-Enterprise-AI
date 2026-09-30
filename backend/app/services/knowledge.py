@@ -11,6 +11,7 @@ from dbgpt_ext.storage.vector_store.chroma_store import ChromaStore, ChromaVecto
 
 from app.core.config import get_settings
 from app.schemas import Evidence
+from app.services.ingestion_policy import ingestion_policy
 
 
 class KnowledgeEngineError(RuntimeError):
@@ -44,18 +45,42 @@ class DBGPTKnowledgeEngine:
         )
 
     async def ingest(self, document_id: str, file_path: Path) -> None:
+        await self.ingest_with_strategy(
+            document_id, file_path, strategy_override=None
+        )
+
+    async def ingest_with_strategy(
+        self,
+        document_id: str,
+        file_path: Path,
+        strategy_override: str | None = None,
+        extra_params: dict | None = None,
+    ) -> None:
+        """Ingest one document under the OpenJM ingestion policy.
+
+        ``strategy_override`` and ``extra_params`` exist for the isolated
+        comparison harness only; the production ``ingest`` path always
+        lets the policy decide.
+        """
         if not self.settings.knowledge_enabled:
             raise KnowledgeEngineError("Knowledge engine is disabled")
 
         try:
-            if file_path.suffix.lower() == '.docx':
+            decision = ingestion_policy().for_document(file_path)
+            if file_path.suffix.lower() == ".docx":
                 from app.services.docx_extractor import OpenJMDocxKnowledge
+
                 knowledge = OpenJMDocxKnowledge(file_path=str(file_path))
             else:
                 knowledge = KnowledgeFactory.from_file_path(str(file_path))
+            parameters = dict(decision.chunk_parameters_kwargs())
+            if strategy_override is not None:
+                parameters["chunk_strategy"] = strategy_override
+            if extra_params:
+                parameters.update(extra_params)
             assembler = EmbeddingAssembler.load_from_knowledge(
                 knowledge=knowledge,
-                chunk_parameters=ChunkParameters(chunk_strategy="CHUNK_BY_SIZE"),
+                chunk_parameters=ChunkParameters(**parameters),
                 index_store=self._store(document_id),
             )
             await asyncio.to_thread(assembler.persist)
