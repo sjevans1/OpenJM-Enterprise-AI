@@ -97,6 +97,20 @@ Preserve slide boundaries and slide identifiers.
 
 Preserve heading / section hierarchy where supported.
 
+## Phase B closure status
+
+Phase B is accepted.
+
+Verified closure state:
+
+- DOCX paragraphs/headings/tables are preserved in document order by the OpenJM-owned extractor.
+- The DOCX table-only benchmark value `1,425` is now retrievable.
+- All eight deterministic RAG fixtures plus Phoenix pass.
+- Existing structured-data regressions remain green.
+- Runtime structured acceptance now requires an isolated source catalog and cleans up its own source on normal failure paths.
+- The production Knowledge stack remains DB-GPT + EmbeddingAssembler + Chroma + EmbeddingRetriever.
+- The universal `CHUNK_BY_SIZE` override intentionally remains in place pending Phase C.
+
 ## Phase C — OpenJM-owned ingestion policy
 
 Replace the universal OpenJM override of `CHUNK_BY_SIZE` with a document-aware policy layer.
@@ -114,6 +128,20 @@ Fallback → recursive size + overlap
 ```
 
 The policy belongs to OpenJM. DB-GPT strategies may be selected underneath it, but DB-GPT-specific decisions must not leak into the orchestrator or UI.
+
+### Phase C promotion rule
+
+Do not switch a document type to a different production chunk strategy merely because DB-GPT supports it.
+
+For each document type:
+
+1. introduce an OpenJM-owned policy decision;
+2. benchmark the current `CHUNK_BY_SIZE` behavior against the candidate strategy using isolated indexes;
+3. compare retrieval correctness, structural fidelity, chunk count, metadata, ingestion cost and retrieval latency;
+4. promote the candidate only when it preserves all existing passes and provides a measurable fidelity/quality benefit;
+5. otherwise retain recursive size + overlap as the production fallback.
+
+The policy seam itself is required. A different strategy for every document type is not.
 
 ## Phase D — metadata enrichment
 
