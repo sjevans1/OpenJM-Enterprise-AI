@@ -1,0 +1,508 @@
+{
+  "tmpdir": "/home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3",
+  "fixtures": {
+    "A. long_report.md - ordinary narrative retrieval": {
+      "label": "A. long_report.md - ordinary narrative retrieval",
+      "file": "long_report.md",
+      "document_id": "doc-long-report",
+      "query": "What was the total Q3 2024 revenue reached?",
+      "expected": "QALO-7031",
+      "category": "A",
+      "ingestion_duration_s": 7.8081,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_long_report",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0211,
+      "retrieval_count": 4,
+      "retrieval_results": [
+        {
+          "score": 0.5437135696411133,
+          "passage_preview": "# QALO Strategic Insights - Quarterly Report Q3 2024\n\n## Executive Summary\nQALO Strategic Insights was founded in 2018 as a boutique analytics firm\nserving emerging markets. In Q3 2024, total revenue reached QALO-7031\nmillion Jamaican dollars, representing a 12% increase over the prior quarter.\nThe ",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+            "title": "long_report.md"
+          }
+        },
+        {
+          "score": 0.5206590294837952,
+          "passage_preview": "is positive, with projected revenue of QALO-7200 million Jamaican dollars.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+            "title": "long_report.md"
+          }
+        },
+        {
+          "score": 0.4827750325202942,
+          "passage_preview": "before the end of fiscal year 2025. Should new regulations emerge, our\nprojected margin compression of 3.2% would need to be revisited.\n\n## Risk Assessment\nPrimary risk factors include supply chain volatility, competitor\npricing pressure, and potential currency devaluation. The board has\napproved a ",
+          "metadata": {
+            "title": "long_report.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md"
+          }
+        },
+        {
+          "score": 0.41848134994506836,
+          "passage_preview": "Consumer confidence indices showed a 12% decline in Q2, which directly\ninformed our revised forecast for Q4. The decline was most pronounced\namong first-time kefir buyers in the Kingston metropolitan area.\n\n## Financial Performance\nRevenue by segment for Q3 2024:\n- Beverage Operations: JMD 4,500,000",
+          "metadata": {
+            "title": "long_report.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md"
+          }
+        }
+      ],
+      "retrieval_all_k": 4,
+      "retrieval_all_results": [
+        {
+          "score": 0.543714,
+          "chunk_id": "a90fc314-83be-4027-a155-437b457becf9",
+          "content_preview": "# QALO Strategic Insights - Quarterly Report Q3 2024\n\n## Executive Summary\nQALO Strategic Insights was founded in 2018 as a boutique analytics firm\nserving emerging markets. In Q3 2024, total revenue ",
+          "metadata": {
+            "title": "long_report.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md"
+          }
+        },
+        {
+          "score": 0.520659,
+          "chunk_id": "0a675845-beb6-4fe1-89ce-bb5244b2870b",
+          "content_preview": "is positive, with projected revenue of QALO-7200 million Jamaican dollars.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+            "title": "long_report.md"
+          }
+        },
+        {
+          "score": 0.482775,
+          "chunk_id": "ccd5d505-0c74-4b32-8e4b-4c5ea1f43d0f",
+          "content_preview": "before the end of fiscal year 2025. Should new regulations emerge, our\nprojected margin compression of 3.2% would need to be revisited.\n\n## Risk Assessment\nPrimary risk factors include supply chain vo",
+          "metadata": {
+            "title": "long_report.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md"
+          }
+        },
+        {
+          "score": 0.418481,
+          "chunk_id": "5f22f830-b7c4-45eb-b447-41a89c409462",
+          "content_preview": "Consumer confidence indices showed a 12% decline in Q2, which directly\ninformed our revised forecast for Q4. The decline was most pronounced\namong first-time kefir buyers in the Kingston metropolitan ",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+            "title": "long_report.md"
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    },
+    "B. heading_context.md - heading-dependent context": {
+      "label": "B. heading_context.md - heading-dependent context",
+      "file": "heading_context.md",
+      "document_id": "doc-heading-ctx",
+      "query": "How many engineers and data scientists are on the Project Atlas team?",
+      "expected": "12 engineers and 4 data scientists",
+      "category": "B",
+      "ingestion_duration_s": 0.058,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_heading_ctx",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0192,
+      "retrieval_count": 1,
+      "retrieval_results": [
+        {
+          "score": 0.6569428443908691,
+          "passage_preview": "# Project Atlas\n\n## Team Composition\nThe Atlas team has 12 engineers and 4 data scientists.\n\n## Technical Stack\nThe project uses a microservices architecture deployed on Kubernetes.\n\n# Project Phoenix\n\n## Team Composition\nThe Phoenix team has 8 engineers and 6 data scientists.\n\n## Technical Stack\nTh",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+            "title": "heading_context.md"
+          }
+        }
+      ],
+      "retrieval_all_k": 1,
+      "retrieval_all_results": [
+        {
+          "score": 0.656943,
+          "chunk_id": "e6321dfb-95d9-482c-8375-c50d1312170e",
+          "content_preview": "# Project Atlas\n\n## Team Composition\nThe Atlas team has 12 engineers and 4 data scientists.\n\n## Technical Stack\nThe project uses a microservices architecture deployed on Kubernetes.\n\n# Project Phoenix",
+          "metadata": {
+            "title": "heading_context.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md"
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    },
+    "C. boundary_fact.txt - fact near chunk boundary": {
+      "label": "C. boundary_fact.txt - fact near chunk boundary",
+      "file": "boundary_fact.txt",
+      "document_id": "doc-boundary-fact",
+      "query": "What is the identifier for the Q3 2024 quarterly review?",
+      "expected": "BR-7749-Q3",
+      "category": "C",
+      "ingestion_duration_s": 0.0565,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_boundary_fact",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0223,
+      "retrieval_count": 2,
+      "retrieval_results": [
+        {
+          "score": 0.7858797311782837,
+          "passage_preview": "quarterly review ID is BR-7749-Q3.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+          }
+        },
+        {
+          "score": 0.745867908000946,
+          "passage_preview": "This document contains general operational metadata for the quarterly review process. Each review is assigned a unique identifier that follows the pattern BR-NNNN-QX. XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+          }
+        }
+      ],
+      "retrieval_all_k": 2,
+      "retrieval_all_results": [
+        {
+          "score": 0.78588,
+          "chunk_id": "4dc191dc-acee-4215-aece-96a0f8d5826c",
+          "content_preview": "quarterly review ID is BR-7749-Q3.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+          }
+        },
+        {
+          "score": 0.745868,
+          "chunk_id": "d3288553-7a14-4c76-8dce-766159e65c30",
+          "content_preview": "This document contains general operational metadata for the quarterly review process. Each review is assigned a unique identifier that follows the pattern BR-NNNN-QX. XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    },
+    "D. financial_table.docx - value ONLY in DOCX table": {
+      "label": "D. financial_table.docx - value ONLY in DOCX table",
+      "file": "financial_table.docx",
+      "document_id": "doc-docx-table",
+      "query": "What is the Analytics Services revenue value?",
+      "expected": "1,425",
+      "category": "D",
+      "ingestion_duration_s": 0.0641,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_docx_table",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0175,
+      "retrieval_count": 1,
+      "retrieval_results": [
+        {
+          "score": 0.39184755086898804,
+          "passage_preview": "Q3 2024 Financial Summary\nThe following financial highlights cover the period January through September 2024. Revenue exceeded expectations across all segments.\nQuarterly Revenue\nRevenue by division for Q3 2024 is provided in the table below.\nNote: all figures are preliminary and subject to audit.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.docx"
+          }
+        }
+      ],
+      "retrieval_all_k": 1,
+      "retrieval_all_results": [
+        {
+          "score": 0.391848,
+          "chunk_id": "d349f022-fafb-484c-b556-096ab7f970e0",
+          "content_preview": "Q3 2024 Financial Summary\nThe following financial highlights cover the period January through September 2024. Revenue exceeded expectations across all segments.\nQuarterly Revenue\nRevenue by division f",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.docx"
+          }
+        }
+      ],
+      "answer_correctness": "FAIL",
+      "expected_in_passage": false
+    },
+    "E. financial_table.pdf - value in PDF table cell": {
+      "label": "E. financial_table.pdf - value in PDF table cell",
+      "file": "financial_table.pdf",
+      "document_id": "doc-pdf-table",
+      "query": "What was the projected ROI for Kefir Gold?",
+      "expected": "18.5%",
+      "category": "E",
+      "ingestion_duration_s": 0.1085,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_pdf_table",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0173,
+      "retrieval_count": 1,
+      "retrieval_results": [
+        {
+          "score": 0.44382762908935547,
+          "passage_preview": " KefirMango12.8%Medium  PPCrrooondjefuicdcteetndLcinReeOI Allfiguresarepreliminaryandsubjecttochange. ThisreportcoverstheQ32024ROIprojections. Q32024ProjectedROIbyProductLine\n| Kefir Strawberry | 15.2% | Medium |\n| --- | --- | --- |\n| Kefir Gold | 18.5% | High |\n",
+          "metadata": {
+            "title": "financial_table",
+            "page": 1,
+            "type": "excel",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.pdf"
+          }
+        }
+      ],
+      "retrieval_all_k": 1,
+      "retrieval_all_results": [
+        {
+          "score": 0.443828,
+          "chunk_id": "76012ae5-61cd-4b25-9686-6aa1c206056f",
+          "content_preview": " KefirMango12.8%Medium  PPCrrooondjefuicdcteetndLcinReeOI Allfiguresarepreliminaryandsubjecttochange. ThisreportcoverstheQ32024ROIprojections. Q32024ProjectedROIbyProductLine\n| Kefir Strawberry | 15.2",
+          "metadata": {
+            "title": "financial_table",
+            "type": "excel",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.pdf",
+            "page": 1
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    },
+    "F. multi_page_report.pdf - page-specific context": {
+      "label": "F. multi_page_report.pdf - page-specific context",
+      "file": "multi_page_report.pdf",
+      "document_id": "doc-multi-page",
+      "query": "What project codename is mentioned on page 2?",
+      "expected": "PHOENIX-8822",
+      "category": "F",
+      "ingestion_duration_s": 0.0968,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_multi_page",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0187,
+      "retrieval_count": 2,
+      "retrieval_results": [
+        {
+          "score": 0.5126432180404663,
+          "passage_preview": "IttargetstheKingstonmetropolitanmarket. ThePHOENIX-8822initiativewilllaunchinQ12025. -ProjectOrion:Planningphase -ProjectPHOENIX-8822:Inactivedevelopment -ProjectAtlas:Phase2complete Projectcodenamesandstatuses: Page2:ProjectDetails",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf",
+            "type": "text",
+            "page": 2,
+            "title": "multi_page_report"
+          }
+        },
+        {
+          "score": 0.25885307788848877,
+          "passage_preview": "Forprojectdetailsseepages1and2. Noprojectcodenamesarelistedinthisappendix. AppendixC:ChangeLog AppendixB:ContactList AppendixA:Glossary Page3:Appendices",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf",
+            "type": "text",
+            "page": 3,
+            "title": "multi_page_report"
+          }
+        }
+      ],
+      "retrieval_all_k": 3,
+      "retrieval_all_results": [
+        {
+          "score": 0.512643,
+          "chunk_id": "87b0b9bd-4219-44c2-88d6-923615cecc43",
+          "content_preview": "IttargetstheKingstonmetropolitanmarket. ThePHOENIX-8822initiativewilllaunchinQ12025. -ProjectOrion:Planningphase -ProjectPHOENIX-8822:Inactivedevelopment -ProjectAtlas:Phase2complete Projectcodenamesa",
+          "metadata": {
+            "title": "multi_page_report",
+            "type": "text",
+            "page": 2,
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+          }
+        },
+        {
+          "score": 0.258853,
+          "chunk_id": "2776ddf2-f394-47a4-9f12-6c614bf0ea32",
+          "content_preview": "Forprojectdetailsseepages1and2. Noprojectcodenamesarelistedinthisappendix. AppendixC:ChangeLog AppendixB:ContactList AppendixA:Glossary Page3:Appendices",
+          "metadata": {
+            "title": "multi_page_report",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf",
+            "page": 3,
+            "type": "text"
+          }
+        },
+        {
+          "score": 0.184394,
+          "chunk_id": "666a3847-cdf2-4bf0-be23-b1bcd4bc2b9a",
+          "content_preview": "RevenueforQ3wasJMD3,200,000. RevenueforQ2wasJMD2,800,000. RevenueforQ1wasJMD2,300,000. Eachprojecthasacodenameandadedicatedteam. Theorganisationhas15majorprojectsunderway. Thisdocumentsummariseskeyini",
+          "metadata": {
+            "page": 1,
+            "title": "multi_page_report",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf",
+            "type": "text"
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    },
+    "G. adjacent_context.md - statement requiring adjacent context": {
+      "label": "G. adjacent_context.md - statement requiring adjacent context",
+      "file": "adjacent_context.md",
+      "document_id": "doc-adjacent-ctx",
+      "query": "What assumption does the Q4 forecast rely on regarding new regulations?",
+      "expected": "no new regulatory constraints",
+      "category": "G",
+      "ingestion_duration_s": 0.0503,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_adjacent_ctx",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0204,
+      "retrieval_count": 2,
+      "retrieval_results": [
+        {
+          "score": 0.654334545135498,
+          "passage_preview": "The forecast assumes no new regulatory constraints will be introduced\nbefore the end of fiscal year 2025.\n\n## Sensitivity Analysis\nIf regulations change, the model will need to be recalibrated.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/adjacent_context.md",
+            "title": "adjacent_context.md"
+          }
+        },
+        {
+          "score": 0.6031002998352051,
+          "passage_preview": "# Forecast Document\n\n## Q4 Projections\nOur Q4 2024 forecast model incorporates three key assumptions.",
+          "metadata": {
+            "title": "adjacent_context.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/adjacent_context.md"
+          }
+        }
+      ],
+      "retrieval_all_k": 2,
+      "retrieval_all_results": [
+        {
+          "score": 0.654335,
+          "chunk_id": "399eb2b8-1c7d-4d9e-a257-61ed4885cfcf",
+          "content_preview": "The forecast assumes no new regulatory constraints will be introduced\nbefore the end of fiscal year 2025.\n\n## Sensitivity Analysis\nIf regulations change, the model will need to be recalibrated.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/adjacent_context.md",
+            "title": "adjacent_context.md"
+          }
+        },
+        {
+          "score": 0.6031,
+          "chunk_id": "7cc93aef-f197-4baf-9cba-6baae4122fa4",
+          "content_preview": "# Forecast Document\n\n## Q4 Projections\nOur Q4 2024 forecast model incorporates three key assumptions.",
+          "metadata": {
+            "title": "adjacent_context.md",
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/adjacent_context.md"
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    },
+    "H. slide_context.pptx - slide-specific context": {
+      "label": "H. slide_context.pptx - slide-specific context",
+      "file": "slide_context.pptx",
+      "document_id": "doc-slide-ctx",
+      "query": "What is the CAC ratio mentioned in the presentation?",
+      "expected": "3.2",
+      "category": "H",
+      "ingestion_duration_s": 0.1018,
+      "ingestion_status": "success",
+      "chroma": {
+        "collection_name": "openjm_default_doc_slide_ctx",
+        "found": false,
+        "error": "chroma_client: An instance of Chroma already exists for /home/sjeva/.hermes/cache/scratch/rag_baseline_t0hba9g3/chromadb with different settings"
+      },
+      "retrieval_duration_s": 0.0181,
+      "retrieval_count": 1,
+      "retrieval_results": [
+        {
+          "score": 0.6202656626701355,
+          "passage_preview": "Customer Acquisition CostThe CAC ratio is 3.2 to 1, meaning we spend JMD 3.20 for every JMD 1.00 in new revenue.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          }
+        }
+      ],
+      "retrieval_all_k": 4,
+      "retrieval_all_results": [
+        {
+          "score": 0.620266,
+          "chunk_id": "42f0dbcb-db0a-4ea6-99ce-f54a51028aa4",
+          "content_preview": "Customer Acquisition CostThe CAC ratio is 3.2 to 1, meaning we spend JMD 3.20 for every JMD 1.00 in new revenue.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          }
+        },
+        {
+          "score": 0.184719,
+          "chunk_id": "58cc8134-d923-4eb6-9413-314dab6a097f",
+          "content_preview": "Revenue OverviewTotal Q4 revenue is projected at JMD 3,500,000.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          }
+        },
+        {
+          "score": 0.179888,
+          "chunk_id": "8bf4e251-b9f2-4c0d-b717-c7a86db74c48",
+          "content_preview": "Q4 2024 Forecast ReviewThis presentation covers our Q4 projections and assumptions.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          }
+        },
+        {
+          "score": 0.13921,
+          "chunk_id": "0103b740-e799-4350-af38-54685bad5ca6",
+          "content_preview": "ConclusionWe recommend proceeding with the Q4 plan as outlined.",
+          "metadata": {
+            "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          }
+        }
+      ],
+      "answer_correctness": "PASS",
+      "expected_in_passage": true
+    }
+  },
+  "phoenix": {
+    "query": "What is the PRIMARY launch sequence code for Project Phoenix?",
+    "expected": "7-3-9-2-5",
+    "document_id": "PHOENIX-2024",
+    "ingestion_duration_s": 0.0658,
+    "ingestion_status": "success",
+    "retrieval_duration_s": 0.0199,
+    "retrieval_count": 2,
+    "retrieval_results": [
+      {
+        "score": 0.8494367003440857,
+        "passage_preview": "# PHOENIX Launch Protocol - Internal Distribution Only\n\n## Document Control\nDocument ID: PHOENIX-2024\nClassification: Internal\nVersion: 1.0\n\n## Launch Sequence Overview\nThe PRIMARY launch sequence code for Project Phoenix is 7-3-9-2-5.\n\nThis code must be validated at each stage gate before proceedin",
+        "source_id": "PHOENIX-2024",
+        "title": "PHOENIX Launch Protocol",
+        "metadata": {
+          "title": "phoenix_launch_protocol.md",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md"
+        }
+      },
+      {
+        "score": 0.40899235010147095,
+        "passage_preview": "master checklist stored in the secure vault. Under no circumstances\nshould the code be shared outside the authorised launch team.\n\n## Activation Criteria\n1. All seven quality gates must pass.\n2. The regional distribution network must be confirmed ready.\n3. Customer support must be staffed and traine",
+        "source_id": "PHOENIX-2024",
+        "title": "PHOENIX Launch Protocol",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "title": "phoenix_launch_protocol.md"
+        }
+      }
+    ],
+    "expected_in_passage": true,
+    "status": "PASS"
+  },
+  "errors": []
+}
