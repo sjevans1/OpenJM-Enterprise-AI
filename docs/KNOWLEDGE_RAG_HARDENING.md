@@ -205,6 +205,50 @@ model-gateway issue is investigated separately. PR #3 remains draft;
 Gate J and Gates A–I, including successful runtime Gate C answer generation,
 are required before merge.
 
+### Phase D closure status
+
+Phase D (structural metadata) is complete; details and measured before/after
+state live in `docs/RAG_METADATA_EVALUATION.md`.
+
+- Enrichment seam: `app/services/chunk_metadata.py::enrich_chunks` runs
+  post-split, pre-persist inside `DBGPTKnowledgeEngine.ingest_with_strategy`.
+  Chunk content, scores, chunk counts and retrieval behavior are unchanged;
+  enrichment only writes chunk metadata.
+- Implemented fields (server-derived, never fabricated): `document_id`,
+  `chunk_id`, `chunk_index`, `source_type`, `source_name`, `content_type`,
+  `ingestion_policy`, `heading_path` (Markdown), `page_number` (PDF),
+  `slide_number` (PPTX via new `OpenJMPPTXKnowledge`),
+  `previous_chunk_id`/`next_chunk_id` (split-order adjacency).
+  `parent_id` intentionally not set (no real parent identity in installed
+  loaders); documented as unsupported.
+- Legacy loader keys (`Header1..6`, `page`, `type`, `title`) are preserved
+  for backward compatibility; previously indexed documents lacking the new
+  keys remain retrievable (metadata read via `.get()` everywhere).
+- Security: internal filesystem paths are scrubbed from customer-facing
+  Evidence (`sanitize_for_evidence`); server-owned keys overwrite any
+  loader/content-supplied value (forgery test included); authorization
+  remains server-side document resolution; deletion unchanged and verified.
+- `.htm` compatibility: root-caused (DB-GPT factory matches `html` only) and
+  fixed via `OpenJMHtmlKnowledge` in the OpenJM knowledge resolution seam;
+  verified live end to end (upload → Evidence → correct answer).
+- Long-section quality check: >2,000-char single-section Markdown fixture
+  added (`long_section.md`, probe fact `BOUNDARY-FACT-PHASE-D-9931`); the
+  fact survives into Evidence (no loss; the policy's 512/50 chunk bound
+  keeps sections below the 2,000-char passage cap). Phase C's "4000/200
+  fallback" note is corrected in the Phase D evaluation doc. Residual
+  whole-document-chunk truncation risk documented with a bounded Phase E
+  correction proposal (not implemented, out of Phase D scope).
+- Validation at Phase D: 78/78 backend tests (20 new deterministic metadata
+  tests); RAG benchmark A–H + Phoenix retrieval all PASS; structured
+  foundation acceptance PASS; structured chat acceptance PASS; live PPTX
+  slide-number Evidence and `.htm` Evidence verified.
+- **Gate C answer generation remains red**: the formal Phoenix acceptance
+  run again failed on malformed Gemma special-token output. Not masked by
+  retries; Phase D validation is deterministic and independent of model
+  generation. Gate C stays an unresolved runtime gate per the Phase C rule.
+
+Phase E (bounded neighbour/parent expansion) is not started.
+
 ## Phase D — metadata enrichment
 
 Indexed chunks should progressively carry enough structure for retrieval and citation:
