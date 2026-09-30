@@ -172,6 +172,39 @@ Phase C is complete.
   untouched by Phase C artifacts.
 
 
+### Phase C review checkpoint
+
+Phase C policy implementation and deterministic benchmarks are complete. The only
+production strategy change is promotion of Markdown to header-aware chunking;
+other supported document types retain the proven size+overlap baseline.
+
+Acceptance evidence at Phase C:
+- 58/58 backend tests passed.
+- Eight RAG fixture retrieval checks and Phoenix retrieval check passed.
+- Structured foundation and structured chat acceptance passed.
+- End-to-end Phoenix **answer generation** did not pass that run: the local
+  Gemma endpoint returned malformed/special-token output. Treat this as an
+  unresolved runtime acceptance gate rather than marking Gate C green based
+  on retrieval-only evidence. Investigate the raw model response and request
+  formatting in a separate bounded model-gateway reliability checkpoint.
+  Do not mask the failure with unlimited retries or change chunk policy to
+  compensate for malformed generation.
+
+Known edge cases to capture in later quality checks:
+- The upload API advertises `.htm` but installed DB-GPT's file factory only
+  maps `.html`; provide a tested compatibility fix or stop advertising
+  unsupported `.htm` before final hardening acceptance.
+- Phase C Markdown fixtures show higher top retrieval scores and stronger
+  heading separation, but scores alone are not proof of general precision.
+  Add a long (>2,000-character) single-section Markdown fixture with a
+  fact near its end to check whether the current 2,000-character evidence
+  passage limit truncates needed context.
+
+Phase D may add structural metadata and deterministic tests while the
+model-gateway issue is investigated separately. PR #3 remains draft;
+Gate J and Gates A–I, including successful runtime Gate C answer generation,
+are required before merge.
+
 ## Phase D — metadata enrichment
 
 Indexed chunks should progressively carry enough structure for retrieval and citation:
