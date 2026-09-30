@@ -143,6 +143,35 @@ For each document type:
 
 The policy seam itself is required. A different strategy for every document type is not.
 
+### Phase C closure status
+
+Phase C is complete.
+
+- The OpenJM-owned policy seam is `backend/app/services/ingestion_policy.py`:
+  `OpenJMIngestionPolicy.for_document(...)` returns an `IngestionDecision`
+  (extension, knowledge implementation, chunk strategy, chunk parameters,
+  policy name, rationale). It is the only place in the codebase that knows
+  DB-GPT strategy names; the orchestrator, API, tool registry and UI are
+  unchanged and strategy-agnostic.
+- `DBGPTKnowledgeEngine.ingest` now obtains chunking from the policy; the
+  hard-coded universal `ChunkParameters(chunk_strategy="CHUNK_BY_SIZE")` is
+  gone. `ingest_with_strategy` exists only for the isolated comparison
+  harness.
+- Installed-capability matrix, baseline-vs-candidate evidence, promoted and
+  rejected strategies are recorded in `docs/RAG_CHUNK_POLICY_EVALUATION.md`
+  and `backend/tests/fixtures/rag/chunk_policy_evaluation.json`.
+- Promotions: Markdown -> `CHUNK_BY_MARKDOWN_HEADER` (all four markdown
+  fixtures scored equal or higher, sections isolated, Header1-6 metadata
+  added, no fact loss).
+- Kept on the proven fallback: TXT, DOCX, PDF, PPTX, HTML and unknown types.
+  DOCX retains the OpenJMDocxKnowledge extractor; `CHUNK_BY_PARAGRAPH` was
+  rejected because it shatters tables into row-level chunks.
+- All eight RAG fixtures plus Phoenix pass; the full backend test suite is
+  green; structured foundation and structured chat acceptance pass.
+- `baseline_benchmark_results.json` (the Phase B authoritative baseline) is
+  untouched by Phase C artifacts.
+
+
 ## Phase D — metadata enrichment
 
 Indexed chunks should progressively carry enough structure for retrieval and citation:
