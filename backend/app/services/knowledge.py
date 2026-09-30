@@ -11,7 +11,41 @@ from dbgpt_ext.storage.vector_store.chroma_store import ChromaStore, ChromaVecto
 
 from app.core.config import get_settings
 from app.schemas import Evidence
+from app.services.chunk_metadata import enrich_chunks, sanitize_for_evidence
 from app.services.ingestion_policy import ingestion_policy
+
+
+_knowledge_extractor_map = {
+    ".docx": "app.services.docx_extractor.OpenJMDocxKnowledge",
+    ".pptx": "app.services.pptx_extractor.OpenJMPPTXKnowledge",
+    ".htm": "app.services.html_extractor.OpenJMHtmlKnowledge",
+    ".html": "app.services.html_extractor.OpenJMHtmlKnowledge",
+}
+
+
+def _knowledge_for(file_path: Path):
+    """Resolve the OpenJM-owned Knowledge extractor for one file path.
+
+    OpenJM owns two override seams that bypass DB-GPT's extension-driven
+    factory:
+    * ``.docx`` -> OpenJMDocxKnowledge (Phase B, non-negotiable);
+    * ``.htm``   -> OpenJMHtmlKnowledge (Phase D `.htm` compatibility fix,
+      because DB-GPT only registers `.html`);
+    * ``.pptx``  -> OpenJMPPTXKnowledge (Phase D slide-number metadata);
+    * ``.html``  -> kept on the upstream HTMLKnowledge (now via the same
+      alias class so policy/strategy validation stays aligned).
+    Any other type goes through DB-GPT's ``KnowledgeFactory``.
+    """
+
+    suffix = file_path.suffix.lower()
+    dotted = _knowledge_extractor_map.get(suffix)
+    if dotted is None:
+        return KnowledgeFactory.from_file_path(str(file_path))
+    module_name, _, class_name = dotted.rpartition(".")
+    module = __import__(module_name, fromlist=[class_name])
+    cls = getattr(module, class_name)
+    return cls(file_path=str(file_path))
+
 
 
 class KnowledgeEngineError(RuntimeError):
@@ -67,12 +101,7 @@ class DBGPTKnowledgeEngine:
 
         try:
             decision = ingestion_policy().for_document(file_path)
-            if file_path.suffix.lower() == ".docx":
-                from app.services.docx_extractor import OpenJMDocxKnowledge
-
-                knowledge = OpenJMDocxKnowledge(file_path=str(file_path))
-            else:
-                knowledge = KnowledgeFactory.from_file_path(str(file_path))
+            knowledge = _knowledge_for(file_path)
             parameters = dict(decision.chunk_parameters_kwargs())
             if strategy_override is not None:
                 parameters["chunk_strategy"] = strategy_override
@@ -82,6 +111,19 @@ class DBGPTKnowledgeEngine:
                 knowledge=knowledge,
                 chunk_parameters=ChunkParameters(**parameters),
                 index_store=self._store(document_id),
+            )
+            # Phase D structural metadata enrichment. Runs after the splitter
+            # has produced chunks (so chunk content and scores are unchanged)
+            # and before persist (so enriched metadata lands in Chroma). All
+            # enrichment fields are server-owned and derived from server
+            # identities or detected document structure; nothing is fabricated.
+            chunks = assembler.get_chunks()
+            original_name = file_path.name
+            enrich_chunks(
+                chunks,
+                document_id=document_id,
+                source_name=original_name,
+                policy_name=decision.policy_name,
             )
             await asyncio.to_thread(assembler.persist)
         except Exception as exc:
@@ -116,6 +158,12 @@ class DBGPTKnowledgeEngine:
             for chunk in chunks:
                 metadata = dict(getattr(chunk, "metadata", {}) or {})
                 score = getattr(chunk, "score", None)
+                # Phase D security: customer-facing Evidence must never leak
+                # internal filesystem paths. Loaders store ``self._path`` in
+                # the ``source`` metadata key (and the path can also appear in
+                # ``title`` for PDF). Sanitize before exposing; server-owned
+                # structural keys are preserved untouched.
+                metadata = sanitize_for_evidence(metadata, title)
                 evidence.append(
                     Evidence(
                         source_type="document",

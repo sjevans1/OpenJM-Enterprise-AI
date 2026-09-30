@@ -5,14 +5,18 @@ RAG pipeline. This module is the ONLY place in the OpenJM codebase that knows
 about DB-GPT chunk strategy names. The orchestrator, API, tool registry and
 UI see only documents and evidence; never strategy identifiers.
 
-Phase C ground rules (docs/KNOWLEDGE_RAG_HARDENING.md):
+Phase C + Phase D ground rules (docs/KNOWLEDGE_RAG_HARDENING.md):
 
 - the proven recursive size+overlap behavior (CHUNK_BY_SIZE with DB-GPT
   defaults 512/50) remains the universal safe fallback;
 - a candidate strategy is promoted per document type only after the
-  isolated benchmark harness proves it preserves all existing facts and
-  adds measurable structural fidelity;
-- unknown or unsupported file types must fall back safely rather than fail.
+  isolated comparison harness (chunk_policy_comparison.py) proves it
+  preserves all benchmark facts and adds measurable fidelity;
+- unknown or unsupported file types fall back safely rather than fail;
+- the ``knowledge_class_name`` field is the OpenJM-owned selector for the
+  loader/extractor in use; the Knowledge engine resolves it (see
+  ``app.services.knowledge._knowledge_for``). DB-GPT ``KnowledgeFactory``
+  is the default when OpenJM does not override (e.g. PDF, TXT, HTML).
 
 Promoted strategies and rationale live in the _POLICIES table below; the
 full baseline-vs-candidate evidence is recorded in
@@ -154,10 +158,13 @@ _POLICIES: Dict[str, _TypePolicy] = {
         strategy=_STRATEGY_SIZE,
         policy_name=FALLBACK_POLICY,
         rationale=(
-            "Harness found CHUNK_BY_PAGE byte-identical to CHUNK_BY_SIZE on "
-            "the slide fixture (the loader already emits one document per "
-            "slide). No measurable advantage; slide metadata is Phase D."
+            "Phase C harness found CHUNK_BY_PAGE byte-identical to "
+            "CHUNK_BY_SIZE on the slide fixture (the loader already emits "
+            "one document per slide). The proven size+overlap baseline is "
+            "retained. Phase D: OpenJMPPTXKnowledge attaches a verified "
+            "1-based slide_number per slide (one chunk per slide)."
         ),
+        knowledge_class_name="OpenJMPPTXKnowledge",
     ),
     ".html": _TypePolicy(
         strategy=_STRATEGY_SIZE,
@@ -172,10 +179,12 @@ _POLICIES: Dict[str, _TypePolicy] = {
         strategy=_STRATEGY_SIZE,
         policy_name=FALLBACK_POLICY,
         rationale=(
-            "Alias of .html; DB-GPT's factory only registers html, so the "
-            "safe size+overlap fallback is used for .htm uploads."
+            "HTML alias. DB-GPT's factory only registers .html, so the "
+            "engine maps .htm to OpenJMHtmlKnowledge (the installed "
+            "HTMLKnowledge) directly. .htm ingestion now succeeds instead "
+            "of raising; the size+overlap fallback is retained."
         ),
-        knowledge_class_name="KnowledgeFactory",
+        knowledge_class_name="OpenJMHtmlKnowledge",
     ),
 }
 
