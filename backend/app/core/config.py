@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     model_api_key: str = ""
     model_name: str = "gemma-4-12b-local"
     model_timeout_seconds: int = 300
+    # Bounded-retry settings for malformed model output (Phase B reliability).
+    # Default extras enable the Gemma 4 chat-template thinking channel, the
+    # established root-cause fix for the llama-server deployment; override
+    # via OPENJM_MODEL_RETRY_REQUEST_EXTRAS for a different runtime, or "{}"
+    # to disable.
+    model_retry_temperature: float = 0.0
+    model_retry_max_tokens: int = 512
+    model_retry_request_extras: str = '{"chat_template_kwargs": {"enable_thinking": true}}'
 
     knowledge_enabled: bool = True
     vector_path: Path = REPO_ROOT / "data" / "vector"
