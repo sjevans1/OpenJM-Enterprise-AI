@@ -39,23 +39,29 @@ It is a review aid only. Do not merge PR #3 from this branch.
 - [x] path sanitization
 - [x] `.htm` compatibility
 - [x] DOCX table regression remains green
-- [ ] customer-visible `source_name` verified to use the original upload
+- [x] customer-visible `source_name` verified to use the original upload
       name, never the UUID-prefixed storage filename
-- [ ] long-section fixture text corrected to match the proven 512/50
+- [x] long-section fixture text corrected to match the proven 512/50
       production behavior
-- [ ] Phase D closure regressions rerun after the two items above
+- [x] Phase D closure regressions rerun after the two items above
 
 ### Model gateway / runtime Gate C
-- [ ] exact malformed-output trigger characterized
-- [ ] failed generation does not leave conversation history in an invalid
-      state or this behavior is otherwise safely modeled
-- [ ] malformed special-token output is rejected, not returned to users
-- [ ] bounded recovery policy implemented only if evidence justifies it
-- [ ] malformed output is not persisted as a successful assistant message
-- [ ] formal Phoenix end-to-end Gate C passes with `7-3-9-2-5`
-- [ ] General memory still passes
-- [ ] Structured `325` still passes
-- [ ] no unlimited retry-until-green behavior
+- [x] exact malformed-output trigger characterized
+- [x] failed generation does not leave conversation history in an invalid
+      state
+- [x] malformed special-token output is rejected, not returned to users
+- [x] bounded recovery policy implemented with one deterministic retry
+- [x] malformed output is not persisted as a successful assistant message
+- [x] formal Phoenix end-to-end Gate C passes with `7-3-9-2-5`
+- [x] General memory still passes
+- [x] Structured `325` still passes
+- [x] no unlimited retry-until-green behavior
+
+### Acceptance harness closure
+- [ ] Knowledge acceptance harness fail-safe cleanup: a failed Gate C run must
+      remove the document it created, unless an explicit keep flag is used
+- [ ] Knowledge acceptance harness must prevent/flag dirty pre-existing test
+      state so duplicate Phoenix artifacts cannot silently change prompt shape
 
 ### Phase E — bounded context expansion
 - [ ] direct, document-scoped neighbour lookup mechanism verified
@@ -77,13 +83,13 @@ Before PR #3 moves out of draft:
 - [ ] backend pytest — all green
 - [ ] deterministic RAG benchmark A–H — all green
 - [ ] Phoenix retrieval — green
-- [ ] formal Phoenix answer-generation Gate C — green
+- [x] formal Phoenix answer-generation Gate C — green
 - [ ] structured foundation — green
 - [ ] structured chat acceptance — green
-- [ ] conversation-memory Gate A — green
+- [x] conversation-memory Gate A — green
 - [ ] document catalog Gate B — green
 - [ ] document deletion/no stale evidence — green
-- [ ] source/path/storage-name redaction — green
+- [x] source/path/storage-name redaction — green
 - [ ] cross-document authorization isolation — green
 - [ ] DOCX `1,425` — green
 - [ ] PDF `18.5%` — green
