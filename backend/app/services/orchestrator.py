@@ -462,6 +462,13 @@ class OpenJMOrchestrator:
                 knowledge_evidence,
             )
 
+        if threshold.currency is None:
+            return self._dependent_failure(
+                "The policy states an ambiguous dollar denomination; require an explicit "
+                "USD or JMD currency before comparing against source data.",
+                knowledge_evidence,
+            )
+
         # Preserve original qualifiers. This server-authored instruction uses
         # only the validated metric/operator, never retrieved document text.
         operator_sql = ">" if operator == ">" else ">="
@@ -489,6 +496,17 @@ class OpenJMOrchestrator:
         if not decision.candidate or decision.plan is None:
             return self._dependent_failure(
                 "The authorized schema cannot support the requested metric.",
+                knowledge_evidence,
+            )
+        # The planner's source identity is only a proposal. Independently
+        # compare it with the user's authorized connected source catalog and
+        # the declared transaction currency. Never infer FX or assume "$"=USD.
+        sources = await self._structured_sources(db, user_id)
+        permitted = [source for source in sources if source.id == decision.plan.source_id]
+        if len(permitted) != 1 or permitted[0].revenue_currency != threshold.currency:
+            return self._dependent_failure(
+                "The selected authorized data source has no verified matching "
+                "transaction currency. No threshold comparison was executed.",
                 knowledge_evidence,
             )
         try:
@@ -542,6 +560,8 @@ class OpenJMOrchestrator:
                     "policy_threshold_operator": operator,
                     "policy_threshold_period": threshold.period,
                     "policy_threshold_value": str(threshold.amount),
+                    "policy_threshold_currency": threshold.currency,
+                    "structured_source_currency": permitted[0].revenue_currency,
                 }
             })
             for item in result.evidence
