@@ -81,6 +81,7 @@ export type DataSourceRecord = {
   id: string
   name: string
   engine: 'sqlite' | 'postgresql'
+  revenue_currency?: 'USD' | 'JMD' | null
   status: string
   enabled: boolean
   tables: DataTableSchema[]
@@ -94,6 +95,7 @@ export type DataSourceCreate = {
   name: string
   engine: 'sqlite' | 'postgresql'
   connection_uri: string
+  revenue_currency?: 'USD' | 'JMD' | null
   enabled: boolean
 }
 
@@ -171,6 +173,13 @@ export const api = {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
+    }),
+
+  setDataSourceCurrency: (id: string, currency: 'USD' | 'JMD' | null) =>
+    request<DataSourceRecord>(`/api/data/sources/${id}/currency`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revenue_currency: currency }),
     }),
 
   deleteDataSource: (id: string) =>
