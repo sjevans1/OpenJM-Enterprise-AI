@@ -23,7 +23,7 @@ async def test_retrieve_deduplicates_before_global_top_k_and_preserves_sources(
     monkeypatch,
 ):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 2
+    monkeypatch.setattr(engine.settings, "rag_top_k", 2)
 
     duplicate = "The PRIMARY launch sequence code is 7-3-9-2-5."
     FakeRetriever.chunks_by_store = {
@@ -87,7 +87,7 @@ async def test_retrieve_deduplicates_before_global_top_k_and_preserves_sources(
 @pytest.mark.asyncio
 async def test_retrieve_does_not_collapse_materially_different_passages(monkeypatch):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 5
+    monkeypatch.setattr(engine.settings, "rag_top_k", 5)
 
     FakeRetriever.chunks_by_store = {
         "doc-a": [
