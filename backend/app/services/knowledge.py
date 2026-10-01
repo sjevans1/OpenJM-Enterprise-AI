@@ -13,6 +13,10 @@ from app.core.config import get_settings
 from app.schemas import Evidence
 from app.services.chunk_metadata import enrich_chunks, sanitize_for_evidence
 from app.services.ingestion_policy import ingestion_policy
+from app.services.evidence_quality import (
+    RetrievedCandidate,
+    deduplicate_exact_candidates,
+)
 
 
 _knowledge_extractor_map = {
@@ -149,7 +153,7 @@ class DBGPTKnowledgeEngine:
         if not self.settings.knowledge_enabled or not documents:
             return []
 
-        evidence: list[Evidence] = []
+        candidates: list[RetrievedCandidate] = []
         for document_id, title in documents:
             try:
                 retriever = EmbeddingRetriever(
@@ -168,28 +172,68 @@ class DBGPTKnowledgeEngine:
             for chunk in chunks:
                 metadata = dict(getattr(chunk, "metadata", {}) or {})
                 score = getattr(chunk, "score", None)
-                # Phase D security: customer-facing Evidence must never leak
-                # internal filesystem paths. Loaders store ``self._path`` in
-                # the ``source`` metadata key (and the path can also appear in
-                # ``title`` for PDF). Sanitize before exposing; server-owned
-                # structural keys are preserved untouched.
-                metadata = sanitize_for_evidence(metadata, title, document_id)
-                evidence.append(
-                    Evidence(
-                        source_type="document",
-                        source_id=document_id,
+                chunk_id = str(
+                    getattr(chunk, "chunk_id", "")
+                    or metadata.get("chunk_id")
+                    or ""
+                )
+                candidates.append(
+                    RetrievedCandidate(
+                        document_id=document_id,
                         title=title,
-                        passage=str(getattr(chunk, "content", ""))[:2000],
+                        chunk_id=chunk_id,
+                        content=str(getattr(chunk, "content", "")),
                         score=float(score) if score is not None else None,
                         metadata=metadata,
                     )
                 )
 
-        def sort_key(item: Evidence) -> float:
-            return item.score if item.score is not None else 0.0
+        # Phase E E0: exact duplicate passages are grouped BEFORE the final
+        # global top-k cut. This prevents repeated copies of the same passage
+        # from crowding unique evidence out of the synthesis prompt while
+        # preserving every authorized source identity in provenance.
+        groups = deduplicate_exact_candidates(candidates)
+        selected = groups[: self.settings.rag_top_k]
 
-        evidence.sort(key=sort_key, reverse=True)
-        return evidence[: self.settings.rag_top_k]
+        evidence: list[Evidence] = []
+        for group in selected:
+            candidate = group.representative
+            # Phase D security: customer-facing Evidence must never leak
+            # internal filesystem paths or storage-prefixed names.
+            metadata = sanitize_for_evidence(
+                dict(candidate.metadata),
+                candidate.title,
+                candidate.document_id,
+            )
+            equivalent_sources = [
+                {
+                    "source_id": item.document_id,
+                    "title": item.title,
+                    "chunk_id": item.chunk_id,
+                }
+                for item in group.equivalent_sources
+            ]
+            provenance = {
+                "retrieval_role": "primary",
+                "deduplication": "exact_content",
+                "duplicate_count": group.duplicate_count,
+            }
+            if equivalent_sources:
+                provenance["equivalent_sources"] = equivalent_sources
+
+            evidence.append(
+                Evidence(
+                    source_type="document",
+                    source_id=candidate.document_id,
+                    title=candidate.title,
+                    passage=candidate.content[:2000],
+                    score=candidate.score,
+                    provenance=provenance,
+                    metadata=metadata,
+                )
+            )
+
+        return evidence
 
     def _chroma_collection_exists(self, collection_name: str) -> bool:
         """Check Chroma collection existence without creating the collection."""
