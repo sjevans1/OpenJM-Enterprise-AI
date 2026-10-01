@@ -1,3 +1,5 @@
+export type ExecutionMode = 'chat' | 'knowledge' | 'data' | 'hybrid'
+
 export type Evidence = {
   source_type: string
   source_id: string
@@ -17,6 +19,7 @@ export type Message = {
   role: string
   content: string
   execution_class?: string | null
+  requested_mode?: ExecutionMode | null
   evidence: Evidence[]
   created_at: string
 }
@@ -36,7 +39,8 @@ export type ChatResponse = {
   conversation_id: string
   message_id: string
   answer: string
-  execution_class: 'general' | 'knowledge' | 'structured'
+  execution_class: 'general' | 'knowledge' | 'structured' | 'hybrid'
+  mode: ExecutionMode
   evidence: Evidence[]
 }
 
@@ -114,13 +118,14 @@ export const api = {
   conversation: (id: string) =>
     request<ConversationDetail>(`/api/conversations/${id}`),
 
-  chat: (message: string, conversationId?: string | null) =>
+  chat: (message: string, conversationId?: string | null, mode?: ExecutionMode) =>
     request<ChatResponse>('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
         conversation_id: conversationId || null,
+        mode: mode || 'chat',
       }),
     }),
 

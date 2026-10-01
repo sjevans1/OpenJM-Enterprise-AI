@@ -57,6 +57,7 @@ class ToolContext:
     conversation_id: str | None = None
     request_id: str = field(default_factory=lambda: str(uuid4()))
     route: str | None = None
+    requested_mode: str | None = None
     model_name: str | None = None
     db: AsyncSession | None = None
 
@@ -144,6 +145,7 @@ class ToolRegistry:
                 user_id=context.user_id,
                 conversation_id=context.conversation_id,
                 route=context.route,
+                requested_mode=context.requested_mode,
                 tool_name=tool.spec.name,
                 operation_class=tool.spec.operation_class,
                 risk_level=tool.spec.risk_level,
