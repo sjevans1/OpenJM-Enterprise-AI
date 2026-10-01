@@ -28,6 +28,7 @@ async def init_db() -> None:
     # requested_mode column to tables that predate this change.  Uses
     # ALTER TABLE so existing rows (with NULL) are preserved.
     await _migrate_add_requested_mode(conn=None)
+    await _migrate_add_revenue_currency()
 
 
 async def _migrate_add_requested_mode(conn=None) -> None:
@@ -51,6 +52,28 @@ async def _migrate_add_requested_mode(conn=None) -> None:
                 await alter_conn.exec_driver_sql(
                     f"ALTER TABLE {table_name} ADD COLUMN requested_mode VARCHAR NULL"
                 )
+
+
+
+async def _migrate_add_revenue_currency() -> None:
+    """Idempotently extend existing SQLite sources without touching records.
+
+    Existing sources deliberately receive NULL (unknown). C3 cannot compare
+    policy amounts against them until an operator declares their currency.
+    No rewriting of historic transaction values or exchange-rate inference.
+    """
+    async with engine.begin() as conn:
+        table = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='data_sources'"
+        )
+        if table.first() is None:
+            return
+        info = await conn.exec_driver_sql("PRAGMA table_info(data_sources)")
+        columns = {row[1] for row in info.fetchall()}
+        if "revenue_currency" not in columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE data_sources ADD COLUMN revenue_currency VARCHAR(3) NULL"
+            )
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
