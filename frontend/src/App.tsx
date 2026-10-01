@@ -170,6 +170,7 @@ export default function App() {
   const [sourceName, setSourceName] = useState('')
   const [sourceEngine, setSourceEngine] = useState<'sqlite' | 'postgresql'>('sqlite')
   const [sourceUri, setSourceUri] = useState('')
+  const [sourceCurrency, setSourceCurrency] = useState<'USD' | 'JMD' | ''>('')
   const [selectedMode, setSelectedMode] = useState<ExecutionMode>('chat')
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -324,6 +325,7 @@ export default function App() {
         name: sourceName.trim(),
         engine: sourceEngine,
         connection_uri: sourceUri.trim(),
+        revenue_currency: sourceCurrency || null,
         enabled: true,
       })
       const test = await api.testDataSource(created.id)
@@ -775,6 +777,18 @@ export default function App() {
                   />
                   <small>The URI is encrypted server-side and is not displayed again after submission.</small>
                 </label>
+                <label>
+                  <span>Sales transaction currency (operator-declared)</span>
+                  <select
+                    value={sourceCurrency}
+                    onChange={(event) => setSourceCurrency(event.target.value as 'USD' | 'JMD' | '')}
+                  >
+                    <option value="">Unknown — disable threshold comparisons</option>
+                    <option value="USD">USD</option>
+                    <option value="JMD">JMD</option>
+                  </select>
+                  <small>Only choose a currency after verifying the underlying amounts are consistently denominated in it. This does not convert currency.</small>
+                </label>
                 <button className="primary-action source-submit" type="submit" disabled={creatingSource}>
                   <Plus size={16} />
                   {creatingSource ? 'Connecting…' : 'Connect source'}
@@ -797,6 +811,31 @@ export default function App() {
                           <div>
                             <strong>{source.name}</strong>
                             <span>{source.engine === 'postgresql' ? 'PostgreSQL' : 'SQLite'} · {source.tables.length} table{source.tables.length === 1 ? '' : 's'}</span>
+                            <label className="source-currency-control">
+                              <span>Transaction currency</span>
+                              <select
+                                aria-label={`Transaction currency for ${source.name}`}
+                                value={source.revenue_currency || ''}
+                                disabled={dataBusyId === source.id}
+                                onChange={async (event) => {
+                                  setDataBusyId(source.id)
+                                  setDataError(null)
+                                  try {
+                                    const value = event.target.value as 'USD' | 'JMD' | ''
+                                    await api.setDataSourceCurrency(source.id, value || null)
+                                    await loadDataSources()
+                                  } catch (error) {
+                                    setDataError(error instanceof Error ? error.message : 'Unable to update currency')
+                                  } finally {
+                                    setDataBusyId(null)
+                                  }
+                                }}
+                              >
+                                <option value="">Unknown</option>
+                                <option value="USD">USD</option>
+                                <option value="JMD">JMD</option>
+                              </select>
+                            </label>
                           </div>
                         </div>
                         <div className="source-state">
