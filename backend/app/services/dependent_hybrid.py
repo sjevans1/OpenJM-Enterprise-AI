@@ -122,3 +122,80 @@ def period_in_request(message: str) -> str | None:
     if len(periods) > 1:
         raise PolicyThresholdError("Conflicting revenue periods in request")
     return next(iter(periods)) if periods else None
+
+
+POLICY_SQL_MARKER = "__OPENJM_POLICY_THRESHOLD__"
+
+
+def requested_threshold_operator(message: str) -> str:
+    """Conservative supported comparison semantics (no silent > vs >= changes)."""
+    lowered = message.casefold()
+    strict = bool(re.search(r"\b(exceed|exceeds|exceeding|above|greater than|more than)\b", lowered))
+    inclusive = bool(re.search(r"\b(at least|meet|meets|meeting|or above)\b", lowered))
+    if strict and inclusive:
+        raise PolicyThresholdError("Conflicting threshold comparison semantics")
+    if strict:
+        return ">"
+    if inclusive:
+        return ">="
+    raise PolicyThresholdError("Request must state whether to exceed or meet the threshold")
+
+
+def bind_document_threshold_sql(
+    proposal: str,
+    threshold: PolicyThreshold,
+    *,
+    requested_period: str | None,
+    operator: str,
+) -> str:
+    """Bind a verified decimal into a narrowly validated, model-proposed SQL AST.
+
+    Only a literal identifier marker on the right side of the requested revenue
+    comparison can be replaced.  No policy passage is ever concatenated into SQL.
+    The independent SQL-policy validator still checks the final SQL for DDL,
+    DML, unknown objects and columns, row bounds and read-only execution.
+    """
+    from sqlglot import exp, parse_one
+
+    if proposal.count(POLICY_SQL_MARKER) != 1:
+        raise PolicyThresholdError("Planner did not provide exactly one threshold marker")
+    try:
+        tree = parse_one(proposal)
+    except Exception as exc:
+        raise PolicyThresholdError("Proposed dependent SQL cannot be parsed") from exc
+    if not isinstance(tree, exp.Query):
+        raise PolicyThresholdError("Dependent SQL must be a read query")
+
+    columns = [
+        node for node in tree.find_all(exp.Column)
+        if node.name == POLICY_SQL_MARKER and not node.table
+    ]
+    if len(columns) != 1:
+        raise PolicyThresholdError("Threshold marker is not an independent SQL value")
+    marker = columns[0]
+    comparison = marker.parent
+    if not isinstance(comparison, (exp.GT, exp.GTE)) or comparison.expression is not marker:
+        raise PolicyThresholdError("Threshold must be the right operand of a comparison")
+    if (isinstance(comparison, exp.GT) and operator != ">") or (
+        isinstance(comparison, exp.GTE) and operator != ">="
+    ):
+        raise PolicyThresholdError("Proposed SQL changed the requested threshold operator")
+
+    lhs = comparison.this
+    if lhs is None:
+        raise PolicyThresholdError("Missing revenue expression")
+    revenue_columns = [c.name.casefold() for c in lhs.find_all(exp.Column)]
+    if not revenue_columns or not any("revenue" in col for col in revenue_columns):
+        raise PolicyThresholdError("Threshold is not compared against a revenue column")
+    if requested_period and not any(
+        requested_period in column for column in revenue_columns
+    ):
+        # Refuse to assume an annual/monthly/quarterly metric from an
+        # unspecified total or to infer period filters from arbitrary SQL.
+        raise PolicyThresholdError("SQL does not prove the requested revenue period")
+
+    marker.replace(exp.Literal.number(str(threshold.amount)))
+    rendered = tree.sql()
+    if POLICY_SQL_MARKER in rendered:
+        raise PolicyThresholdError("Unbound policy marker")
+    return rendered
