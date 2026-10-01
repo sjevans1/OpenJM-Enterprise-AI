@@ -197,6 +197,15 @@ async def test_structured_tool_returns_normalized_evidence_and_trace(
         {
             "source_id": "structured-source",
             "sql": "SELECT customer, revenue FROM sales",
+            "grounded_parameter": {
+                "name": "fy2025_annual_revenue_threshold",
+                "value": 300.0,
+                "type": "threshold",
+                "operator": ">",
+                "unit": None,
+                "evidence_id": "policy-evidence-1",
+                "source_id": "policy-document-1",
+            },
         },
     )
 
@@ -205,6 +214,9 @@ async def test_structured_tool_returns_normalized_evidence_and_trace(
     assert evidence.source_type == "structured_query"
     assert evidence.source_id == "structured-source"
     assert evidence.provenance["tool"] == "structured.query"
+    assert evidence.provenance["grounded_parameter"]["evidence_id"] == (
+        "policy-evidence-1"
+    )
     assert evidence.metadata["sql"].endswith("LIMIT 200")
     assert evidence.processing_location == "local"
 
@@ -224,4 +236,7 @@ async def test_structured_tool_returns_normalized_evidence_and_trace(
     assert trace.policy_decision == "read_only_allowed"
     assert trace.row_limit == 200
     assert trace.evidence_ids_json is not None
+    assert json.loads(trace.metadata_json)["grounded_parameter"]["source_id"] == (
+        "policy-document-1"
+    )
     assert "encrypted-secret" not in (trace.metadata_json or "")

@@ -8,9 +8,55 @@ from app.models import DataSource
 from app.schemas import DataColumnSchema, DataTableSchema
 from app.services.data_sources import encode_schema
 from app.services.structured_planner import (
+    StructuredPlan,
     StructuredPlanner,
     StructuredPlannerError,
 )
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            "SELECT name FROM customers WHERE fy2025_annual_revenue > 300",
+            True,
+        ),
+        (
+            "SELECT name FROM customers WHERE fy2025_annual_revenue > 500",
+            False,
+        ),
+        ("SELECT name FROM customers", False),
+        ("SELECT name FROM customers WHERE score > 300", False),
+        (
+            "SELECT name, fy2025_annual_revenue > 300 AS policy_match "
+            "FROM customers",
+            False,
+        ),
+        (
+            "SELECT name FROM customers "
+            "ORDER BY fy2025_annual_revenue > 300",
+            False,
+        ),
+        (
+            "SELECT name FROM customers "
+            "WHERE fy2025_annual_revenue > 300 OR 1 = 1",
+            False,
+        ),
+    ],
+)
+def test_grounded_parameter_sql_validation(sql, expected):
+    plan = StructuredPlan(source_id="source-1", sql=sql, rationale="test")
+    parameter = {
+        "name": "fy2025_annual_revenue_threshold",
+        "value": 300.0,
+        "type": "threshold",
+        "operator": ">",
+        "unit": None,
+        "evidence_id": "evidence-1",
+        "source_id": "document-1",
+    }
+
+    assert StructuredPlanner.validates_grounded_parameter(plan, parameter) is expected
 
 
 @pytest.fixture

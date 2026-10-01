@@ -108,7 +108,7 @@ function StructuredEvidenceBody({ item }: { item: Evidence }) {
   )
 }
 
-function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
+export function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
   if (!evidence.length) return null
 
   // Count documents and data evidence separately for independent numbering

@@ -340,8 +340,43 @@ class StructuredQueryTool:
         risk_level="MODERATE",
         requires_approval=False,
         required_permissions=frozenset({"structured.read"}),
-        input_schema={"source_id": "string", "sql": "string"},
+        input_schema={
+            "source_id": "string",
+            "sql": "string",
+            "grounded_parameter": "object (optional)",
+        },
     )
+
+    @staticmethod
+    def _grounded_parameter(payload: dict[str, Any]) -> dict[str, Any] | None:
+        value = payload.get("grounded_parameter")
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ToolInputError("grounded_parameter must be an object")
+
+        required_strings = ("name", "type", "evidence_id", "source_id")
+        if any(
+            not isinstance(value.get(key), str) or not value[key]
+            for key in required_strings
+        ):
+            raise ToolInputError("grounded_parameter identity is invalid")
+        if not isinstance(value.get("value"), (int, float)):
+            raise ToolInputError("grounded_parameter value must be numeric")
+        if value.get("operator") not in {">", "<", "=", ">=", "<="}:
+            raise ToolInputError("grounded_parameter operator is invalid")
+        if value.get("unit") is not None and not isinstance(value["unit"], str):
+            raise ToolInputError("grounded_parameter unit is invalid")
+
+        return {
+            "name": value["name"],
+            "value": value["value"],
+            "type": value["type"],
+            "operator": value["operator"],
+            "unit": value.get("unit"),
+            "evidence_id": value["evidence_id"],
+            "source_id": value["source_id"],
+        }
 
     async def execute(
         self,
@@ -353,6 +388,7 @@ class StructuredQueryTool:
 
         source_id = payload.get("source_id")
         sql = payload.get("sql")
+        grounded_parameter = self._grounded_parameter(payload)
         if not isinstance(source_id, str) or not source_id:
             raise ToolInputError("structured.query requires source_id")
         if not isinstance(sql, str) or not sql.strip():
@@ -390,6 +426,11 @@ class StructuredQueryTool:
                 "tool": self.spec.name,
                 "engine": source.engine,
                 "executed_sql": query_result.sql,
+                **(
+                    {"grounded_parameter": grounded_parameter}
+                    if grounded_parameter
+                    else {}
+                ),
             },
             access_context={"user_id": context.user_id},
             processing_location="local",
@@ -421,6 +462,11 @@ class StructuredQueryTool:
                 "processing_location": "local",
                 "tables": list(query_result.policy.tables),
                 "truncated": query_result.truncated,
+                **(
+                    {"grounded_parameter": grounded_parameter}
+                    if grounded_parameter
+                    else {}
+                ),
             },
         )
 

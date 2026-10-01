@@ -2,6 +2,8 @@ import json
 import re
 from dataclasses import dataclass
 
+import sqlglot
+from sqlglot import exp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,6 +225,72 @@ class StructuredPlanner:
         if not isinstance(payload, dict):
             raise StructuredPlannerError("Structured planner JSON must be an object")
         return payload
+
+    @staticmethod
+    def validates_grounded_parameter(
+        plan: StructuredPlan,
+        parameter: dict,
+    ) -> bool:
+        """Confirm model SQL contains the exact supported grounded predicate."""
+        expected_columns = {
+            "fy2025_annual_revenue_threshold": "fy2025_annual_revenue",
+            "annual_revenue_threshold": "annual_revenue",
+            "score_threshold": "score",
+        }
+        expected_column = expected_columns.get(parameter.get("name"))
+        expected_operator = parameter.get("operator")
+        expected_value = parameter.get("value")
+        if (
+            expected_column is None
+            or expected_operator not in {">", "<", "=", ">=", "<="}
+            or not isinstance(expected_value, (int, float))
+            or parameter.get("unit") is not None
+        ):
+            return False
+
+        try:
+            query = sqlglot.parse_one(plan.sql)
+        except Exception:
+            return False
+
+        comparison_types = {
+            ">": exp.GT,
+            "<": exp.LT,
+            "=": exp.EQ,
+            ">=": exp.GTE,
+            "<=": exp.LTE,
+        }
+        where = query.args.get("where")
+        if not isinstance(where, exp.Where):
+            return False
+        predicate = where.this
+        if predicate.find(exp.Or) is not None:
+            return False
+
+        def conjuncts(node: exp.Expression):
+            if isinstance(node, exp.And):
+                yield from conjuncts(node.this)
+                yield from conjuncts(node.expression)
+            else:
+                yield node
+
+        comparison_type = comparison_types[expected_operator]
+        for comparison in conjuncts(predicate):
+            if not isinstance(comparison, comparison_type):
+                continue
+            column = comparison.this
+            literal = comparison.expression
+            if not isinstance(column, exp.Column) or column.name.lower() != expected_column:
+                continue
+            if not isinstance(literal, exp.Literal):
+                continue
+            try:
+                actual_value = float(literal.this)
+            except (TypeError, ValueError):
+                continue
+            if actual_value == float(expected_value):
+                return True
+        return False
 
     async def plan(
         self,
