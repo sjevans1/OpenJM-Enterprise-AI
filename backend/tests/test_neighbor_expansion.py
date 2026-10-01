@@ -20,7 +20,7 @@ class FakeRetriever:
 @pytest.mark.asyncio
 async def test_opt_in_neighbor_expansion_adds_adjacent_context(monkeypatch):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 1
+    monkeypatch.setattr(engine.settings, "rag_top_k", 1)
 
     FakeRetriever.chunks_by_store = {
         "doc-a": [
@@ -79,7 +79,7 @@ async def test_opt_in_neighbor_expansion_adds_adjacent_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_neighbor_expansion_does_not_repeat_primary_content(monkeypatch):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 1
+    monkeypatch.setattr(engine.settings, "rag_top_k", 1)
     content_value = "Project CEDAR escalation threshold."
 
     FakeRetriever.chunks_by_store = {
