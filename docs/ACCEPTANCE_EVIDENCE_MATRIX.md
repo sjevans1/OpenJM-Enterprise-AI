@@ -58,9 +58,9 @@ own test artifacts.
 
 | Gate / capability | Expected evidence class | Current state at reviewed Phase D | Merge requirement |
 |---|---|---|---|
-| Gate A conversation memory | M + H | historically passing, but failed-turn history integrity is under investigation | GREEN |
+| Gate A conversation memory | M + H | PASS; failed-turn history integrity fixed | GREEN |
 | Gate B Knowledge catalog | R + H | PASS | GREEN |
-| Gate C document answer | R + M + H | retrieval PASS, user-facing generation RED | GREEN all legs |
+| Gate C document answer | R + M + H | PASS end-to-end on designated final run; harness isolation still needs hardening | GREEN all legs |
 | Gate D UI contract | deterministic/build/manual UI | prior Slice 1/2 acceptance | GREEN / no regression |
 | Gate E no simulated success | D + R | PASS architecture; model malformed output currently demonstrates why gateway validation matters | GREEN |
 | Gate F structured source | D + R + H | PASS | GREEN |
@@ -73,13 +73,13 @@ own test artifacts.
 | PDF page provenance | D + R | PASS | GREEN |
 | PPTX slide provenance | D + R | PASS | GREEN |
 | .htm compatibility | D + R | PASS at Phase D | GREEN |
-| filesystem-path redaction | D + R | PASS; original-display-name fix still pending | GREEN |
+| filesystem-path redaction | D + R | PASS; original filename and storage-name redaction verified | GREEN |
 | cross-user Knowledge isolation | D integration | architecture server-scoped; stronger test pending | GREEN test |
 | document deletion | D + R | existing deletion tests + runtime behavior pass; Phase E should add exact-neighbour deletion test | GREEN |
 | structured acceptance isolation | H | PASS | GREEN |
 | Knowledge acceptance isolation | H | currently weak; stale Phoenix uploads accumulated after failures | GREEN |
-| failed model-call history integrity | D + M | defect under investigation | GREEN |
-| malformed model-output validation | D + M | not yet closed at reviewed Phase D | GREEN |
+| failed model-call history integrity | D + M | PASS; failed generation rolls back staged user turn | GREEN |
+| malformed model-output validation | D + M | PASS; special-token garbage rejected with one bounded retry then fail-closed | GREEN |
 | Phase E adjacency expansion | D + R | not started | GREEN only if promoted |
 | Phase E parent expansion | D + R | optional, no trusted parent id yet | NOT REQUIRED unless implemented |
 | Hybrid knowledge + SQL | D + R + M | Slice 3, not part of PR #3 | future Slice 3 gate |
@@ -96,15 +96,15 @@ C4 generated answer contains grounded fact
 C5 delete removes source and future evidence
 ```
 
-At reviewed Phase D:
+At reviewed hardening HEAD `428209e918be840ccd02f772ea1a39ad5fb82a40`:
 
 - C1 GREEN
 - C2 GREEN
 - C3 reported GREEN
-- C4 RED due malformed local-model output
+- C4 GREEN on the designated final runtime acceptance
 - C5 GREEN when the script reaches cleanup
 
-The overall Gate C state is therefore **RED**.
+The designated final Gate C run is **GREEN**. Harness isolation/cleanup remains a separate H-class requirement before merge.
 
 Do not average or majority-vote subchecks.
 
