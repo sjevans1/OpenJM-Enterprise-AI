@@ -53,10 +53,10 @@ async def test_catalog_question_is_deterministic_knowledge(session):
 
 @pytest.mark.asyncio
 async def test_no_evidence_routes_to_general(session, monkeypatch):
-    async def no_results(query, documents):
-        return []
+    async def no_results(name, context, payload):
+        return ToolResult(evidence=[])
 
-    monkeypatch.setattr(orchestrator_module.knowledge_engine, "retrieve", no_results)
+    monkeypatch.setattr(orchestrator_module.tool_registry, "execute", no_results)
 
     plan = await OpenJMOrchestrator().plan(
         "What is my name?",
@@ -84,19 +84,28 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
     )
     await session.commit()
 
-    async def evidence_results(query, documents):
-        return [
-            Evidence(
-                source_id="doc-2",
-                title="operations.md",
-                passage="The loading bay opens at 7:30 AM.",
-                score=0.91,
-            )
-        ]
+    captured = {}
+
+    async def evidence_results(name, context, payload):
+        captured["name"] = name
+        captured["permissions"] = context.permissions
+        captured["route"] = context.route
+        captured["conversation_id"] = context.conversation_id
+        captured["payload"] = payload
+        return ToolResult(
+            evidence=[
+                Evidence(
+                    source_id="doc-2",
+                    title="operations.md",
+                    passage="The loading bay opens at 7:30 AM.",
+                    score=0.91,
+                )
+            ]
+        )
 
     monkeypatch.setattr(
-        orchestrator_module.knowledge_engine,
-        "retrieve",
+        orchestrator_module.tool_registry,
+        "execute",
         evidence_results,
     )
 
@@ -104,11 +113,19 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
         "When does the loading bay open?",
         session,
         "local-admin",
+        conversation_id="conversation-knowledge",
     )
 
     assert plan.execution_class == "knowledge"
     assert plan.direct_answer is None
     assert plan.evidence[0].source_id == "doc-2"
+    assert captured == {
+        "name": "knowledge.search",
+        "permissions": frozenset({"knowledge.read"}),
+        "route": "knowledge",
+        "conversation_id": "conversation-knowledge",
+        "payload": {"query": "When does the loading bay open?"},
+    }
 
 
 

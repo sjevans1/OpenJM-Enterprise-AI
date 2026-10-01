@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     model_api_key: str = ""
     model_name: str = "gemma-4-12b-local"
     model_timeout_seconds: int = 300
+    # Bounded-retry settings for malformed model output (Phase B reliability).
+    # Default extras enable the Gemma 4 chat-template thinking channel, the
+    # established root-cause fix for the llama-server deployment; override
+    # via OPENJM_MODEL_RETRY_REQUEST_EXTRAS for a different runtime, or "{}"
+    # to disable.
+    model_retry_temperature: float = 0.0
+    model_retry_max_tokens: int = 512
+    model_retry_request_extras: str = '{"chat_template_kwargs": {"enable_thinking": true}}'
 
     knowledge_enabled: bool = True
     vector_path: Path = REPO_ROOT / "data" / "vector"
@@ -37,6 +45,11 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     rag_top_k: int = 5
     rag_score_threshold: float = 0.25
+    # Phase E keeps semantic top-k intact and adds at most two exact ±1 chunks
+    # around the two strongest primary matches. Final evidence is therefore
+    # bounded by rag_top_k + rag_neighbor_max_chunks.
+    rag_neighbor_primary_limit: int = 2
+    rag_neighbor_max_chunks: int = 2
 
     credential_encryption_key: str = ""
     credential_key_file: Path = REPO_ROOT / "data" / "credentials.key"

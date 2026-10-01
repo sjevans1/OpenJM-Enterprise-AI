@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import Document
 from app.schemas import Evidence, ExecutionClass
-from app.services.knowledge import knowledge_engine
+
 from app.services.structured_planner import (
     StructuredPlannerError,
     structured_planner,
@@ -204,8 +204,19 @@ class OpenJMOrchestrator:
             if structured is not None:
                 return structured
 
-        document_refs = [(doc.id, doc.original_name) for doc in documents]
-        evidence = await knowledge_engine.retrieve(message, document_refs)
+        knowledge_result = await tool_registry.execute(
+            "knowledge.search",
+            ToolContext(
+                user_id=user_id,
+                permissions=frozenset({"knowledge.read"}),
+                conversation_id=conversation_id,
+                route="knowledge",
+                model_name=settings.model_name,
+                db=db,
+            ),
+            {"query": message},
+        )
+        evidence = knowledge_result.evidence
 
         if evidence:
             return ExecutionPlan(

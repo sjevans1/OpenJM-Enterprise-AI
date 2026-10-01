@@ -249,7 +249,15 @@ class KnowledgeSearchTool:
             )
         ).scalars().all()
         refs = [(item.id, item.original_name) for item in documents]
-        evidence = await knowledge_engine.retrieve(query, refs)
+        authorized_source_ids = {document_id for document_id, _ in refs}
+        evidence = await knowledge_engine.retrieve(
+            query,
+            refs,
+            neighbor_primary_limit=(
+                knowledge_engine.settings.rag_neighbor_primary_limit
+            ),
+            neighbor_max_chunks=knowledge_engine.settings.rag_neighbor_max_chunks,
+        )
         normalized = [
             item.model_copy(
                 update={
@@ -257,7 +265,11 @@ class KnowledgeSearchTool:
                     "provenance": {
                         **item.provenance,
                         "tool": self.spec.name,
-                        "retrieval_mode": "semantic",
+                        "retrieval_mode": (
+                            "exact_chunk_id"
+                            if item.provenance.get("retrieval_role") == "neighbor"
+                            else "semantic"
+                        ),
                     },
                     "access_context": {
                         **item.access_context,
@@ -269,10 +281,52 @@ class KnowledgeSearchTool:
             )
             for item in evidence
         ]
+        for item in normalized:
+            equivalent_source_ids = {
+                str(source.get("source_id") or "")
+                for source in item.provenance.get("equivalent_sources", [])
+                if isinstance(source, dict)
+            }
+            if (
+                item.source_id not in authorized_source_ids
+                or not equivalent_source_ids.issubset(authorized_source_ids)
+            ):
+                raise ToolPermissionError(
+                    "Knowledge retrieval returned evidence outside the authorized set"
+                )
         return ToolResult(
             evidence=normalized,
-            output={"evidence_count": len(normalized)},
-            trace_metadata={"processing_location": "local"},
+            output={
+                "evidence_count": len(normalized),
+                "primary_evidence_count": sum(
+                    item.provenance.get("retrieval_role") == "primary"
+                    for item in normalized
+                ),
+                "neighbor_evidence_count": sum(
+                    item.provenance.get("retrieval_role") == "neighbor"
+                    for item in normalized
+                ),
+                "deduplicated_count": sum(
+                    max(int(item.provenance.get("duplicate_count", 1)) - 1, 0)
+                    for item in normalized
+                    if item.provenance.get("retrieval_role") == "primary"
+                ),
+                "evidence_limit": (
+                    knowledge_engine.settings.rag_top_k
+                    + knowledge_engine.settings.rag_neighbor_max_chunks
+                ),
+            },
+            trace_metadata={
+                "processing_location": "local",
+                "primary_evidence_count": sum(
+                    item.provenance.get("retrieval_role") == "primary"
+                    for item in normalized
+                ),
+                "neighbor_evidence_count": sum(
+                    item.provenance.get("retrieval_role") == "neighbor"
+                    for item in normalized
+                ),
+            },
         )
 
 

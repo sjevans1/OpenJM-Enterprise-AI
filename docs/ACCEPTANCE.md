@@ -91,6 +91,8 @@ Any database mutation is a blocking failure.
 
 Vertical Slice 2 must also keep Gates A–E green as regression coverage.
 
+Runtime structured acceptance scripts require an isolated data-source catalog. They must fail fast when pre-existing sources are present rather than silently selecting, disabling, or deleting unrelated sources. Any acceptance source created by the script must be cleaned up on both success and failure unless an explicit keep-source diagnostic option is used.
+
 
 ## Slice 2 architecture seam checks
 
@@ -105,3 +107,40 @@ These checks support Gates F–I and must not replace them:
 7. Trace records route/tool/source/policy/timing/result-bound/evidence identifiers without storing database credentials.
 8. Knowledge tool resolves authorized documents server-side rather than trusting caller-supplied document IDs.
 9. No autonomous agent loop or model-controlled permission/risk metadata is introduced.
+
+
+## Gate J — document intelligence / RAG fidelity
+
+1. Upload deterministic Markdown, PDF, DOCX and PPTX fixtures.
+2. Verify expected document structure is represented in indexed metadata where available.
+3. Verify a DOCX table-only fact is retained and retrievable.
+4. Verify a PDF table value is retrievable with correct source/page context where available.
+5. Verify a heading-dependent question retrieves evidence from the correct section.
+6. Verify a slide-dependent question identifies the correct PPTX slide where available.
+7. Verify a boundary/context question receives required neighbouring or parent context when expansion is enabled.
+8. Verify evidence retains document identity, structural provenance and retrieval score.
+9. Verify deletion removes all retrievable evidence.
+10. Verify no cross-document or unauthorized evidence leakage.
+11. Verify unrelated context does not materially increase without benchmark justification.
+12. Re-run Gates A–I and keep them green.
+
+Gate J is a quality gate. Adding a new chunking strategy without measurable improvement against deterministic fixtures does not satisfy it.
+
+
+## Knowledge acceptance isolation
+
+Document-backed runtime acceptance requires an isolated Knowledge catalog
+before the test document is uploaded. If pre-existing documents are present,
+`scripts/acceptance.py` fails fast and lists them; it never deletes or mutates
+those documents to make the test pass.
+
+When `--delete-after-test` is supplied, the script owns exactly one uploaded
+test document. That document is deleted and verified on the success path, and
+cleanup is also attempted from a `finally` block when a later Gate C/catalog/
+model assertion fails. This prevents failed formal acceptance runs from
+silently accumulating duplicate test documents and changing the prompt shape of
+subsequent runs.
+
+Omitting `--delete-after-test` remains an explicit diagnostic choice to retain
+the test document. A later document-backed acceptance run will then fail the
+isolation precondition until that retained document is removed.

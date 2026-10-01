@@ -85,7 +85,9 @@ async def upload_document(
     await db.commit()
 
     try:
-        await knowledge_engine.ingest(document.id, stored_path)
+        await knowledge_engine.ingest(
+            document.id, stored_path, source_name=original_name
+        )
     except KnowledgeEngineError as exc:
         document.status = "error"
         document.indexed = False

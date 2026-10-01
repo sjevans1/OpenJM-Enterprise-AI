@@ -133,6 +133,13 @@ async def chat(
     if conversation.title == "New conversation":
         conversation.title = request.message.strip()[:80] or "New conversation"
 
+    # History integrity: the user turn is staged but NOT committed until the
+    # answer exists. A failed model call (ModelGatewayError -> 502) must not
+    # leave an orphan user turn in history: a later retry through the same
+    # conversation would then see consecutive user turns, which is a
+    # degenerate template state and no longer a reproduction of the failed
+    # request. Malformed model output is therefore never persisted and
+    # neither is an unanswered user message.
     user_message = Message(
         conversation_id=conversation.id,
         role="user",
@@ -140,7 +147,6 @@ async def chat(
     )
     db.add(user_message)
     conversation.updated_at = datetime.now(timezone.utc)
-    await db.commit()
 
     if plan.direct_answer is not None:
         answer = plan.direct_answer
@@ -153,6 +159,7 @@ async def chat(
         try:
             answer = await model_gateway.chat(provider_messages)
         except ModelGatewayError as exc:
+            await db.rollback()
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     assistant_message = Message(

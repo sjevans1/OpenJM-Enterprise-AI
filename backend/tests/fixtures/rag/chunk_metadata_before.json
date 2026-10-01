@@ -1,0 +1,391 @@
+{
+  "long_report.md": {
+    "extension": ".md",
+    "policy": "markdown_header_aware",
+    "strategy": "CHUNK_BY_MARKDOWN_HEADER",
+    "knowledge_class": "KnowledgeFactory",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "47306a91-2c6e-40f0-b44f-6050f5009494",
+        "metadata": {
+          "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
+          "Header2": "Executive Summary",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "title": "long_report.md"
+        },
+        "content_len": 372,
+        "content_head": "\"QALO Strategic Insights - Quarterly Report Q3 2024-Executive Summary\": QALO Strategic Insights was founded in 2018 as a boutique analytics firm\nserving emergin",
+        "content_tail": "31\nmillion Jamaican dollars, representing a 12% increase over the prior quarter.\nThe growth was driven primarily by expansion into the Caribbean fintech sector."
+      },
+      {
+        "index": 1,
+        "chunk_id": "aa9e1ab3-5081-4d9a-bb15-0740798e0e55",
+        "metadata": {
+          "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
+          "Header2": "Market Dynamics",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "title": "long_report.md"
+        },
+        "content_len": 337,
+        "content_head": "\"QALO Strategic Insights - Quarterly Report Q3 2024-Market Dynamics\": HEADING-4421 marks the start of the market dynamics analysis.\nConsumer confidence indices ",
+        "content_tail": "ine in Q2, which directly\ninformed our revised forecast for Q4. The decline was most pronounced\namong first-time kefir buyers in the Kingston metropolitan area."
+      },
+      {
+        "index": 2,
+        "chunk_id": "82038f7f-eba9-4bf4-a1b4-9ba4d382eb06",
+        "metadata": {
+          "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
+          "Header2": "Financial Performance",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "title": "long_report.md"
+        },
+        "content_len": 426,
+        "content_head": "\"QALO Strategic Insights - Quarterly Report Q3 2024-Financial Performance\": Revenue by segment for Q3 2024:\n- Beverage Operations: JMD 4,500,000\n- Analytics Ser",
+        "content_tail": "aints will be introduced\nbefore the end of fiscal year 2025. Should new regulations emerge, our\nprojected margin compression of 3.2% would need to be revisited."
+      },
+      {
+        "index": 3,
+        "chunk_id": "99603138-4c30-480f-a74d-7c9df2f8babf",
+        "metadata": {
+          "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
+          "Header2": "Risk Assessment",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "title": "long_report.md"
+        },
+        "content_len": 259,
+        "content_head": "\"QALO Strategic Insights - Quarterly Report Q3 2024-Risk Assessment\": Primary risk factors include supply chain volatility, competitor\npricing pressure, and pot",
+        "content_tail": "supply chain volatility, competitor\npricing pressure, and potential currency devaluation. The board has\napproved a hedging strategy covering 60% of Q4 exposure."
+      },
+      {
+        "index": 4,
+        "chunk_id": "05bb91ab-4e25-46bd-bce2-70540fed69aa",
+        "metadata": {
+          "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
+          "Header2": "Conclusion",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "title": "long_report.md"
+        },
+        "content_len": 280,
+        "content_head": "\"QALO Strategic Insights - Quarterly Report Q3 2024-Conclusion\": QALO remains well-positioned for continued growth through its focus on\ndata-driven decision mak",
+        "content_tail": "gh its focus on\ndata-driven decision making and artisan craftsmanship. The Q4 outlook\nis positive, with projected revenue of QALO-7200 million Jamaican dollars."
+      }
+    ],
+    "chunk_count": 5
+  },
+  "heading_context.md": {
+    "extension": ".md",
+    "policy": "markdown_header_aware",
+    "strategy": "CHUNK_BY_MARKDOWN_HEADER",
+    "knowledge_class": "KnowledgeFactory",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "8d48ab53-ed5e-4652-8577-4cdc24aac15b",
+        "metadata": {
+          "Header1": "Project Atlas",
+          "Header2": "Team Composition",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "title": "heading_context.md"
+        },
+        "content_len": 88,
+        "content_head": "\"Project Atlas-Team Composition\": The Atlas team has 12 engineers and 4 data scientists.",
+        "content_tail": "\"Project Atlas-Team Composition\": The Atlas team has 12 engineers and 4 data scientists."
+      },
+      {
+        "index": 1,
+        "chunk_id": "bb3c0664-2ffc-49d9-8164-fe47aa7abe5c",
+        "metadata": {
+          "Header1": "Project Atlas",
+          "Header2": "Technical Stack",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "title": "heading_context.md"
+        },
+        "content_len": 102,
+        "content_head": "\"Project Atlas-Technical Stack\": The project uses a microservices architecture deployed on Kubernetes.",
+        "content_tail": "\"Project Atlas-Technical Stack\": The project uses a microservices architecture deployed on Kubernetes."
+      },
+      {
+        "index": 2,
+        "chunk_id": "8e790517-bcf1-4abc-83d9-514c6669e55f",
+        "metadata": {
+          "Header1": "Project Phoenix",
+          "Header2": "Team Composition",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "title": "heading_context.md"
+        },
+        "content_len": 91,
+        "content_head": "\"Project Phoenix-Team Composition\": The Phoenix team has 8 engineers and 6 data scientists.",
+        "content_tail": "\"Project Phoenix-Team Composition\": The Phoenix team has 8 engineers and 6 data scientists."
+      },
+      {
+        "index": 3,
+        "chunk_id": "1a91ebe4-4176-4493-8789-6a79e8a4fd46",
+        "metadata": {
+          "Header1": "Project Phoenix",
+          "Header2": "Technical Stack",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "title": "heading_context.md"
+        },
+        "content_len": 102,
+        "content_head": "\"Project Phoenix-Technical Stack\": The Phoenix project uses a monolithic architecture deployed on VMs.",
+        "content_tail": "\"Project Phoenix-Technical Stack\": The Phoenix project uses a monolithic architecture deployed on VMs."
+      },
+      {
+        "index": 4,
+        "chunk_id": "28e6ae65-cf67-4ccf-974b-8b90dccc5894",
+        "metadata": {
+          "Header1": "Project Orion",
+          "Header2": "Team Composition",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "title": "heading_context.md"
+        },
+        "content_len": 87,
+        "content_head": "\"Project Orion-Team Composition\": The Orion team has 5 engineers and 3 data scientists.",
+        "content_tail": "\"Project Orion-Team Composition\": The Orion team has 5 engineers and 3 data scientists."
+      }
+    ],
+    "chunk_count": 5
+  },
+  "phoenix_launch_protocol.md": {
+    "extension": ".md",
+    "policy": "markdown_header_aware",
+    "strategy": "CHUNK_BY_MARKDOWN_HEADER",
+    "knowledge_class": "KnowledgeFactory",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "7b5ffb0f-9d74-4945-8b39-6af15336b9d8",
+        "metadata": {
+          "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
+          "Header2": "Document Control",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "title": "phoenix_launch_protocol.md"
+        },
+        "content_len": 136,
+        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Document Control\": Document ID: PHOENIX-2024\nClassification: Internal\nVersion: 1.0",
+        "content_tail": "\"PHOENIX Launch Protocol - Internal Distribution Only-Document Control\": Document ID: PHOENIX-2024\nClassification: Internal\nVersion: 1.0"
+      },
+      {
+        "index": 1,
+        "chunk_id": "437481d7-721b-4e05-a219-f36b2d03c3fd",
+        "metadata": {
+          "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
+          "Header2": "Launch Sequence Overview",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "title": "phoenix_launch_protocol.md"
+        },
+        "content_len": 327,
+        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Launch Sequence Overview\": The PRIMARY launch sequence code for Project Phoenix is 7-3-9-2-5.  \nThis code ",
+        "content_tail": " validated at each stage gate before proceeding\nwith product release activities. The sequence is irreversible once\nexecuted and cannot be modified in the field."
+      },
+      {
+        "index": 2,
+        "chunk_id": "c9313ca1-87c0-41b2-9b72-ba0a075329df",
+        "metadata": {
+          "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
+          "Header2": "Safety Protocol",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "title": "phoenix_launch_protocol.md"
+        },
+        "content_len": 267,
+        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Safety Protocol\": All team members must verify the launch sequence code against the\nmaster checklist store",
+        "content_tail": "unch sequence code against the\nmaster checklist stored in the secure vault. Under no circumstances\nshould the code be shared outside the authorised launch team."
+      },
+      {
+        "index": 3,
+        "chunk_id": "846c6eed-3a97-40af-b2e2-b4e252032898",
+        "metadata": {
+          "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
+          "Header2": "Activation Criteria",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "title": "phoenix_launch_protocol.md"
+        },
+        "content_len": 273,
+        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Activation Criteria\": 1. All seven quality gates must pass.\n2. The regional distribution network must be c",
+        "content_tail": "\n2. The regional distribution network must be confirmed ready.\n3. Customer support must be staffed and trained.\n4. The marketing embargo is lifted at T+0 hours."
+      },
+      {
+        "index": 4,
+        "chunk_id": "752e575b-6038-461b-b180-d78caa0bf3e0",
+        "metadata": {
+          "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
+          "Header2": "Contact",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "title": "phoenix_launch_protocol.md"
+        },
+        "content_len": 107,
+        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Contact\": Launch Director: ops@qalo.io\nEmergency: 911",
+        "content_tail": "\"PHOENIX Launch Protocol - Internal Distribution Only-Contact\": Launch Director: ops@qalo.io\nEmergency: 911"
+      }
+    ],
+    "chunk_count": 5
+  },
+  "boundary_fact.txt": {
+    "extension": ".txt",
+    "policy": "fallback_recursive_size_overlap",
+    "strategy": "CHUNK_BY_SIZE",
+    "knowledge_class": "KnowledgeFactory",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "8ccfbade-1c8f-4749-b9c7-fba5bc98e946",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+        },
+        "content_len": 508,
+        "content_head": "This document contains general operational metadata for the quarterly review process. Each review is assigned a unique identifier that follows the pattern BR-NN",
+        "content_tail": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXThe quarterly"
+      },
+      {
+        "index": 1,
+        "chunk_id": "0924af1c-69c5-4d79-bbca-3bfac37250b4",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+        },
+        "content_len": 34,
+        "content_head": "quarterly review ID is BR-7749-Q3.",
+        "content_tail": "quarterly review ID is BR-7749-Q3."
+      }
+    ],
+    "chunk_count": 2
+  },
+  "financial_table.docx": {
+    "extension": ".docx",
+    "policy": "docx_structure_preserve",
+    "strategy": "CHUNK_BY_SIZE",
+    "knowledge_class": "OpenJMDocxKnowledge",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "201c56aa-f2aa-40fc-9b03-dafe2372e1db",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.docx"
+        },
+        "content_len": 479,
+        "content_head": "Q3 2024 Financial Summary\n\nThe following financial highlights cover the period January through September 2024. Revenue exceeded expectations across all segments",
+        "content_tail": " Beverage Operations | 4,500 | 12% |\n| Analytics Services | 1,425 | 18% |\n| Distribution | 3,200 | 5% |\n\nNote: all figures are preliminary and subject to audit."
+      }
+    ],
+    "chunk_count": 1
+  },
+  "financial_table.pdf": {
+    "extension": ".pdf",
+    "policy": "fallback_recursive_size_overlap",
+    "strategy": "CHUNK_BY_SIZE",
+    "knowledge_class": "KnowledgeFactory",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "f9fdf49c-51a1-4a96-99c9-eb2226076ff0",
+        "metadata": {
+          "page": 1,
+          "type": "excel",
+          "title": "financial_table",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.pdf"
+        },
+        "content_len": 263,
+        "content_head": " KefirMango12.8%Medium  PPCrrooondjefuicdcteetndLcinReeOI Allfiguresarepreliminaryandsubjecttochange. ThisreportcoverstheQ32024ROIprojections. Q32024ProjectedRO",
+        "content_tail": "hisreportcoverstheQ32024ROIprojections. Q32024ProjectedROIbyProductLine\n| Kefir Strawberry | 15.2% | Medium |\n| --- | --- | --- |\n| Kefir Gold | 18.5% | High |\n"
+      }
+    ],
+    "chunk_count": 1
+  },
+  "multi_page_report.pdf": {
+    "extension": ".pdf",
+    "policy": "fallback_recursive_size_overlap",
+    "strategy": "CHUNK_BY_SIZE",
+    "knowledge_class": "KnowledgeFactory",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "5b599b16-3832-45ba-b275-103a666d7e6d",
+        "metadata": {
+          "page": 1,
+          "type": "text",
+          "title": "multi_page_report",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+        },
+        "content_len": 281,
+        "content_head": "RevenueforQ3wasJMD3,200,000. RevenueforQ2wasJMD2,800,000. RevenueforQ1wasJMD2,300,000. Eachprojecthasacodenameandadedicatedteam. Theorganisationhas15majorprojec",
+        "content_tail": "edteam. Theorganisationhas15majorprojectsunderway. ThisdocumentsummariseskeyinitiativesacrossQ1-Q42024. Page1:Overview QALOStrategicInsights-Multi-QuarterReport"
+      },
+      {
+        "index": 1,
+        "chunk_id": "3abb3577-4cb9-4486-b8e4-f46e68a816e8",
+        "metadata": {
+          "page": 2,
+          "type": "text",
+          "title": "multi_page_report",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+        },
+        "content_len": 232,
+        "content_head": "IttargetstheKingstonmetropolitanmarket. ThePHOENIX-8822initiativewilllaunchinQ12025. -ProjectOrion:Planningphase -ProjectPHOENIX-8822:Inactivedevelopment -Proje",
+        "content_tail": "nchinQ12025. -ProjectOrion:Planningphase -ProjectPHOENIX-8822:Inactivedevelopment -ProjectAtlas:Phase2complete Projectcodenamesandstatuses: Page2:ProjectDetails"
+      },
+      {
+        "index": 2,
+        "chunk_id": "9d319d6a-f560-43ee-b9c5-4f49d11a82f7",
+        "metadata": {
+          "page": 3,
+          "type": "text",
+          "title": "multi_page_report",
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+        },
+        "content_len": 152,
+        "content_head": "Forprojectdetailsseepages1and2. Noprojectcodenamesarelistedinthisappendix. AppendixC:ChangeLog AppendixB:ContactList AppendixA:Glossary Page3:Appendices",
+        "content_tail": "Forprojectdetailsseepages1and2. Noprojectcodenamesarelistedinthisappendix. AppendixC:ChangeLog AppendixB:ContactList AppendixA:Glossary Page3:Appendices"
+      }
+    ],
+    "chunk_count": 3
+  },
+  "slide_context.pptx": {
+    "extension": ".pptx",
+    "policy": "fallback_recursive_size_overlap",
+    "strategy": "CHUNK_BY_SIZE",
+    "knowledge_class": "OpenJMPPTXKnowledge",
+    "chunks": [
+      {
+        "index": 0,
+        "chunk_id": "afa4cfca-acb6-43bb-b213-ab7285d8ed43",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+        },
+        "content_len": 83,
+        "content_head": "Q4 2024 Forecast ReviewThis presentation covers our Q4 projections and assumptions.",
+        "content_tail": "Q4 2024 Forecast ReviewThis presentation covers our Q4 projections and assumptions."
+      },
+      {
+        "index": 1,
+        "chunk_id": "28fc6686-12f8-4801-a40c-7ea3c18fad73",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+        },
+        "content_len": 63,
+        "content_head": "Revenue OverviewTotal Q4 revenue is projected at JMD 3,500,000.",
+        "content_tail": "Revenue OverviewTotal Q4 revenue is projected at JMD 3,500,000."
+      },
+      {
+        "index": 2,
+        "chunk_id": "2d41e325-ed0c-415c-bc03-d0e8af7c872b",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+        },
+        "content_len": 112,
+        "content_head": "Customer Acquisition CostThe CAC ratio is 3.2 to 1, meaning we spend JMD 3.20 for every JMD 1.00 in new revenue.",
+        "content_tail": "Customer Acquisition CostThe CAC ratio is 3.2 to 1, meaning we spend JMD 3.20 for every JMD 1.00 in new revenue."
+      },
+      {
+        "index": 3,
+        "chunk_id": "e3860daa-e58a-4f26-bc11-a829ba3813c2",
+        "metadata": {
+          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+        },
+        "content_len": 63,
+        "content_head": "ConclusionWe recommend proceeding with the Q4 plan as outlined.",
+        "content_tail": "ConclusionWe recommend proceeding with the Q4 plan as outlined."
+      }
+    ],
+    "chunk_count": 4
+  }
+}
