@@ -159,6 +159,48 @@ deleted document absent from catalog: PASS
 deleted document no longer used as evidence: PASS
 ```
 
+## Gate E - no simulated success
+
+Gate E is cross-cutting rather than a separate mock-based unit gate. It was
+executed against a fresh backend process and the real configured local model.
+
+Command:
+
+```bash
+backend/.venv/bin/python scripts/acceptance.py \
+  --base-url http://127.0.0.1:8001 \
+  --document backend/tests/fixtures/rag/phoenix_launch_protocol.md \
+  --question "What is the PRIMARY launch sequence code for Project Phoenix?" \
+  --expect "7-3-9-2-5" \
+  --delete-after-test
+```
+
+Measured result: 12/12 checks PASS.
+
+The run performed, rather than simulated:
+
+- multipart upload through the production API;
+- DB-GPT extraction and chunking;
+- embedding generation and Chroma persistence;
+- catalog readback showing the indexed document;
+- semantic retrieval through governed `knowledge.search`;
+- evidence delivery to the configured Gemma model;
+- generated answer `7-3-9-2-5 [1]` with five Evidence items;
+- API deletion, catalog removal and vector cleanup;
+- negative retrieval after deletion, with no deleted-document evidence.
+
+The real structured execution path was also exercised:
+
+```text
+structured foundation: 7/7 PASS
+structured chat acceptance: 10/10 PASS
+```
+
+Those runs registered an actual SQLite source, tested its connection,
+discovered its schema, executed governed read-only SQL, returned SQL-backed
+Evidence, verified disabled-source failure and deleted the acceptance source.
+No production endpoint was credited from a stubbed success response.
+
 ## Remaining limits
 
 - Expansion requires Phase D server-owned chunk identity and ordering metadata.
