@@ -385,9 +385,10 @@ async def test_hybrid_decomposition_preserves_qualifiers(session, monkeypatch):
         orchestrator_module.tool_registry, "execute", fake_execute
     )
 
+    # Test that explicit annual revenue qualifier is preserved
     original = (
         "What is the PRIMARY launch sequence code for Project Phoenix, "
-        "and what is the total revenue for Blue Mountain Cafe?"
+        "and what is the total ANNUAL revenue for Blue Mountain Cafe?"
     )
     plan = await OpenJMOrchestrator().plan(
         original,
@@ -400,5 +401,5 @@ async def test_hybrid_decomposition_preserves_qualifiers(session, monkeypatch):
     # The Structured planner received the original message verbatim.
     plan_calls = [msg for kind, msg in captured_messages if kind == "plan"]
     assert plan_calls[0] == original
-    # "annual revenue" qualifier was preserved in the SQL (not rewritten).
+    # "annual revenue" qualifier was preserved in the SQL (not rewritten to current revenue).
     assert "annual_revenue" in plan.system_prompt

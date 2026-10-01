@@ -117,22 +117,27 @@ function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
         <ShieldCheck size={14} />
         Evidence used
       </div>
-      {evidence.map((item, index) => (
-        <details className="evidence-card" key={`${item.source_id}-${index}`}>
-          <summary>
-            <span className="citation-index">{index + 1}</span>
-            <span className="evidence-title">{item.title}</span>
-            <ChevronRight size={14} className="summary-chevron" />
-          </summary>
-          {item.source_type === 'structured_query' ? (
-            <StructuredEvidenceBody item={item} />
-          ) : (
-            <div className="evidence-passage">{item.passage}</div>
-          )}
-        </details>
-      ))}
+      {evidence.map((item, index) => {
+        const citationPrefix = item.source_type === 'document' 
+          ? `[DOC ${index + 1}]` 
+          : `[DATA ${index + 1}]`;
+        return (
+          <details className="evidence-card" key={`${item.source_id}-${index}`}>
+            <summary>
+              <span className="citation-index">{citationPrefix}</span>
+              <span className="evidence-title">{item.title}</span>
+              <ChevronRight size={14} className="summary-chevron" />
+            </summary>
+            {item.source_type === 'structured_query' ? (
+              <StructuredEvidenceBody item={item} />
+            ) : (
+              <div className="evidence-passage">{item.passage}</div>
+            )}
+          </details>
+        );
+      })}
     </div>
-  )
+  );
 }
 
 export default function App() {

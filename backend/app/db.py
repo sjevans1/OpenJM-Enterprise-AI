@@ -31,12 +31,12 @@ async def init_db() -> None:
 
 
 async def _migrate_add_requested_mode(conn=None) -> None:
-    """Add requested_mode column to message and execution_trace tables.
+    """Add requested_mode column to messages and execution_traces tables.
 
     Only runs ALTER TABLE when the table exists and the column is missing;
     existing rows receive NULL, preserving all prior data.
     """
-    for table_name in ("message", "execution_trace"):
+    for table_name in ("messages", "execution_traces"):
         async with engine.connect() as conn:
             # Check table exists first.
             result = await conn.exec_driver_sql(
