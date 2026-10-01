@@ -199,3 +199,100 @@ def bind_document_threshold_sql(
     if POLICY_SQL_MARKER in rendered:
         raise PolicyThresholdError("Unbound policy marker")
     return rendered
+
+
+# C3 supports one deliberately narrow audited query shape. We never allow a
+# document to introduce a table, field, operator, or SQL fragment.
+@dataclass(frozen=True)
+class DependentRevenueQuery:
+    sql: str
+    source_id: str
+    year: int
+    operator: str
+    threshold: PolicyThreshold
+
+
+def compile_customer_revenue_query(
+    message: str, threshold: PolicyThreshold, sources: list
+) -> DependentRevenueQuery:
+    """Prepare a deterministic read-only completed-orders query.
+
+    No model-generated SQL or source-document SQL is executed. A single year,
+    qualifying operator, completed-order scope, matching period, and exactly
+    one schema with the required relations are mandatory.
+    """
+    from app.services.data_sources import decode_schema
+
+    if threshold.period != "annual":
+        raise PolicyThresholdError(
+            "Dependent revenue queries currently require an annual policy threshold"
+        )
+    lowered = message.lower()
+    if not re.search(r"\\bcompleted(?:[- ]order[s]?)?\\b", lowered):
+        raise PolicyThresholdError(
+            "Specify completed orders; the request does not establish a revenue status"
+        )
+    year_matches = re.findall(r"(?<!\\d)(?:19|20)\\d{2}(?!\\d)", message)
+    years = set(year_matches)
+    if len(years) != 1:
+        raise PolicyThresholdError("Specify exactly one calendar year")
+    year = int(next(iter(years)))
+    if year >= 2099 or year < 2000:
+        raise PolicyThresholdError("Calendar year is outside supported bounds")
+    requested_period = period_in_request(message)
+    if requested_period and requested_period != threshold.period:
+        raise PolicyThresholdError("The requested period differs from the policy")
+    if re.search(r"\\b(?:exceed|exceeds|exceeding|above|over|greater than)\\b", lowered):
+        operator = ">"
+    elif re.search(r"\\b(?:at least|meet|meets|meeting|minimum of)\\b", lowered):
+        operator = ">="
+    else:
+        raise PolicyThresholdError("Specify whether to exceed or meet the threshold")
+
+    required = {
+        "customers": {"id", "name"},
+        "orders": {"id", "customer_id", "order_date", "status"},
+        "order_items": {"order_id", "quantity", "unit_price"},
+    }
+    candidates = []
+    for source in sources:
+        tables = {
+            t.name.lower(): {c.name.lower() for c in t.columns}
+            for t in decode_schema(source.schema_json)
+        }
+        if all(required[name].issubset(tables.get(name, set())) for name in required):
+            # The query runner still verifies source ownership/permissions and
+            # every table and column against the configured authorized set.
+            candidates.append(source)
+
+    if len(candidates) != 1:
+        raise PolicyThresholdError(
+            "Requires exactly one authorized sales source with the known schema"
+        )
+    if not candidates[0].enabled or candidates[0].status != "connected":
+        raise PolicyThresholdError("Sales source is unavailable")
+
+    # Decimal is parsed solely from the currency-bound numeric grammar.
+    # Rendering only Decimal digits and a decimal point cannot introduce SQL.
+    number = format(threshold.amount, "f")
+    if not re.fullmatch(r"\\d+(?:\\.\\d{1,2})?", number):
+        raise PolicyThresholdError("Unsupported numeric threshold")
+    sql = (
+        "SELECT c.name AS customer_name, "
+        "ROUND(SUM(oi.quantity * oi.unit_price), 2) AS completed_order_revenue "
+        "FROM customers AS c "
+        "JOIN orders AS o ON o.customer_id = c.id "
+        "JOIN order_items AS oi ON oi.order_id = o.id "
+        f"WHERE o.status = 'completed' AND o.order_date >= '{year:04d}-01-01' "
+        f"AND o.order_date < '{year + 1:04d}-01-01' "
+        "GROUP BY c.id, c.name "
+        f"HAVING SUM(oi.quantity * oi.unit_price) {operator} {number} "
+        "ORDER BY completed_order_revenue DESC LIMIT 100"
+    )
+    return DependentRevenueQuery(
+        sql=sql,
+        source_id=candidates[0].id,
+        year=year,
+        operator=operator,
+        threshold=threshold,
+    )
