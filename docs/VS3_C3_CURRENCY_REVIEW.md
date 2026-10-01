@@ -1,3 +1,25 @@
+## Live acceptance harness prepared (NOT YET EXECUTED)
+
+`scripts/dependent_hybrid_acceptance.py` runs the actual API against a
+temporary, isolated SQLite fixture, uploads one policy Markdown document,
+executes HYBRID through local Gemma/RAG/SQL, then exercises disabled source,
+currency mismatch, and deleted-document fail-closed behavior. Cleanup is
+restricted to the test's own uploaded document and created data-source entry
+and is attempted in `finally` even after a failure.
+
+Start a **disposable** local application instance with the normal OpenJM
+backend/model dependencies available; then, from the repo root, execute:
+
+```bash
+python scripts/dependent_hybrid_acceptance.py --isolated-instance --base-url http://127.0.0.1:8000
+```
+
+The harness refuses nonempty Knowledge and Data catalogs; it will still
+leave a chat conversation in the disposable application database, since
+there is not yet a conversation deletion endpoint. Do not run against
+production or any workspace containing client records. CI validates
+syntax/help, but it **does not** execute the live model/API operations.
+
 ## Verified CI checkpoint — 2026-10-01
 
 GitHub Actions run **36876494651** at branch commit `56c38af77ee6e52f4c6bebb69abf445df5a9f0e2` completed successfully in **both** jobs:
