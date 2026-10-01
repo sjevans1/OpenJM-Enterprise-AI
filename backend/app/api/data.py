@@ -11,6 +11,7 @@ from app.models import DataSource
 from app.schemas import (
     DataSourceCreate,
     DataSourceEnabledUpdate,
+    DataSourceCurrencyUpdate,
     DataSourceOut,
     DataSourceSchemaRefreshResult,
     DataSourceTestResult,
@@ -187,6 +188,23 @@ async def update_source(
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     source.enabled = request.enabled
+    source.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(source)
+    return _source_out(source)
+
+
+@router.patch("/{source_id}/currency", response_model=DataSourceOut)
+async def update_source_currency(
+    source_id: str,
+    request: DataSourceCurrencyUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Operator-declared transaction currency, never inferred from amounts."""
+    source = await _owned_source(db, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    source.revenue_currency = request.revenue_currency
     source.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(source)
