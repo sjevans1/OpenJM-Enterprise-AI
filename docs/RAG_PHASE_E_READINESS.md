@@ -1,16 +1,13 @@
 # Phase E Readiness — Bounded Context Expansion Design
 
-Status: planning only. This branch is intentionally isolated from
-`hardening/knowledge-rag-fidelity` while the model-gateway reliability
-checkpoint is still in progress.
+Status: planning only. This branch remains isolated from production changes.
 
-Base reviewed: `b0d5e7b192a6292643cd9fe4e20de9153e38bc86`.
+Latest hardening state reviewed: `428209e918be840ccd02f772ea1a39ad5fb82a40`.
+The model-gateway reliability checkpoint is complete and formal Gate C passed.
 
 ## Purpose
 
-Prepare the Phase E implementation so it can start quickly once the runtime
-Gate C/model-gateway blocker is resolved, without touching the active hardening
-branch or changing production behavior now.
+Prepare the Phase E implementation without touching production behavior on this planning branch. Formal Gate C is now green; Phase E should address the remaining evidence-quality issue proven during the gateway investigation: semantically duplicate evidence can destabilize the local model.
 
 Phase E should improve contextual completeness behind `knowledge.search`
 using metadata created in Phase D, while remaining deterministic, bounded,
@@ -137,6 +134,29 @@ Preferred order:
 Any direct Chroma use should stay inside the Knowledge adapter just like the
 existing collection-deletion fallback.
 
+## Duplicate-evidence finding from the gateway investigation
+
+The model-gateway checkpoint established a strong Phase E requirement:
+four duplicate/overlapping Phoenix documents produced malformed model output
+6/6 across tested prompt shapes, while single-document evidence was valid 9/9.
+
+Gateway validation now contains this safely, but Phase E should reduce prompt
+redundancy at the evidence layer rather than relying on retries.
+
+Evaluate **post-retrieval exact/near-exact duplicate evidence control**
+separately from neighbour expansion:
+
+- always deduplicate exact repeats within the same document;
+- benchmark exact normalized-content dedup across documents while preserving
+  every source reference/provenance;
+- do not collapse sources that merely disagree or represent distinct versions;
+- measure prompt-size reduction and answer stability;
+- keep raw authorized source identities available even when repeated passages
+  are collapsed for synthesis.
+
+Do not make cross-document semantic dedup an unconditional production rule
+without deterministic evidence.
+
 ## Required deterministic fixtures
 
 The existing `adjacent_context.md` currently passes without expansion, so it
@@ -233,7 +253,7 @@ Phase E implementation must preserve:
 - deletion/no stale evidence
 - authorization isolation
 - structured-data Gates F–I
-- formal runtime Gate C once the model-gateway checkpoint is green
+- formal runtime Gate C, which is now green and must remain so
 
 PR #3 should not be considered merge-ready until runtime Gate C is genuinely
 green.
