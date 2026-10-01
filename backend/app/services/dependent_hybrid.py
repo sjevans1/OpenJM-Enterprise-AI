@@ -192,6 +192,17 @@ def bind_document_threshold_sql(
     ):
         raise PolicyThresholdError("Proposed SQL changed the requested threshold operator")
 
+    conditions = [
+        clause for clause in (tree.args.get("where"), tree.args.get("having"))
+        if clause is not None
+    ]
+    if len(conditions) != 1 or conditions[0].this is not comparison:
+        raise PolicyThresholdError(
+            "Dependent SQL must use the verified threshold as its only filter"
+        )
+    if list(tree.find_all(exp.Join)):
+        raise PolicyThresholdError("C3 does not infer threshold semantics across joins")
+
     lhs = comparison.this
     if not isinstance(lhs, exp.Column):
         raise PolicyThresholdError("Only direct revenue column comparison is supported")
