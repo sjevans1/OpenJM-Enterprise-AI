@@ -2,6 +2,7 @@ import asyncio
 from functools import cached_property
 from pathlib import Path
 
+from dbgpt.core import Chunk
 from dbgpt.rag.embedding import HuggingFaceEmbeddings
 from dbgpt.rag.retriever import EmbeddingRetriever
 from dbgpt_ext.rag import ChunkParameters
@@ -234,6 +235,97 @@ class DBGPTKnowledgeEngine:
             )
 
         return evidence
+
+    def _get_chunks_by_ids_sync(
+        self,
+        document_id: str,
+        chunk_ids: list[str],
+    ) -> list[Chunk]:
+        """Read exact chunks from one authorized document collection by id.
+
+        Phase E compatibility seam for DB-GPT 0.8.2: ChromaStore exposes no
+        public read-by-id method, while its resolved collection supports
+        Collection.get(ids=[...]). Keep that version-specific access contained
+        inside the Knowledge adapter.
+
+        Requested order is restored explicitly; Chroma return order is never
+        treated as an application invariant.
+        """
+
+        requested: list[str] = []
+        seen: set[str] = set()
+        for chunk_id in chunk_ids:
+            value = str(chunk_id or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            requested.append(value)
+
+        if not requested:
+            return []
+
+        collection_name = self._collection_name(document_id)
+        if not self._chroma_collection_exists(collection_name):
+            return []
+
+        store = self._store(document_id)
+        collection = getattr(store, "_collection", None)
+        if collection is None:
+            raise KnowledgeEngineError(
+                "DB-GPT Chroma store does not expose its resolved collection"
+            )
+
+        result = collection.get(
+            ids=requested,
+            include=["documents", "metadatas"],
+        )
+        ids = list(result.get("ids") or [])
+        documents = list(result.get("documents") or [])
+        metadatas = list(result.get("metadatas") or [])
+
+        by_id: dict[str, Chunk] = {}
+        for index, raw_id in enumerate(ids):
+            chunk_id = str(raw_id)
+            metadata = (
+                dict(metadatas[index] or {})
+                if index < len(metadatas)
+                else {}
+            )
+            stored_document_id = metadata.get("document_id")
+            if (
+                stored_document_id is not None
+                and str(stored_document_id) != document_id
+            ):
+                # Defense in depth: Phase D chunks carry server-owned
+                # document_id. A mismatch means the row is not eligible for
+                # same-document context expansion.
+                continue
+
+            content = (
+                str(documents[index] or "")
+                if index < len(documents)
+                else ""
+            )
+            by_id[chunk_id] = Chunk(
+                content=content,
+                metadata=metadata,
+                chunk_id=chunk_id,
+            )
+
+        return [by_id[item] for item in requested if item in by_id]
+
+    async def get_chunks_by_ids(
+        self,
+        document_id: str,
+        chunk_ids: list[str],
+    ) -> list[Chunk]:
+        """Async exact-id wrapper used by bounded Phase E context expansion."""
+
+        return await asyncio.to_thread(
+            self._get_chunks_by_ids_sync,
+            document_id,
+            chunk_ids,
+        )
 
     def _chroma_collection_exists(self, collection_name: str) -> bool:
         """Check Chroma collection existence without creating the collection."""
