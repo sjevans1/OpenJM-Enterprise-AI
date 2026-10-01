@@ -36,6 +36,7 @@ def _source_out(source: DataSource) -> DataSourceOut:
         id=source.id,
         name=source.name,
         engine=source.engine,
+        revenue_currency=source.revenue_currency,
         status=source.status,
         enabled=source.enabled,
         tables=decode_schema(source.schema_json),
@@ -89,6 +90,7 @@ async def create_source(
         name=request.name.strip(),
         engine=request.engine,
         connection_secret=encrypted,
+        revenue_currency=request.revenue_currency,
         status="untested",
         enabled=request.enabled,
     )
