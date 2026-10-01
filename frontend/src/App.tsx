@@ -111,6 +111,10 @@ function StructuredEvidenceBody({ item }: { item: Evidence }) {
 function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
   if (!evidence.length) return null
 
+  // Count documents and data evidence separately for independent numbering
+  let docCount = 0
+  let dataCount = 0
+
   return (
     <div className="evidence-stack">
       <div className="evidence-heading">
@@ -118,9 +122,17 @@ function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
         Evidence used
       </div>
       {evidence.map((item, index) => {
-        const citationPrefix = item.source_type === 'document' 
-          ? `[DOC ${index + 1}]` 
-          : `[DATA ${index + 1}]`;
+        let citationPrefix: string
+        if (item.source_type === 'document') {
+          docCount++
+          citationPrefix = `[DOC ${docCount}]`
+        } else if (item.source_type === 'structured_query') {
+          dataCount++
+          citationPrefix = `[DATA ${dataCount}]`
+        } else {
+          // Fallback for any other source types
+          citationPrefix = `[EVIDENCE ${index + 1}]`
+        }
         return (
           <details className="evidence-card" key={`${item.source_id}-${index}`}>
             <summary>
