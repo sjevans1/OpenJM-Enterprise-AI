@@ -23,7 +23,7 @@ async def test_retrieve_deduplicates_before_global_top_k_and_preserves_sources(
     monkeypatch,
 ):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 2
+    monkeypatch.setattr(engine.settings, "rag_top_k", 2)
 
     duplicate = "The PRIMARY launch sequence code is 7-3-9-2-5."
     FakeRetriever.chunks_by_store = {
@@ -68,11 +68,25 @@ async def test_retrieve_deduplicates_before_global_top_k_and_preserves_sources(
 @pytest.mark.asyncio
 async def test_retrieve_keeps_identical_text_from_distinct_documents(monkeypatch):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 2
+    monkeypatch.setattr(engine.settings, "rag_top_k", 2)
     duplicate = "Independent sources report the same threshold."
     FakeRetriever.chunks_by_store = {
-        "doc-a": [Chunk(content=duplicate, score=0.99, chunk_id="a1", metadata={"document_id": "doc-a", "chunk_id": "a1"})],
-        "doc-b": [Chunk(content=duplicate, score=0.98, chunk_id="b1", metadata={"document_id": "doc-b", "chunk_id": "b1"})],
+        "doc-a": [
+            Chunk(
+                content=duplicate,
+                score=0.99,
+                chunk_id="a1",
+                metadata={"document_id": "doc-a", "chunk_id": "a1"},
+            )
+        ],
+        "doc-b": [
+            Chunk(
+                content=duplicate,
+                score=0.98,
+                chunk_id="b1",
+                metadata={"document_id": "doc-b", "chunk_id": "b1"},
+            )
+        ],
     }
     monkeypatch.setattr(knowledge_module, "EmbeddingRetriever", FakeRetriever)
     monkeypatch.setattr(engine, "_store", lambda document_id: document_id)
@@ -88,7 +102,7 @@ async def test_retrieve_keeps_identical_text_from_distinct_documents(monkeypatch
 @pytest.mark.asyncio
 async def test_retrieve_does_not_collapse_materially_different_passages(monkeypatch):
     engine = DBGPTKnowledgeEngine()
-    engine.settings.rag_top_k = 5
+    monkeypatch.setattr(engine.settings, "rag_top_k", 5)
 
     FakeRetriever.chunks_by_store = {
         "doc-a": [
@@ -123,3 +137,40 @@ async def test_retrieve_does_not_collapse_materially_different_passages(monkeypa
         "Projected ROI is 19.5%.",
     }
     assert all(item.provenance["duplicate_count"] == 1 for item in result)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_rejects_primary_with_mismatched_document_identity(monkeypatch):
+    engine = DBGPTKnowledgeEngine()
+    monkeypatch.setattr(engine.settings, "rag_top_k", 5)
+    FakeRetriever.chunks_by_store = {
+        "doc-a": [
+            Chunk(
+                content="Content with mismatched document identity.",
+                score=0.99,
+                chunk_id="foreign-chunk",
+                metadata={
+                    "document_id": "doc-b",
+                    "chunk_id": "foreign-chunk",
+                },
+            ),
+            Chunk(
+                content="Content missing document identity.",
+                score=0.98,
+                chunk_id="missing-document",
+                metadata={"chunk_id": "missing-document"},
+            ),
+            Chunk(
+                content="Content missing chunk identity.",
+                score=0.97,
+                chunk_id="missing-chunk",
+                metadata={"document_id": "doc-a"},
+            ),
+        ]
+    }
+    monkeypatch.setattr(knowledge_module, "EmbeddingRetriever", FakeRetriever)
+    monkeypatch.setattr(engine, "_store", lambda document_id: document_id)
+
+    result = await engine.retrieve("contaminated", [("doc-a", "A.md")])
+
+    assert result == []

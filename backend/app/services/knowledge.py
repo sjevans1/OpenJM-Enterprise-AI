@@ -2,6 +2,7 @@ import asyncio
 from functools import cached_property
 from pathlib import Path
 
+from dbgpt.core import Chunk
 from dbgpt.rag.embedding import HuggingFaceEmbeddings
 from dbgpt.rag.retriever import EmbeddingRetriever
 from dbgpt_ext.rag import ChunkParameters
@@ -13,6 +14,7 @@ from app.core.config import get_settings
 from app.schemas import Evidence
 from app.services.chunk_metadata import enrich_chunks, sanitize_for_evidence
 from app.services.ingestion_policy import ingestion_policy
+from app.services.context_expansion import build_neighbor_requests
 from app.services.evidence_quality import (
     RetrievedCandidate,
     deduplicate_exact_candidates,
@@ -149,6 +151,9 @@ class DBGPTKnowledgeEngine:
         self,
         query: str,
         documents: list[tuple[str, str]],
+        *,
+        neighbor_primary_limit: int = 0,
+        neighbor_max_chunks: int = 0,
     ) -> list[Evidence]:
         if not self.settings.knowledge_enabled or not documents:
             return []
@@ -172,11 +177,18 @@ class DBGPTKnowledgeEngine:
             for chunk in chunks:
                 metadata = dict(getattr(chunk, "metadata", {}) or {})
                 score = getattr(chunk, "score", None)
-                chunk_id = str(
-                    getattr(chunk, "chunk_id", "")
-                    or metadata.get("chunk_id")
-                    or ""
-                )
+                chunk_id = str(getattr(chunk, "chunk_id", "") or "")
+                stored_document_id = str(metadata.get("document_id") or "")
+                stored_chunk_id = str(metadata.get("chunk_id") or "")
+                if (
+                    stored_document_id != document_id
+                    or not chunk_id
+                    or stored_chunk_id != chunk_id
+                ):
+                    # Phase D server-owned identities are mandatory on the
+                    # hardened read path. Never relabel legacy, contaminated,
+                    # or malformed vector rows as authorized evidence.
+                    continue
                 candidates.append(
                     RetrievedCandidate(
                         document_id=document_id,
@@ -195,7 +207,7 @@ class DBGPTKnowledgeEngine:
         groups = deduplicate_exact_candidates(candidates)
         selected = groups[: self.settings.rag_top_k]
 
-        evidence: list[Evidence] = []
+        primary_evidence: list[Evidence] = []
         for group in selected:
             candidate = group.representative
             # Phase D security: customer-facing Evidence must never leak
@@ -221,7 +233,7 @@ class DBGPTKnowledgeEngine:
             if equivalent_sources:
                 provenance["equivalent_sources"] = equivalent_sources
 
-            evidence.append(
+            primary_evidence.append(
                 Evidence(
                     source_type="document",
                     source_id=candidate.document_id,
@@ -233,7 +245,270 @@ class DBGPTKnowledgeEngine:
                 )
             )
 
+        if neighbor_primary_limit <= 0 or neighbor_max_chunks <= 0:
+            return primary_evidence
+
+        neighbor_evidence = await self._expand_neighbor_evidence(
+            selected,
+            primary_limit=neighbor_primary_limit,
+            max_neighbor_chunks=neighbor_max_chunks,
+        )
+        if not neighbor_evidence:
+            return primary_evidence
+
+        # Present local context around each primary in natural source order
+        # (previous -> primary -> next) while keeping semantic primaries as
+        # the governing evidence set and preserving their scores.
+        by_origin: dict[tuple[str, str], dict[str, Evidence]] = {}
+        for item in neighbor_evidence:
+            origin = str(item.provenance.get("expanded_from_chunk_id") or "")
+            direction = str(item.provenance.get("direction") or "")
+            by_origin.setdefault((item.source_id, origin), {})[direction] = item
+
+        ordered: list[Evidence] = []
+        seen_neighbors: set[tuple[str, str]] = set()
+        for primary in primary_evidence:
+            chunk_id = str(primary.metadata.get("chunk_id") or "")
+            nearby = by_origin.get((primary.source_id, chunk_id), {})
+            previous = nearby.get("previous")
+            if previous is not None:
+                identity = (
+                    previous.source_id,
+                    str(previous.metadata.get("chunk_id") or ""),
+                )
+                if identity not in seen_neighbors:
+                    ordered.append(previous)
+                    seen_neighbors.add(identity)
+
+            ordered.append(primary)
+
+            next_item = nearby.get("next")
+            if next_item is not None:
+                identity = (
+                    next_item.source_id,
+                    str(next_item.metadata.get("chunk_id") or ""),
+                )
+                if identity not in seen_neighbors:
+                    ordered.append(next_item)
+                    seen_neighbors.add(identity)
+
+        # A shared neighbour may have been attached to an origin that was
+        # deduplicated from ordering above; append any still-unseen context.
+        for item in neighbor_evidence:
+            identity = (
+                item.source_id,
+                str(item.metadata.get("chunk_id") or ""),
+            )
+            if identity not in seen_neighbors:
+                ordered.append(item)
+                seen_neighbors.add(identity)
+
+        return ordered
+
+    async def _expand_neighbor_evidence(
+        self,
+        groups,
+        *,
+        primary_limit: int,
+        max_neighbor_chunks: int,
+    ) -> list[Evidence]:
+        """Resolve trustworthy immediate neighbours by exact chunk identity.
+
+        Adjacency must be proven in both directions: the semantic primary names
+        the neighbour, the stored neighbour points back to the primary, and the
+        integer chunk positions differ by exactly one. Missing or inconsistent
+        metadata is omitted rather than guessed.
+        """
+
+        requests = build_neighbor_requests(
+            groups,
+            primary_limit=primary_limit,
+            max_neighbor_chunks=max_neighbor_chunks,
+        )
+        if not requests:
+            return []
+
+        primary_by_id = {
+            (group.representative.document_id, group.representative.chunk_id): (
+                group.representative
+            )
+            for group in groups
+        }
+        requests_by_document: dict[str, list] = {}
+        for request in requests:
+            requests_by_document.setdefault(request.document_id, []).append(request)
+
+        resolved: dict[tuple[str, str], Chunk] = {}
+        for document_id, document_requests in requests_by_document.items():
+            chunks = await self.get_chunks_by_ids(
+                document_id,
+                [request.chunk_id for request in document_requests],
+            )
+            for chunk in chunks:
+                chunk_id = str(
+                    getattr(chunk, "chunk_id", "")
+                    or (getattr(chunk, "metadata", {}) or {}).get("chunk_id")
+                    or ""
+                )
+                if chunk_id:
+                    resolved[(document_id, chunk_id)] = chunk
+
+        evidence: list[Evidence] = []
+        seen: set[tuple[str, str]] = set()
+        for request in requests:
+            identity = (request.document_id, request.chunk_id)
+            if identity in seen:
+                continue
+            chunk = resolved.get(identity)
+            primary = primary_by_id.get(
+                (request.document_id, request.expanded_from_chunk_id)
+            )
+            if chunk is None or primary is None:
+                continue
+
+            metadata = dict(getattr(chunk, "metadata", {}) or {})
+            if str(metadata.get("document_id") or "") != request.document_id:
+                continue
+            if str(metadata.get("chunk_id") or "") != request.chunk_id:
+                continue
+
+            try:
+                primary_index = int(primary.metadata["chunk_index"])
+                neighbor_index = int(metadata["chunk_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            if request.direction == "previous":
+                position_valid = neighbor_index == primary_index - 1
+                backlink_valid = (
+                    str(metadata.get("next_chunk_id") or "") == primary.chunk_id
+                )
+            elif request.direction == "next":
+                position_valid = neighbor_index == primary_index + 1
+                backlink_valid = (
+                    str(metadata.get("previous_chunk_id") or "") == primary.chunk_id
+                )
+            else:
+                continue
+            if not position_valid or not backlink_valid:
+                continue
+
+            safe_metadata = sanitize_for_evidence(
+                metadata,
+                request.title,
+                request.document_id,
+            )
+            evidence.append(
+                Evidence(
+                    source_type="document",
+                    source_id=request.document_id,
+                    title=request.title,
+                    passage=str(getattr(chunk, "content", ""))[:2000],
+                    score=None,
+                    provenance={
+                        "retrieval_role": "neighbor",
+                        "lookup_mode": "exact_chunk_id",
+                        "expanded_from_chunk_id": request.expanded_from_chunk_id,
+                        "direction": request.direction,
+                    },
+                    metadata=safe_metadata,
+                )
+            )
+            seen.add(identity)
+
         return evidence
+
+    def _get_chunks_by_ids_sync(
+        self,
+        document_id: str,
+        chunk_ids: list[str],
+    ) -> list[Chunk]:
+        """Read exact chunks from one authorized document collection by id.
+
+        Phase E compatibility seam for DB-GPT 0.8.2: ChromaStore exposes no
+        public read-by-id method, while its resolved collection supports
+        Collection.get(ids=[...]). Keep that version-specific access contained
+        inside the Knowledge adapter.
+
+        Requested order is restored explicitly; Chroma return order is never
+        treated as an application invariant.
+        """
+
+        requested: list[str] = []
+        seen: set[str] = set()
+        for chunk_id in chunk_ids:
+            value = str(chunk_id or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            requested.append(value)
+
+        if not requested:
+            return []
+
+        collection_name = self._collection_name(document_id)
+        if not self._chroma_collection_exists(collection_name):
+            return []
+
+        store = self._store(document_id)
+        collection = getattr(store, "_collection", None)
+        if collection is None:
+            raise KnowledgeEngineError(
+                "DB-GPT Chroma store does not expose its resolved collection"
+            )
+
+        result = collection.get(
+            ids=requested,
+            include=["documents", "metadatas"],
+        )
+        ids = list(result.get("ids") or [])
+        documents = list(result.get("documents") or [])
+        metadatas = list(result.get("metadatas") or [])
+
+        by_id: dict[str, Chunk] = {}
+        for index, raw_id in enumerate(ids):
+            chunk_id = str(raw_id)
+            metadata = (
+                dict(metadatas[index] or {})
+                if index < len(metadatas)
+                else {}
+            )
+            stored_document_id = metadata.get("document_id")
+            stored_chunk_id = metadata.get("chunk_id")
+            if (
+                str(stored_document_id or "") != document_id
+                or str(stored_chunk_id or "") != chunk_id
+            ):
+                # Defense in depth: Phase D chunks carry server-owned
+                # document_id and chunk_id. Missing or mismatched identity
+                # means the row is not eligible for context expansion.
+                continue
+
+            content = (
+                str(documents[index] or "")
+                if index < len(documents)
+                else ""
+            )
+            by_id[chunk_id] = Chunk(
+                content=content,
+                metadata=metadata,
+                chunk_id=chunk_id,
+            )
+
+        return [by_id[item] for item in requested if item in by_id]
+
+    async def get_chunks_by_ids(
+        self,
+        document_id: str,
+        chunk_ids: list[str],
+    ) -> list[Chunk]:
+        """Async exact-id wrapper used by bounded Phase E context expansion."""
+
+        return await asyncio.to_thread(
+            self._get_chunks_by_ids_sync,
+            document_id,
+            chunk_ids,
+        )
 
     def _chroma_collection_exists(self, collection_name: str) -> bool:
         """Check Chroma collection existence without creating the collection."""

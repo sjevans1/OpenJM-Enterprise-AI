@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     rag_top_k: int = 5
     rag_score_threshold: float = 0.25
+    # Phase E keeps semantic top-k intact and adds at most two exact ±1 chunks
+    # around the two strongest primary matches. Final evidence is therefore
+    # bounded by rag_top_k + rag_neighbor_max_chunks.
+    rag_neighbor_primary_limit: int = 2
+    rag_neighbor_max_chunks: int = 2
 
     credential_encryption_key: str = ""
     credential_key_file: Path = REPO_ROOT / "data" / "credentials.key"
