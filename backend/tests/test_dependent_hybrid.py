@@ -55,7 +55,7 @@ def test_resolves_currency_bound_document_span(text, period, amount):
 def test_repeated_consistent_policy_mentions_are_acceptable():
     chosen = resolve_revenue_threshold([
         doc("Annual revenue threshold: USD 300"),
-        doc("Annual revenue threshold is $300", "policy-2", "e2"),
+        doc("Annual revenue threshold is US$300", "policy-2", "e2"),
     ], requested_period="annual")
     assert chosen.citation == "[DOC 1]"
 
@@ -136,3 +136,28 @@ def test_threshold_binding_rejects_semantic_substitution(sql):
         bind_document_threshold_sql(
             sql, threshold, requested_period="annual", operator=">"
         )
+
+
+def test_different_currency_or_unqualified_dollar_is_not_merged():
+    with pytest.raises(PolicyThresholdError):
+        resolve_revenue_threshold([
+            doc("Annual revenue threshold: USD 300"),
+            doc("Annual revenue threshold: $300", "policy-2", "e2"),
+        ])
+    with pytest.raises(PolicyThresholdError):
+        resolve_revenue_threshold([
+            doc("Annual revenue threshold: USD 300"),
+            doc("Annual revenue threshold: JMD 300", "policy-2", "e2"),
+        ])
+
+
+def test_explicit_currency_is_extracted_without_exchange_rate_assumption():
+    assert resolve_revenue_threshold(
+        [doc("Annual revenue threshold: USD 300")]
+    ).currency == "USD"
+    assert resolve_revenue_threshold(
+        [doc("Annual revenue threshold: JMD 300")]
+    ).currency == "JMD"
+    assert resolve_revenue_threshold(
+        [doc("Annual revenue threshold: $300")]
+    ).currency is None
