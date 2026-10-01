@@ -4,6 +4,16 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.dependent_hybrid import (
+    POLICY_SQL_MARKER,
+    PolicyThresholdError,
+    bind_document_threshold_sql,
+    is_dependent_revenue_request,
+    period_in_request,
+    requested_threshold_operator,
+    resolve_revenue_threshold,
+)
+
 from app.core.config import get_settings
 from app.models import DataSource, Document
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
@@ -395,6 +405,162 @@ class OpenJMOrchestrator:
             requested_mode="chat",
         )
 
+    @staticmethod
+    def _dependent_failure(
+        reason: str, evidence: list[Evidence] | None = None
+    ) -> ExecutionPlan:
+        """Do not synthesize a dependent result from a partially verified run."""
+        return ExecutionPlan(
+            execution_class="hybrid",
+            requested_mode="hybrid",
+            system_prompt="",
+            evidence=evidence or [],
+            direct_answer=(
+                "I could not safely complete the policy-dependent data query. "
+                + reason
+                + " No dependent database result was claimed."
+            ),
+        )
+
+    async def _plan_dependent_hybrid(
+        self,
+        message: str,
+        db: AsyncSession,
+        user_id: str,
+        conversation_id: str | None,
+    ) -> ExecutionPlan:
+        """C3: verify authorized policy first; only then bind and execute SQL.
+
+        No policy passage is inserted in planning instructions or SQL.
+        Rejections never run structured.query; both governed tools remain
+        independently responsible for authorization and audit.
+        """
+        try:
+            period = period_in_request(message)
+            operator = requested_threshold_operator(message)
+        except PolicyThresholdError:
+            return self._dependent_failure(
+                "The revenue period or comparison direction is ambiguous."
+            )
+
+        try:
+            knowledge_evidence, _ = await self._execute_knowledge_search(
+                message, db, user_id, conversation_id, "hybrid"
+            )
+        except Exception:
+            return self._dependent_failure(
+                "The authorized Knowledge source could not be verified."
+            )
+        try:
+            threshold = resolve_revenue_threshold(
+                knowledge_evidence, requested_period=period
+            )
+        except PolicyThresholdError:
+            return self._dependent_failure(
+                "The authorized policy passages do not establish one unambiguous "
+                "currency-denominated revenue threshold for that period.",
+                knowledge_evidence,
+            )
+
+        # Preserve original qualifiers. This server-authored instruction uses
+        # only the validated metric/operator, never retrieved document text.
+        operator_sql = ">" if operator == ">" else ">="
+        planning_question = (
+            message
+            + "\n\nOPENJM VALIDATED DEPENDENCY: The authorized policy threshold "
+            + "has been verified by the server. For the database portion, "
+            + "propose exactly one read-only SELECT using the requested "
+            + "revenue period and comparator "
+            + operator_sql
+            + ". Write the literal unquoted SQL identifier "
+            + POLICY_SQL_MARKER
+            + " as the right operand of the revenue comparison. "
+            + "Do not invent or use a numeric threshold, do not change "
+            + "the requested period, and do not include policy text."
+        )
+        try:
+            decision = await structured_planner.plan(
+                planning_question, db, user_id
+            )
+        except StructuredPlannerError:
+            return self._dependent_failure(
+                "No safe structured plan was available.", knowledge_evidence
+            )
+        if not decision.candidate or decision.plan is None:
+            return self._dependent_failure(
+                "The authorized schema cannot support the requested metric.",
+                knowledge_evidence,
+            )
+        try:
+            bound_sql = bind_document_threshold_sql(
+                decision.plan.sql,
+                threshold,
+                requested_period=period,
+                operator=operator,
+            )
+        except PolicyThresholdError:
+            return self._dependent_failure(
+                "The proposed database comparison could not be safely bound.",
+                knowledge_evidence,
+            )
+
+        context = ToolContext(
+            user_id=user_id,
+            permissions=frozenset({"structured.read"}),
+            conversation_id=conversation_id,
+            route="hybrid",
+            requested_mode="hybrid",
+            model_name=settings.model_name,
+            db=db,
+        )
+        try:
+            result = await tool_registry.execute(
+                "structured.query",
+                context,
+                {"source_id": decision.plan.source_id, "sql": bound_sql},
+            )
+        except Exception:
+            return self._dependent_failure(
+                "The authorized read-only data query failed or was denied.",
+                knowledge_evidence,
+            )
+        if not result.evidence:
+            return self._dependent_failure(
+                "The data query did not produce verifiable evidence.",
+                knowledge_evidence,
+            )
+
+        # Persist the exact document provenance needed to reproduce the bound
+        # threshold without embedding the raw document in SQL or in traces.
+        data_evidence = [
+            item.model_copy(update={
+                "provenance": {
+                    **item.provenance,
+                    "policy_threshold_source_id": threshold.source_id,
+                    "policy_threshold_evidence_id": threshold.evidence_id,
+                    "policy_threshold_citation": threshold.citation,
+                    "policy_threshold_operator": operator,
+                    "policy_threshold_period": threshold.period,
+                    "policy_threshold_value": str(threshold.amount),
+                }
+            })
+            for item in result.evidence
+        ]
+        return ExecutionPlan(
+            execution_class="hybrid",
+            requested_mode="hybrid",
+            evidence=[*knowledge_evidence, *data_evidence],
+            system_prompt=self._hybrid_system_prompt(
+                knowledge_evidence, data_evidence
+            ) + (
+                "\n\nThe SQL threshold is derived from "
+                + threshold.citation
+                + ". Explain the document-based criterion and the actual "
+                + "database results separately with both citations. "
+                + "Do not infer missing rows or values."
+            ),
+        )
+
     async def _plan_hybrid(
         self,
         message: str,
@@ -412,6 +578,11 @@ class OpenJMOrchestrator:
         5. Handle partial success: return grounded evidence from whichever
            source succeeded, explain the failure of the other.
         """
+        if is_dependent_revenue_request(message):
+            return await self._plan_dependent_hybrid(
+                message, db, user_id, conversation_id
+            )
+
         sources = await self._structured_sources(db, user_id)
         decomposition = self._decompose_hybrid(message, sources)
 
