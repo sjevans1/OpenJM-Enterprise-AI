@@ -155,16 +155,27 @@ def bind_document_threshold_sql(
     The independent SQL-policy validator still checks the final SQL for DDL,
     DML, unknown objects and columns, row bounds and read-only execution.
     """
-    from sqlglot import exp, parse_one
+    from sqlglot import exp, parse
 
     if proposal.count(POLICY_SQL_MARKER) != 1:
         raise PolicyThresholdError("Planner did not provide exactly one threshold marker")
     try:
-        tree = parse_one(proposal)
+        statements = [node for node in parse(proposal) if node is not None]
     except Exception as exc:
         raise PolicyThresholdError("Proposed dependent SQL cannot be parsed") from exc
-    if not isinstance(tree, exp.Query):
-        raise PolicyThresholdError("Dependent SQL must be a read query")
+    if len(statements) != 1 or not isinstance(statements[0], exp.Select):
+        raise PolicyThresholdError("Dependent SQL must be exactly one SELECT")
+    tree = statements[0]
+    # The initial C3 gate supports one simple threshold condition. Complex
+    # boolean branches or unions could broaden a query beyond the policy rule.
+    if any(tree.find(node) for node in (exp.Or, exp.Union, exp.Except, exp.Intersect)):
+        raise PolicyThresholdError("Ambiguous dependent query logic")
+    predicates = [
+        node for node in tree.find_all(exp.Predicate)
+        if isinstance(node, (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.EQ, exp.NEQ))
+    ]
+    if len(predicates) != 1:
+        raise PolicyThresholdError("Dependent query requires one comparison only")
 
     columns = [
         node for node in tree.find_all(exp.Column)
@@ -182,10 +193,10 @@ def bind_document_threshold_sql(
         raise PolicyThresholdError("Proposed SQL changed the requested threshold operator")
 
     lhs = comparison.this
-    if lhs is None:
-        raise PolicyThresholdError("Missing revenue expression")
-    revenue_columns = [c.name.casefold() for c in lhs.find_all(exp.Column)]
-    if not revenue_columns or not any("revenue" in col for col in revenue_columns):
+    if not isinstance(lhs, exp.Column):
+        raise PolicyThresholdError("Only direct revenue column comparison is supported")
+    revenue_columns = [lhs.name.casefold()]
+    if not any("revenue" in col for col in revenue_columns):
         raise PolicyThresholdError("Threshold is not compared against a revenue column")
     if requested_period and not any(
         requested_period in column for column in revenue_columns
