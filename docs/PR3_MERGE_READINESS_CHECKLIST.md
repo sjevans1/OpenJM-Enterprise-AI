@@ -58,10 +58,11 @@ It is a review aid only. Do not merge PR #3 from this branch.
 - [x] no unlimited retry-until-green behavior
 
 ### Acceptance harness closure
-- [ ] Knowledge acceptance harness fail-safe cleanup: a failed Gate C run must
-      remove the document it created, unless an explicit keep flag is used
-- [ ] Knowledge acceptance harness must prevent/flag dirty pre-existing test
-      state so duplicate Phoenix artifacts cannot silently change prompt shape
+- [x] Knowledge acceptance harness fail-safe cleanup validated in PR #4: a failed Gate C run removes only the document it created when deletion is requested
+- [x] Knowledge acceptance harness dirty-catalog fail-fast validated in PR #4; pre-existing documents are reported and left untouched
+
+PR #4 remains unmerged pending explicit authorization; the checks above are
+validated on its branch but are not yet integrated into the hardening branch.
 
 ### Phase E — bounded context expansion
 - [ ] direct, document-scoped neighbour lookup mechanism verified
