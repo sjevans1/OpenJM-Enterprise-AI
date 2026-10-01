@@ -247,7 +247,10 @@ state live in `docs/RAG_METADATA_EVALUATION.md`.
   retries; Phase D validation is deterministic and independent of model
   generation. Gate C stays an unresolved runtime gate per the Phase C rule.
 
-Phase E (bounded neighbour/parent expansion) is not started.
+Phase E exact duplicate control and bounded immediate-neighbor expansion are
+complete. Parent expansion remains disabled and out of scope. Implementation,
+measured adjacency proof, budgets, tests and limitations are recorded in
+`docs/RAG_CONTEXT_EXPANSION_EVALUATION.md`.
 
 ### Model gateway reliability checkpoint (post-Phase D)
 
@@ -275,8 +278,9 @@ rules and bounded-retry policy are recorded in
   chat history-integrity fix (user turn no longer committed before
   generation; a failed turn leaves no orphan user message);
 - the dev store's duplicate test documents (artifacts of failed
-  acceptance runs, not user content) were deleted; evidence-level
-  deduplication remains Phase E scope and is not implemented.
+  acceptance runs, not user content) were deleted; evidence-level duplicate
+  control is now implemented in Phase E using document/chunk identity plus a
+  normalized-content fingerprint.
 
 ## Phase D — metadata enrichment
 
@@ -305,18 +309,25 @@ OpenJM Evidence
 
 Existing Evidence/API fields remain backward compatible.
 
-## Phase E — bounded context expansion
+## Phase E - bounded context expansion
 
-Only after chunk ordering / structural metadata is reliable:
+Implemented after Phase D established trustworthy ordering metadata:
 
 1. retrieve semantic primary matches;
-2. optionally include adjacent chunks;
-3. optionally promote relevant parent/section context;
-4. deduplicate;
-5. enforce evidence/token limits;
+2. include at most the exact previous and next chunks for the strongest
+   primaries;
+3. reject missing or inconsistent identity and sequence metadata;
+4. deduplicate by server-owned evidence identity;
+5. enforce evidence-count and character limits;
 6. preserve source identity and citations.
 
-Neighbour expansion should be attempted before mandatory semantic chunking because it is more deterministic, cheaper and easier to debug.
+Parent/section promotion remains disabled. The production orchestrator calls
+the governed `knowledge.search` tool; neighbor lookup stays internal to the
+Knowledge adapter and uses exact Chroma IDs rather than another semantic
+search.
+
+Neighbor expansion was chosen before mandatory semantic chunking because it is
+more deterministic, cheaper and easier to debug.
 
 ## Relationship to Vertical Slice 3 — HYBRID
 
