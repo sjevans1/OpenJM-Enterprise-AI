@@ -95,6 +95,10 @@ class DataSourceEnabledUpdate(BaseModel):
     enabled: bool
 
 
+class DataSourceCurrencyUpdate(BaseModel):
+    revenue_currency: Literal["USD", "JMD"] | None
+
+
 class DataColumnSchema(BaseModel):
     name: str
     type: str
