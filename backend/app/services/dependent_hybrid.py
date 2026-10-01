@@ -25,6 +25,7 @@ class PolicyThreshold:
     evidence_id: str | None
     citation: str
     matching_text: str
+    currency: str | None = None
 
 
 # Only request an evidence-dependent threshold when all three concepts are
@@ -41,7 +42,7 @@ def is_dependent_revenue_request(message: str) -> bool:
 
 # Numeric thresholds must have explicit currency; otherwise a passage might
 # confuse a percentage, an order count, a year, or a revenue amount.
-_AMOUNT = r"(?P<currency>USD\s*\$?|US\$\s*|\$\s*)(?P<amount>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\b"
+_AMOUNT = r"(?P<currency>JMD\s*\$?|JM\$\s*|USD\s*\$?|US\$\s*|\$\s*)(?P<amount>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\b"
 _FORWARD = re.compile(
     r"\b(?:(?P<period>annual|monthly|quarterly)\s+)?revenue\s+"
     r"(?:(?:eligibility|minimum|qualification)\s+)?"
@@ -92,6 +93,11 @@ def resolve_revenue_threshold(
                             evidence_id=item.evidence_id,
                             citation=f"[DOC {index}]",
                             matching_text=match.group(0),
+                            currency=(
+                                "JMD" if match.group("currency").upper().startswith(("JMD", "JM$"))
+                                else "USD" if match.group("currency").upper().startswith(("USD", "US$"))
+                                else None
+                            ),
                         )
                     )
 
@@ -100,7 +106,7 @@ def resolve_revenue_threshold(
             "No explicit currency-denominated revenue threshold in authorized policy evidence"
         )
 
-    signatures = {(c.amount, c.period) for c in candidates}
+    signatures = {(c.amount, c.period, c.currency) for c in candidates}
     if len(signatures) != 1:
         raise PolicyThresholdError("Conflicting revenue thresholds in policy evidence")
 
@@ -245,16 +251,18 @@ def compile_customer_revenue_query(
     """
     from app.services.data_sources import decode_schema
 
+    if threshold.currency is None:
+        raise PolicyThresholdError("Policy currency is ambiguous; require USD or JMD")
     if threshold.period != "annual":
         raise PolicyThresholdError(
             "Dependent revenue queries currently require an annual policy threshold"
         )
     lowered = message.lower()
-    if not re.search(r"\\bcompleted(?:[- ]order[s]?)?\\b", lowered):
+    if not re.search(r"\bcompleted(?:[- ]order[s]?)?\b", lowered):
         raise PolicyThresholdError(
             "Specify completed orders; the request does not establish a revenue status"
         )
-    year_matches = re.findall(r"(?<!\\d)(?:19|20)\\d{2}(?!\\d)", message)
+    year_matches = re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", message)
     years = set(year_matches)
     if len(years) != 1:
         raise PolicyThresholdError("Specify exactly one calendar year")
@@ -264,9 +272,9 @@ def compile_customer_revenue_query(
     requested_period = period_in_request(message)
     if requested_period and requested_period != threshold.period:
         raise PolicyThresholdError("The requested period differs from the policy")
-    if re.search(r"\\b(?:exceed|exceeds|exceeding|above|over|greater than)\\b", lowered):
+    if re.search(r"\b(?:exceed|exceeds|exceeding|above|over|greater than)\b", lowered):
         operator = ">"
-    elif re.search(r"\\b(?:at least|meet|meets|meeting|minimum of)\\b", lowered):
+    elif re.search(r"\b(?:at least|meet|meets|meeting|minimum of)\b", lowered):
         operator = ">="
     else:
         raise PolicyThresholdError("Specify whether to exceed or meet the threshold")
@@ -293,11 +301,15 @@ def compile_customer_revenue_query(
         )
     if not candidates[0].enabled or candidates[0].status != "connected":
         raise PolicyThresholdError("Sales source is unavailable")
+    if candidates[0].revenue_currency != threshold.currency:
+        raise PolicyThresholdError(
+            "Revenue source currency is unknown or differs from policy threshold currency"
+        )
 
     # Decimal is parsed solely from the currency-bound numeric grammar.
     # Rendering only Decimal digits and a decimal point cannot introduce SQL.
     number = format(threshold.amount, "f")
-    if not re.fullmatch(r"\\d+(?:\\.\\d{1,2})?", number):
+    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", number):
         raise PolicyThresholdError("Unsupported numeric threshold")
     sql = (
         "SELECT c.name AS customer_name, "
