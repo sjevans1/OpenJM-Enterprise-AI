@@ -125,3 +125,22 @@ These checks support Gates F–I and must not replace them:
 12. Re-run Gates A–I and keep them green.
 
 Gate J is a quality gate. Adding a new chunking strategy without measurable improvement against deterministic fixtures does not satisfy it.
+
+
+## Knowledge acceptance isolation
+
+Document-backed runtime acceptance requires an isolated Knowledge catalog
+before the test document is uploaded. If pre-existing documents are present,
+`scripts/acceptance.py` fails fast and lists them; it never deletes or mutates
+those documents to make the test pass.
+
+When `--delete-after-test` is supplied, the script owns exactly one uploaded
+test document. That document is deleted and verified on the success path, and
+cleanup is also attempted from a `finally` block when a later Gate C/catalog/
+model assertion fails. This prevents failed formal acceptance runs from
+silently accumulating duplicate test documents and changing the prompt shape of
+subsequent runs.
+
+Omitting `--delete-after-test` remains an explicit diagnostic choice to retain
+the test document. A later document-backed acceptance run will then fail the
+isolation precondition until that retained document is removed.
