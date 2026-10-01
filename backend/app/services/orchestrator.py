@@ -17,12 +17,6 @@ from app.services.dependent_hybrid import (
 from app.core.config import get_settings
 from app.models import DataSource, Document
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
-from app.services.dependent_hybrid import (
-    PolicyThresholdError,
-    compile_customer_revenue_query,
-    is_dependent_revenue_request,
-    resolve_revenue_threshold,
-)
 from app.services.structured_planner import (
     STRUCTURED_CUES,
     StructuredPlannerError,
@@ -590,10 +584,6 @@ class OpenJMOrchestrator:
             )
 
         sources = await self._structured_sources(db, user_id)
-        if is_dependent_revenue_request(message):
-            return await self._plan_dependent_hybrid(
-                message, db, user_id, conversation_id, requested_mode, sources
-            )
         decomposition = self._decompose_hybrid(message, sources)
 
         # --- Knowledge execution ---
@@ -693,120 +683,6 @@ class OpenJMOrchestrator:
                 "fabricated."
             ),
             requested_mode="hybrid",
-        )
-
-    async def _plan_dependent_hybrid(
-        self,
-        message: str,
-        db: AsyncSession,
-        user_id: str,
-        conversation_id: str | None,
-        requested_mode: ExecutionMode,
-        sources: list[DataSource],
-    ) -> ExecutionPlan:
-        """Dependent C3 path: Knowledge fact is required BEFORE data execution.
-
-        The model cannot authorize the data tool, invent a numeric filter,
-        choose a schema, or execute SQL found in a retrieved document. All
-        policy and schema preconditions are checked before the SQL tool call.
-        """
-        knowledge_evidence: list[Evidence] = []
-        try:
-            knowledge_evidence, direct = await self._execute_knowledge_search(
-                message, db, user_id, conversation_id, requested_mode
-            )
-            if direct is not None:
-                raise PolicyThresholdError("Policy retrieval was not a document search")
-            threshold = resolve_revenue_threshold(knowledge_evidence)
-            query = compile_customer_revenue_query(message, threshold, sources)
-        except (PolicyThresholdError, ToolError):
-            return ExecutionPlan(
-                execution_class="hybrid",
-                system_prompt="",
-                direct_answer=(
-                    "I could not establish an unambiguous policy revenue "
-                    "threshold and matching annual, completed-orders data "
-                    "scope from authorized sources. No dependent database "
-                    "query was executed and no customer result was invented."
-                ),
-                evidence=knowledge_evidence,
-                requested_mode=requested_mode,
-            )
-        except Exception:
-            return ExecutionPlan(
-                execution_class="hybrid",
-                system_prompt="",
-                direct_answer=(
-                    "The authorized policy lookup could not be verified. "
-                    "No dependent database query was executed."
-                ),
-                requested_mode=requested_mode,
-            )
-
-        try:
-            result = await tool_registry.execute(
-                "structured.query",
-                ToolContext(
-                    user_id=user_id,
-                    permissions=frozenset({"structured.read"}),
-                    conversation_id=conversation_id,
-                    route="hybrid",
-                    requested_mode=requested_mode,
-                    model_name=settings.model_name,
-                    db=db,
-                ),
-                {"source_id": query.source_id, "sql": query.sql},
-            )
-        except Exception:
-            return ExecutionPlan(
-                execution_class="hybrid",
-                system_prompt="",
-                direct_answer=(
-                    f"The policy threshold was verified from {threshold.citation}, "
-                    "but the governed read-only data query did not complete. "
-                    "No customer qualification was asserted."
-                ),
-                evidence=knowledge_evidence,
-                requested_mode=requested_mode,
-            )
-
-        if len(result.evidence) != 1 or result.evidence[0].source_type != "structured_query":
-            return ExecutionPlan(
-                execution_class="hybrid",
-                system_prompt="",
-                direct_answer=(
-                    "The data tool returned no usable structured evidence. "
-                    "No customer qualification was asserted."
-                ),
-                evidence=knowledge_evidence,
-                requested_mode=requested_mode,
-            )
-
-        structured = result.evidence[0].model_copy(
-            update={
-                "provenance": {
-                    **result.evidence[0].provenance,
-                    "dependent_policy_source_id": threshold.source_id,
-                    "dependent_policy_evidence_id": threshold.evidence_id,
-                    "dependent_policy_citation": threshold.citation,
-                    "dependent_policy_amount": str(threshold.amount),
-                    "dependent_revenue_year": query.year,
-                    "dependent_comparator": query.operator,
-                },
-            }
-        )
-        return ExecutionPlan(
-            execution_class="hybrid",
-            system_prompt=(
-                self._hybrid_system_prompt(knowledge_evidence, [structured])
-                + "\n\nDependent query was limited to completed orders, "
-                + f"calendar year {query.year}, and an annual revenue threshold "
-                + f"of USD {threshold.amount} from {threshold.citation}. "
-                + "Do not claim the returned order totals establish profitability, "
-                + "payment collection, exchange rates, or other revenue statuses."
-            ),
-            evidence=[*knowledge_evidence, structured],
-            requested_mode=requested_mode,
         )
 
     # ------------------------------------------------------------------
