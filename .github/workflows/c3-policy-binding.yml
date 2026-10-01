@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/hybrid-vertical-slice-3
+      - hardening/vs3-currency-provenance
       - main
     paths:
       - backend/app/services/dependent_hybrid.py
