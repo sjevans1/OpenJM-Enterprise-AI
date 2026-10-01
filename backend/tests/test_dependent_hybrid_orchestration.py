@@ -41,7 +41,8 @@ async def run_dependent(session, monkeypatch, *, passage=POLICY,
     captured = {}
 
     async def fake_sources(db, user_id):
-        return []
+        from types import SimpleNamespace
+        return [SimpleNamespace(id="database-1", revenue_currency="USD")]
 
     async def fake_plan(message, db, user_id):
         events.append("structured.plan")
@@ -184,3 +185,41 @@ async def test_planner_without_supported_schema_runs_no_sql(session, monkeypatch
     )
     assert events == ["knowledge.search", "structured.plan"]
     assert plan.direct_answer is not None
+
+
+@pytest.mark.asyncio
+async def test_currency_mismatch_rejects_before_query(session, monkeypatch):
+    for other_currency in ("JMD", None):
+        events = []
+
+        async def fake_plan(message, db, user_id):
+            events.append("structured.plan")
+            return StructuredPlanningResult(
+                candidate=True,
+                plan=StructuredPlan(
+                    source_id="database-1",
+                    sql="SELECT customer FROM customer_revenue WHERE annual_revenue > __OPENJM_POLICY_THRESHOLD__",
+                    rationale="Query.",
+                ),
+            )
+
+        async def fake_execute(name, context, payload):
+            events.append(name)
+            if name == "knowledge.search":
+                return ToolResult(evidence=[policy_evidence()])
+            pytest.fail("SQL execution must not happen without currency match")
+
+        async def fake_sources(self, db, user_id):
+            from types import SimpleNamespace
+            return [SimpleNamespace(id="database-1", revenue_currency=other_currency)]
+
+        monkeypatch.setattr(orchestrator_module.structured_planner, "plan", fake_plan)
+        monkeypatch.setattr(orchestrator_module.tool_registry, "execute", fake_execute)
+        monkeypatch.setattr(OpenJMOrchestrator, "_structured_sources", fake_sources)
+
+        plan = await OpenJMOrchestrator().plan(
+            QUESTION, session, "local-admin", mode="hybrid"
+        )
+        assert events == ["knowledge.search", "structured.plan"]
+        assert plan.direct_answer is not None
+        assert "currency" in plan.direct_answer.lower()
