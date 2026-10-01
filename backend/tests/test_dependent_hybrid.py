@@ -85,3 +85,54 @@ def test_request_period_is_not_silently_rewritten():
     assert period_in_request("revenue threshold") is None
     with pytest.raises(PolicyThresholdError):
         period_in_request("annual and monthly revenue thresholds")
+
+
+
+def test_verified_threshold_replaces_only_revenue_sql_identifier():
+    from app.services.dependent_hybrid import (
+        bind_document_threshold_sql,
+        POLICY_SQL_MARKER,
+    )
+    threshold = resolve_revenue_threshold(
+        [doc("Annual revenue threshold: USD 300")], requested_period="annual"
+    )
+    sql = bind_document_threshold_sql(
+        "SELECT customer FROM customer_revenue WHERE annual_revenue > "
+        + POLICY_SQL_MARKER,
+        threshold,
+        requested_period="annual",
+        operator=">",
+    )
+    assert "annual_revenue > 300" in sql
+    assert POLICY_SQL_MARKER not in sql
+
+
+def test_requested_comparator_semantics():
+    from app.services.dependent_hybrid import requested_threshold_operator
+    assert requested_threshold_operator("Who exceeds the policy threshold?") == ">"
+    assert requested_threshold_operator("Who meets the policy threshold?") == ">="
+    with pytest.raises(PolicyThresholdError):
+        requested_threshold_operator("Who meets or exceeds the threshold?")
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT customer FROM customer_revenue WHERE annual_revenue > 299",
+    "SELECT customer FROM customer_revenue WHERE annual_revenue >= __OPENJM_POLICY_THRESHOLD__",
+    "SELECT customer FROM customer_revenue WHERE monthly_revenue > __OPENJM_POLICY_THRESHOLD__",
+    "SELECT customer FROM customer_revenue WHERE expenses > __OPENJM_POLICY_THRESHOLD__",
+    "SELECT customer FROM customer_revenue WHERE annual_revenue+200 > __OPENJM_POLICY_THRESHOLD__",
+    "SELECT customer FROM customer_revenue WHERE annual_revenue > __OPENJM_POLICY_THRESHOLD__ OR 1=1",
+    "SELECT customer FROM customer_revenue WHERE annual_revenue > __OPENJM_POLICY_THRESHOLD__ AND EXISTS (SELECT 1)",
+    "SELECT customer FROM customer_revenue WHERE annual_revenue > __OPENJM_POLICY_THRESHOLD__; DROP TABLE customer_revenue",
+    "SELECT customer FROM customer_revenue WHERE annual_revenue > __OPENJM_POLICY_THRESHOLD__ UNION SELECT customer FROM customers",
+    "DELETE FROM customer_revenue WHERE annual_revenue > __OPENJM_POLICY_THRESHOLD__",
+])
+def test_threshold_binding_rejects_semantic_substitution(sql):
+    from app.services.dependent_hybrid import bind_document_threshold_sql
+    threshold = resolve_revenue_threshold(
+        [doc("Annual revenue threshold: USD 300")], requested_period="annual"
+    )
+    with pytest.raises(PolicyThresholdError):
+        bind_document_threshold_sql(
+            sql, threshold, requested_period="annual", operator=">"
+        )
