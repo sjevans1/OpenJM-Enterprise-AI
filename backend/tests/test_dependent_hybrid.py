@@ -136,3 +136,49 @@ def test_threshold_binding_rejects_semantic_substitution(sql):
         bind_document_threshold_sql(
             sql, threshold, requested_period="annual", operator=">"
         )
+
+
+
+@pytest.mark.parametrize(
+    "operator, expected",
+    [(">", ["Cafe 301"]), (">=", ["Cafe 300", "Cafe 301"])],
+)
+def test_live_read_only_sqlite_threshold_boundary(operator, expected):
+    """Execute real SQLite SELECT with a policy-derived value, not mocked rows."""
+    import sqlite3
+    from app.services.dependent_hybrid import (
+        POLICY_SQL_MARKER,
+        bind_document_threshold_sql,
+    )
+    from app.services.sql_policy import validate_and_rewrite_sql
+
+    threshold = resolve_revenue_threshold(
+        [doc("Annual revenue threshold: USD 300")], requested_period="annual"
+    )
+    proposed = (
+        "SELECT customer FROM customer_revenue "
+        f"WHERE annual_revenue {operator} {POLICY_SQL_MARKER} ORDER BY customer"
+    )
+    sql = bind_document_threshold_sql(
+        proposed, threshold, requested_period="annual", operator=operator
+    )
+    policy = validate_and_rewrite_sql(
+        sql,
+        dialect="sqlite",
+        allowed_tables={"customer_revenue"},
+        allowed_columns={"customer_revenue": {"customer", "annual_revenue"}},
+        max_rows=10,
+    )
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute(
+            "CREATE TABLE customer_revenue (customer TEXT, annual_revenue REAL)"
+        )
+        conn.executemany(
+            "INSERT INTO customer_revenue VALUES (?, ?)",
+            [("Cafe 299", 299), ("Cafe 300", 300), ("Cafe 301", 301)],
+        )
+        conn.execute("PRAGMA query_only=ON")
+        result = [
+            row[0] for row in conn.execute(policy.sql).fetchall()
+        ]
+    assert result == expected
