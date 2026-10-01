@@ -18,6 +18,7 @@ import {
   Upload,
   Workflow,
 } from 'lucide-react'
+import { evidenceCitationLabels } from './evidenceLabels.js'
 import {
   api,
   type Conversation,
@@ -111,9 +112,7 @@ function StructuredEvidenceBody({ item }: { item: Evidence }) {
 function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
   if (!evidence.length) return null
 
-  // Count documents and data evidence separately for independent numbering
-  let docCount = 0
-  let dataCount = 0
+  const citations = evidenceCitationLabels(evidence)
 
   return (
     <div className="evidence-stack">
@@ -122,17 +121,7 @@ function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
         Evidence used
       </div>
       {evidence.map((item, index) => {
-        let citationPrefix: string
-        if (item.source_type === 'document') {
-          docCount++
-          citationPrefix = `[DOC ${docCount}]`
-        } else if (item.source_type === 'structured_query') {
-          dataCount++
-          citationPrefix = `[DATA ${dataCount}]`
-        } else {
-          // Fallback for any other source types
-          citationPrefix = `[EVIDENCE ${index + 1}]`
-        }
+        const citationPrefix = citations[index]
         return (
           <details className="evidence-card" key={`${item.source_id}-${index}`}>
             <summary>
