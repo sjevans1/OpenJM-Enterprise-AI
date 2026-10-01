@@ -158,3 +158,35 @@ def test_source_contract_defaults_currency_to_unknown():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         DataSourceCurrencyUpdate(revenue_currency="EUR")
+
+
+@pytest.mark.asyncio
+async def test_existing_source_currency_migration_preserves_data(monkeypatch):
+    """Old SQLite data-source records remain intact and start unclassified."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    import app.db as db_module
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql(
+                "CREATE TABLE data_sources (id VARCHAR(36) PRIMARY KEY, "
+                "name VARCHAR(240) NOT NULL)"
+            )
+            await connection.exec_driver_sql(
+                "INSERT INTO data_sources (id, name) VALUES ('existing', 'Legacy')"
+            )
+        monkeypatch.setattr(db_module, "engine", engine)
+        await db_module._migrate_add_revenue_currency()
+        await db_module._migrate_add_revenue_currency()
+        async with engine.connect() as connection:
+            info = await connection.exec_driver_sql("PRAGMA table_info(data_sources)")
+            assert [
+                row[1] for row in info.fetchall()
+            ].count("revenue_currency") == 1
+            rows = await connection.exec_driver_sql(
+                "SELECT id, name, revenue_currency FROM data_sources"
+            )
+            assert rows.fetchall() == [("existing", "Legacy", None)]
+    finally:
+        await engine.dispose()
