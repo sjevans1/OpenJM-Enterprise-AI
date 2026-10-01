@@ -1,0 +1,38 @@
+name: OpenJM C3 policy-binding safety
+
+on:
+  push:
+    branches:
+      - feature/hybrid-vertical-slice-3
+      - main
+    paths:
+      - backend/app/services/dependent_hybrid.py
+      - backend/tests/test_dependent_hybrid.py
+      - .github/workflows/c3-policy-binding.yml
+  pull_request:
+    paths:
+      - backend/app/services/dependent_hybrid.py
+      - backend/tests/test_dependent_hybrid.py
+      - .github/workflows/c3-policy-binding.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-policy-binding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal dependencies
+        run: python -m pip install "pytest>=8,<10" "pytest-asyncio>=0.23" "sqlalchemy[asyncio]>=2.0" "aiosqlite>=0.20" "pydantic>=2.8" "pydantic-settings>=2.4" "sqlglot>=25.0"
+      - name: Check Python source syntax
+        run: python -m compileall -q app/services/dependent_hybrid.py tests/test_dependent_hybrid.py
+      - name: Exercise C3 threshold and AST rejection gate
+        run: python -m pytest -q tests/test_dependent_hybrid.py
