@@ -14,9 +14,11 @@ from app.core.config import get_settings
 from app.schemas import Evidence
 from app.services.chunk_metadata import enrich_chunks, sanitize_for_evidence
 from app.services.ingestion_policy import ingestion_policy
+from app.services.context_expansion import build_neighbor_requests
 from app.services.evidence_quality import (
     RetrievedCandidate,
     deduplicate_exact_candidates,
+    exact_content_fingerprint,
 )
 
 
@@ -150,6 +152,9 @@ class DBGPTKnowledgeEngine:
         self,
         query: str,
         documents: list[tuple[str, str]],
+        *,
+        neighbor_primary_limit: int = 0,
+        neighbor_max_chunks: int = 0,
     ) -> list[Evidence]:
         if not self.settings.knowledge_enabled or not documents:
             return []
@@ -196,7 +201,7 @@ class DBGPTKnowledgeEngine:
         groups = deduplicate_exact_candidates(candidates)
         selected = groups[: self.settings.rag_top_k]
 
-        evidence: list[Evidence] = []
+        primary_evidence: list[Evidence] = []
         for group in selected:
             candidate = group.representative
             # Phase D security: customer-facing Evidence must never leak
@@ -222,7 +227,7 @@ class DBGPTKnowledgeEngine:
             if equivalent_sources:
                 provenance["equivalent_sources"] = equivalent_sources
 
-            evidence.append(
+            primary_evidence.append(
                 Evidence(
                     source_type="document",
                     source_id=candidate.document_id,
@@ -234,7 +239,65 @@ class DBGPTKnowledgeEngine:
                 )
             )
 
-        return evidence
+        if neighbor_primary_limit <= 0 or neighbor_max_chunks <= 0:
+            return primary_evidence
+
+        neighbor_evidence = await self._expand_neighbor_evidence(
+            selected,
+            primary_limit=neighbor_primary_limit,
+            max_neighbor_chunks=neighbor_max_chunks,
+        )
+        if not neighbor_evidence:
+            return primary_evidence
+
+        # Present local context around each primary in natural source order
+        # (previous -> primary -> next) while keeping semantic primaries as
+        # the governing evidence set and preserving their scores.
+        by_origin: dict[tuple[str, str], dict[str, Evidence]] = {}
+        for item in neighbor_evidence:
+            origin = str(item.provenance.get("expanded_from_chunk_id") or "")
+            direction = str(item.provenance.get("direction") or "")
+            by_origin.setdefault((item.source_id, origin), {})[direction] = item
+
+        ordered: list[Evidence] = []
+        seen_neighbors: set[tuple[str, str]] = set()
+        for primary in primary_evidence:
+            chunk_id = str(primary.metadata.get("chunk_id") or "")
+            nearby = by_origin.get((primary.source_id, chunk_id), {})
+            previous = nearby.get("previous")
+            if previous is not None:
+                identity = (
+                    previous.source_id,
+                    str(previous.metadata.get("chunk_id") or ""),
+                )
+                if identity not in seen_neighbors:
+                    ordered.append(previous)
+                    seen_neighbors.add(identity)
+
+            ordered.append(primary)
+
+            next_item = nearby.get("next")
+            if next_item is not None:
+                identity = (
+                    next_item.source_id,
+                    str(next_item.metadata.get("chunk_id") or ""),
+                )
+                if identity not in seen_neighbors:
+                    ordered.append(next_item)
+                    seen_neighbors.add(identity)
+
+        # A shared neighbour may have been attached to an origin that was
+        # deduplicated from ordering above; append any still-unseen context.
+        for item in neighbor_evidence:
+            identity = (
+                item.source_id,
+                str(item.metadata.get("chunk_id") or ""),
+            )
+            if identity not in seen_neighbors:
+                ordered.append(item)
+                seen_neighbors.add(identity)
+
+        return ordered
 
     def _get_chunks_by_ids_sync(
         self,
