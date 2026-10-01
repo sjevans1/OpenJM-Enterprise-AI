@@ -41,18 +41,18 @@ def is_dependent_revenue_request(message: str) -> bool:
 
 # Numeric thresholds must have explicit currency; otherwise a passage might
 # confuse a percentage, an order count, a year, or a revenue amount.
-_AMOUNT = r"(?P<currency>USD\\s*\\$?|US\\$\\s*|\\$\\s*)(?P<amount>(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?)\\b"
+_AMOUNT = r"(?P<currency>USD\s*\$?|US\$\s*|\$\s*)(?P<amount>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\b"
 _FORWARD = re.compile(
-    r"\\b(?:(?P<period>annual|monthly|quarterly)\\s+)?revenue\\s+"
-    r"(?:(?:eligibility|minimum|qualification)\\s+)?"
-    r"(?:threshold|cutoff|minimum)\\s*(?::|=|is|of|at|set\\s+at)?\\s*"
+    r"\b(?:(?P<period>annual|monthly|quarterly)\s+)?revenue\s+"
+    r"(?:(?:eligibility|minimum|qualification)\s+)?"
+    r"(?:threshold|cutoff|minimum)\s*(?::|=|is|of|at|set\s+at)?\s*"
     + _AMOUNT,
     re.IGNORECASE,
 )
 _REVERSE = re.compile(
-    r"\\b(?:minimum|required)\\s+"
-    r"(?:(?P<period>annual|monthly|quarterly)\\s+)?"
-    r"revenue\\s*(?::|=|is|of|at)?\\s*" + _AMOUNT,
+    r"\b(?:minimum|required)\s+"
+    r"(?:(?P<period>annual|monthly|quarterly)\s+)?"
+    r"revenue\s*(?::|=|is|of|at)?\s*" + _AMOUNT,
     re.IGNORECASE,
 )
 
@@ -117,7 +117,7 @@ def period_in_request(message: str) -> str | None:
     periods = {
         period
         for period in ("annual", "monthly", "quarterly")
-        if re.search(r"\\b" + period + r"\\b", message, re.IGNORECASE)
+        if re.search(r"\b" + period + r"\b", message, re.IGNORECASE)
     }
     if len(periods) > 1:
         raise PolicyThresholdError("Conflicting revenue periods in request")
