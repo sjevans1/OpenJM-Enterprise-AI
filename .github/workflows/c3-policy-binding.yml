@@ -1,45 +1,9 @@
 name: OpenJM C3 policy-binding safety
 
+# Manual runs only on the hardening branch. Continuous push/PR triggers
+# were generating duplicate failure notifications during development.
 on:
-  push:
-    branches:
-      - feature/hybrid-vertical-slice-3
-      - hardening/vs3-currency-provenance
-      - main
-    paths:
-      - backend/app/services/dependent_hybrid.py
-      - backend/tests/test_dependent_hybrid.py
-      - backend/tests/test_dependent_currency.py
-      - backend/tests/test_dependent_hybrid_orchestration.py
-      - backend/app/services/orchestrator.py
-      - backend/scripts/c3_currency_ci_orchestration.py
-      - backend/app/api/data.py
-      - backend/app/db.py
-      - backend/app/models.py
-      - backend/app/schemas.py
-      - frontend/src/App.tsx
-      - frontend/src/api.ts
-      - frontend/src/evidenceLabels.js
-      - frontend/src/evidenceLabels.d.ts
-      - frontend/tests/evidenceLabels.test.mjs
-      - frontend/src/EvidencePanel.test.tsx
-      - .github/workflows/c3-policy-binding.yml
-  pull_request:
-    paths:
-      - backend/app/services/dependent_hybrid.py
-      - backend/tests/test_dependent_hybrid.py
-      - backend/tests/test_dependent_currency.py
-      - backend/app/api/data.py
-      - backend/app/db.py
-      - backend/app/models.py
-      - backend/app/schemas.py
-      - frontend/src/App.tsx
-      - frontend/src/api.ts
-      - frontend/src/evidenceLabels.js
-      - frontend/src/evidenceLabels.d.ts
-      - frontend/tests/evidenceLabels.test.mjs
-      - frontend/src/EvidencePanel.test.tsx
-      - .github/workflows/c3-policy-binding.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
