@@ -20,7 +20,7 @@ def doc(passage, source="policy-1", evidence_id="e-policy"):
 
 
 @pytest.mark.parametrize(
-    "request, expected",
+    "user_text, expected",
     [
         ("Which customers exceed the annual revenue threshold in our policy?", True),
         ("Compare revenue with the minimum specified in the document", True),
@@ -29,8 +29,8 @@ def doc(passage, source="policy-1", evidence_id="e-policy"):
         ("Show sales and orders", False),
     ],
 )
-def test_dependent_intent_is_explicit(request, expected):
-    assert is_dependent_revenue_request(request) is expected
+def test_dependent_intent_is_explicit(user_text, expected):
+    assert is_dependent_revenue_request(user_text) is expected
 
 
 @pytest.mark.parametrize(
