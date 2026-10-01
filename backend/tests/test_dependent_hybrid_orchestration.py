@@ -40,7 +40,7 @@ async def run_dependent(session, monkeypatch, *, passage=POLICY,
     events = []
     captured = {}
 
-    async def fake_sources(db, user_id):
+    async def fake_sources(self, db, user_id):
         from types import SimpleNamespace
         return [SimpleNamespace(id="database-1", revenue_currency="USD")]
 
