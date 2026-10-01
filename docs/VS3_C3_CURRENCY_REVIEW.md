@@ -1,3 +1,16 @@
+## Verified CI checkpoint — 2026-10-01
+
+GitHub Actions run **36876494651** at branch commit `56c38af77ee6e52f4c6bebb69abf445df5a9f0e2` completed successfully in **both** jobs:
+
+- `deterministic-policy-binding`: safety tests for policy threshold binding, currency guards, disabled/ambiguous sources, legacy database migration, real SQLite result checks, and mocked-tool *real orchestrator* C3 tests.
+- `frontend-citation-and-build`: Node citation-label regression and production TypeScript/Vite build with locked dependencies.
+
+Evidence URL: https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/36876494651
+
+This is meaningful **CI** acceptance, but *not* full backend/model/API/physical-system acceptance. The CI orchestration wrapper stubs the heavyweight Knowledge adapter and mocks tool execution. Live Gemma+Chroma+real API acceptance remains pending. The broken `frontend/src/EvidencePanel.test.tsx` placeholder has been replaced by `frontend/tests/evidenceLabels.test.mjs` exercising the same label helper now called by `App.tsx`.
+
+The GitHub connector was unable to create a draft pull request in this session (action blocked by the host). Work is committed to the verified branch and may be reviewed using GitHub compare; no merge has been attempted.
+
 # VS3-C3 parallel hardening — currency and provenance
 
 **Status: DRAFT / NOT MERGED / NOT PRODUCTION-ACCEPTED**
