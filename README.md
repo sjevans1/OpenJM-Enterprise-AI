@@ -34,15 +34,9 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 ## Repository workflow
 
-`main` is the baseline. Vertical Slice 1 is merged.
+`main` contains accepted Vertical Slices 1–3, including explicit Chat / Knowledge / Data / Hybrid modes, governed SQL and bounded policy-dependent Hybrid. The VS3-C3 integration landed through PR #10 at merge `5f5821f6ad1b4e3368e95a5898508e892f530588`.
 
-Current implementation work is on:
-
-```text
-build/vertical-slice-2-structured-data
-```
-
-Vertical Slice 2 adds governed read-only relational data access. See `docs/VERTICAL_SLICE_2.md` and `docs/ACCEPTANCE.md` before implementation or merge.
+**Next:** Vertical Slice 4, Saved Reports (initially read-only snapshots without automated reruns). Follow [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md), [roadmap issue #11](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/11) and [VS4-A issue #12](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/12).
 
 ## Windows quick start
 
@@ -87,12 +81,12 @@ If Hermes will perform the local setup, hand it `HERMES_LOCAL_SETUP_PROMPT.md`. 
 
 ## Local development
 
-### 1. Clone and switch to the build branch
+### 1. Clone and switch to the accepted main branch
 
 ```bash
 git clone https://github.com/sjevans1/OpenJM-Enterprise-AI.git
 cd OpenJM-Enterprise-AI
-git switch build/vertical-slice-2-structured-data
+git switch main
 ```
 
 ### 2. Configure the backend
@@ -202,11 +196,11 @@ python scripts/structured_chat_acceptance.py
 
 OpenJM exposes only implemented product workflows:
 
-- **Chat** — persistent conversations with GENERAL, KNOWLEDGE and STRUCTURED routing.
+- **Chat** — persistent conversations with explicit Chat, Knowledge, Data and Hybrid execution modes.
 - **Knowledge** — governed document upload/index state and evidence-backed retrieval.
 - **Data** — encrypted source registration, connection testing, schema discovery and governed read-only structured access.
 
-**Reports, Automations and Administration** remain future capabilities until their implementation phases.
+**Reports, Automations and Administration** remain planned capabilities, not completed product modules. VS4 begins with permission-checked saved report snapshots.
 
 There is no primary Jobs screen and no raw MMR/relevance debugging workflow in the user product.
 
@@ -217,6 +211,7 @@ See:
 - `docs/ARCHITECTURE.md`
 - `docs/ACCEPTANCE.md`
 - `docs/VERTICAL_SLICE_2.md`
+- `docs/PRODUCT_ROADMAP.md`
 
 ## Build rules
 
