@@ -24,10 +24,9 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # Safe, non-destructive upgrade for existing deployments: add the
-    # requested_mode column to tables that predate this change.  Uses
-    # ALTER TABLE so existing rows (with NULL) are preserved.
+    # Additive, idempotent upgrades preserve all rows from older deployments.
     await _migrate_add_requested_mode(conn=None)
+    await _migrate_add_revenue_currency()
 
 
 async def _migrate_add_requested_mode(conn=None) -> None:
@@ -38,7 +37,6 @@ async def _migrate_add_requested_mode(conn=None) -> None:
     """
     for table_name in ("messages", "execution_traces"):
         async with engine.connect() as conn:
-            # Check table exists first.
             result = await conn.exec_driver_sql(
                 f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'"
             )
@@ -51,6 +49,28 @@ async def _migrate_add_requested_mode(conn=None) -> None:
                 await alter_conn.exec_driver_sql(
                     f"ALTER TABLE {table_name} ADD COLUMN requested_mode VARCHAR NULL"
                 )
+
+
+async def _migrate_add_revenue_currency() -> None:
+    """Idempotently add the operator-declared revenue_currency column.
+
+    Existing data-source rows deliberately receive NULL (unknown currency)
+    until an operator attests their currency. No exchange rates are inferred
+    and no historic transaction values are rewritten.
+    """
+    async with engine.begin() as conn:
+        table = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='data_sources'"
+        )
+        if table.first() is None:
+            return
+        info = await conn.exec_driver_sql("PRAGMA table_info(data_sources)")
+        columns = {row[1] for row in info.fetchall()}
+        if "revenue_currency" not in columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE data_sources ADD COLUMN revenue_currency VARCHAR(3) NULL"
+            )
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

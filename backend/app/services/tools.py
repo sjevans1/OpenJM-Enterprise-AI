@@ -1,6 +1,8 @@
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
@@ -16,6 +18,7 @@ from app.services.execution_trace import (
 )
 from app.services.knowledge import knowledge_engine
 from app.services.structured_executor import execute_structured_query
+from app.services.structured_planner import StructuredPlan, StructuredPlanner
 
 
 class ToolError(RuntimeError):
@@ -355,25 +358,65 @@ class StructuredQueryTool:
         if not isinstance(value, dict):
             raise ToolInputError("grounded_parameter must be an object")
 
-        required_strings = ("name", "type", "evidence_id", "source_id")
+        required_strings = (
+            "name",
+            "type",
+            "field",
+            "period",
+            "currency",
+            "citation",
+            "matching_text",
+            "evidence_id",
+            "source_id",
+        )
         if any(
             not isinstance(value.get(key), str) or not value[key]
             for key in required_strings
         ):
             raise ToolInputError("grounded_parameter identity is invalid")
-        if not isinstance(value.get("value"), (int, float)):
-            raise ToolInputError("grounded_parameter value must be numeric")
-        if value.get("operator") not in {">", "<", "=", ">=", "<="}:
+        raw_value = value.get("value")
+        if not isinstance(raw_value, str) or re.fullmatch(
+            r"\d+(?:\.\d{1,2})?", raw_value
+        ) is None:
+            raise ToolInputError(
+                "grounded_parameter value must be a canonical decimal string"
+            )
+        candidate_value = Decimal(raw_value)
+        if (
+            not candidate_value.is_finite()
+            or candidate_value <= 0
+            or candidate_value > Decimal("1000000000000000")
+        ):
+            raise ToolInputError("grounded_parameter value must be finite and bounded")
+        if value.get("operator") not in {">", ">="}:
             raise ToolInputError("grounded_parameter operator is invalid")
         if value.get("unit") is not None and not isinstance(value["unit"], str):
             raise ToolInputError("grounded_parameter unit is invalid")
+
+        fiscal_year = value.get("fiscal_year")
+        if fiscal_year is not None and (
+            not isinstance(fiscal_year, int) or not 2000 <= fiscal_year < 2100
+        ):
+            raise ToolInputError("grounded_parameter fiscal_year is invalid")
+        if value["field"] != "revenue":
+            raise ToolInputError("grounded_parameter field is unsupported")
+        if value["period"] not in {"annual", "monthly", "quarterly"}:
+            raise ToolInputError("grounded_parameter period is invalid")
+        if value["currency"] not in {"USD", "JMD"}:
+            raise ToolInputError("grounded_parameter currency is invalid")
 
         return {
             "name": value["name"],
             "value": value["value"],
             "type": value["type"],
+            "field": value["field"],
+            "period": value["period"],
+            "fiscal_year": fiscal_year,
             "operator": value["operator"],
             "unit": value.get("unit"),
+            "currency": value["currency"],
+            "citation": value["citation"],
+            "matching_text": value["matching_text"],
             "evidence_id": value["evidence_id"],
             "source_id": value["source_id"],
         }
@@ -403,6 +446,39 @@ class StructuredQueryTool:
         source = result.scalars().first()
         if source is None:
             raise ToolPermissionError("Data source is unavailable or unauthorized")
+
+        if grounded_parameter is not None:
+            document_result = await context.db.execute(
+                select(Document).where(
+                    Document.id == grounded_parameter["source_id"],
+                    Document.user_id == context.user_id,
+                    Document.status == "ready",
+                    Document.indexed.is_(True),
+                )
+            )
+            if document_result.scalars().first() is None:
+                raise ToolInputError(
+                    "Grounded policy source is unavailable or unauthorized"
+                )
+            if (
+                not source.enabled
+                or source.status != "connected"
+                or source.revenue_currency != grounded_parameter["currency"]
+            ):
+                raise ToolInputError(
+                    "Structured source is unavailable or has incompatible currency"
+                )
+            grounded_plan = StructuredPlan(
+                source_id=source.id,
+                sql=sql,
+                rationale="tool-boundary grounding validation",
+            )
+            if not StructuredPlanner.validates_grounded_parameter(
+                grounded_plan, grounded_parameter
+            ):
+                raise ToolInputError(
+                    "SQL does not preserve the verified grounded policy predicate"
+                )
 
         query_result = await execute_structured_query(source, sql)
         preview_rows = [list(row) for row in query_result.rows[:20]]

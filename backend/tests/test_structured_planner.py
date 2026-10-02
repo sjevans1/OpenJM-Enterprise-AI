@@ -42,16 +42,38 @@ from app.services.structured_planner import (
             "WHERE fy2025_annual_revenue > 300 OR 1 = 1",
             False,
         ),
+        (
+            "SELECT name FROM customers WHERE fy2025_annual_revenue > 300 "
+            "AND fy2025_annual_revenue > 500",
+            False,
+        ),
+        (
+            "SELECT name FROM customers WHERE NOT (fy2025_annual_revenue <= 300)",
+            False,
+        ),
+        (
+            "SELECT name FROM customers WHERE fy2025_annual_revenue BETWEEN 301 AND 500",
+            False,
+        ),
+        (
+            "SELECT name FROM customers WHERE CAST(fy2025_annual_revenue AS INT) > 300",
+            False,
+        ),
     ],
 )
 def test_grounded_parameter_sql_validation(sql, expected):
     plan = StructuredPlan(source_id="source-1", sql=sql, rationale="test")
     parameter = {
         "name": "fy2025_annual_revenue_threshold",
-        "value": 300.0,
+        "value": "300",
         "type": "threshold",
         "operator": ">",
         "unit": None,
+        "field": "revenue",
+        "period": "annual",
+        "fiscal_year": 2025,
+        "currency": "USD",
+        "citation": "[DOC 1]",
         "evidence_id": "evidence-1",
         "source_id": "document-1",
     }
@@ -285,3 +307,108 @@ def test_general_conversation_is_not_structured_from_single_schema_term():
 
     assert not planner.is_candidate("Hello, my name is Sam.", [source])
     assert not planner.is_candidate("Please remember my name.", [source])
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT s.ssn FROM customers c CROSS JOIN secrets s WHERE c.fy2025_annual_revenue > 300",
+        "SELECT s.ssn FROM customers c JOIN secrets s ON 1=1 WHERE c.fy2025_annual_revenue > 300",
+        "SELECT name FROM customers WHERE c.fy2025_annual_revenue > 300",
+    ],
+)
+def test_sql_with_unauthorized_or_unqualified_relation_is_rejected(sql):
+    plan = StructuredPlan(source_id="source-1", sql=sql, rationale="test")
+    parameter = {
+        "name": "fy2025_annual_revenue_threshold",
+        "value": "300",
+        "type": "threshold",
+        "operator": ">",
+        "unit": None,
+        "field": "revenue",
+        "period": "annual",
+        "fiscal_year": 2025,
+        "currency": "USD",
+        "citation": "[DOC 1]",
+        "evidence_id": "evidence-1",
+        "source_id": "document-1",
+    }
+    assert StructuredPlanner.validates_grounded_parameter(plan, parameter) is False
+
+
+@pytest.mark.parametrize("value_text,expected", [
+    ("1e309", False),
+    ("inf", False),
+    ("NaN", False),
+])
+def test_oversized_or_non_finite_policy_value_is_rejected(value_text, expected):
+    plan = StructuredPlan(
+        source_id="source-1",
+        sql=f"SELECT name FROM customers WHERE fy2025_annual_revenue > {value_text}",
+        rationale="test",
+    )
+    parameter = {
+        "name": "fy2025_annual_revenue_threshold",
+        "value": 1e309,
+        "type": "threshold",
+        "operator": ">",
+        "unit": None,
+        "field": "revenue",
+        "period": "annual",
+        "fiscal_year": 2025,
+        "currency": "USD",
+        "citation": "[DOC 1]",
+        "evidence_id": "evidence-1",
+        "source_id": "document-1",
+    }
+    assert StructuredPlanner.validates_grounded_parameter(plan, parameter) is expected
+
+
+def test_canonical_decimal_above_business_maximum_is_rejected():
+    value = "1000000000000001"
+    plan = StructuredPlan(
+        source_id="source-1",
+        sql=f"SELECT name FROM customers WHERE fy2025_annual_revenue > {value}",
+        rationale="test",
+    )
+    parameter = {
+        "name": "fy2025_annual_revenue_threshold",
+        "value": value,
+        "type": "threshold",
+        "operator": ">",
+        "unit": None,
+        "field": "revenue",
+        "period": "annual",
+        "fiscal_year": 2025,
+        "currency": "USD",
+        "citation": "[DOC 1]",
+        "evidence_id": "evidence-1",
+        "source_id": "document-1",
+    }
+    assert StructuredPlanner.validates_grounded_parameter(plan, parameter) is False
+
+
+@pytest.mark.parametrize(
+    "sql,expected",
+    [
+        ("SELECT name FROM sales WHERE fy2025_monthly_revenue > 300", True),
+        ("SELECT name FROM sales WHERE fy2025_monthly_revenue > 500", False),
+    ],
+)
+def test_monthly_period_predicate_is_supported(sql, expected):
+    plan = StructuredPlan(source_id="source-1", sql=sql, rationale="test")
+    parameter = {
+        "name": "fy2025_monthly_revenue_threshold",
+        "value": "300",
+        "type": "threshold",
+        "operator": ">",
+        "unit": None,
+        "field": "revenue",
+        "period": "monthly",
+        "fiscal_year": 2025,
+        "currency": "USD",
+        "citation": "[DOC 1]",
+        "evidence_id": "evidence-1",
+        "source_id": "document-1",
+    }
+    assert StructuredPlanner.validates_grounded_parameter(plan, parameter) is expected

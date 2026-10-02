@@ -1,5 +1,6 @@
 import re
 from dataclasses import asdict, dataclass, field
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import DataSource, Document
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
+from app.services.dependent_hybrid import (
+    PolicyThresholdError,
+    fiscal_year_in_request,
+    is_dependent_revenue_request,
+    period_in_request,
+    requested_threshold_operator,
+    resolve_revenue_threshold,
+    to_grounded_parameter,
+)
 from app.services.structured_planner import (
     STRUCTURED_CUES,
     StructuredPlannerError,
@@ -94,6 +104,12 @@ class GroundedParameter:
     source_id: str
     operator: Optional[str] = None  # e.g., ">", "<", "=", ">=", "<="
     unit: Optional[str] = None      # e.g., "USD", "units", "days"
+    currency: Optional[str] = None  # policy-declared currency (USD/JMD) provenance
+    field: str = "revenue"
+    period: str = "unspecified"
+    fiscal_year: int | None = None
+    citation: str | None = None
+    matching_text: str | None = None
 
 class OpenJMOrchestrator:
     """Routes an explicit user-selected execution mode into the governed
@@ -138,6 +154,8 @@ class OpenJMOrchestrator:
         user_id: str,
         conversation_id: str | None,
         requested_mode: ExecutionMode,
+        request_id: str | None = None,
+        trace_route: str = "structured",
     ) -> ExecutionPlan:
         """Run the governed Structured planner + query for one message.
 
@@ -192,7 +210,8 @@ class OpenJMOrchestrator:
             user_id=user_id,
             permissions=frozenset({"structured.read"}),
             conversation_id=conversation_id,
-            route="structured",
+            request_id=request_id or str(uuid4()),
+            route=trace_route,
             requested_mode=requested_mode,
             model_name=settings.model_name,
             db=db,
@@ -247,6 +266,8 @@ class OpenJMOrchestrator:
         user_id: str,
         conversation_id: str | None,
         requested_mode: ExecutionMode,
+        request_id: str | None = None,
+        trace_route: str = "knowledge",
     ) -> tuple[list[Evidence], str | None]:
         """Run knowledge.search. Returns (evidence, direct_answer).
 
@@ -290,7 +311,8 @@ class OpenJMOrchestrator:
                 user_id=user_id,
                 permissions=frozenset({"knowledge.read"}),
                 conversation_id=conversation_id,
-                route="knowledge",
+                request_id=request_id or str(uuid4()),
+                route=trace_route,
                 requested_mode=requested_mode,
                 model_name=settings.model_name,
                 db=db,
@@ -401,7 +423,10 @@ class OpenJMOrchestrator:
             )
 
         if execution_class == "hybrid":
-            return await self._plan_dependent_hybrid(
+            # Genuinely dependent (policy-derived predicate) questions route to
+            # the fail-closed dependent path. Independent multi-part Hybrid
+            # questions keep using the proven independent dual-source path.
+            return await self._plan_hybrid(
                 message, db, user_id, conversation_id, "hybrid"
             )
 
@@ -431,6 +456,15 @@ class OpenJMOrchestrator:
         5. Handle partial success: return grounded evidence from whichever
            source succeeded, explain the failure of the other.
         """
+        request_id = str(uuid4())
+        # A dependent (policy-derived) hybrid question must not degrade into an
+        # independent Structured execution. Route it through the fail-closed
+        # dependent gate; independent questions keep the proven path below.
+        if is_dependent_revenue_request(message):
+            return await self._plan_dependent_hybrid(
+                message, db, user_id, conversation_id, requested_mode, request_id
+            )
+
         sources = await self._structured_sources(db, user_id)
         decomposition = self._decompose_hybrid(message, sources)
 
@@ -447,6 +481,8 @@ class OpenJMOrchestrator:
                     user_id,
                     conversation_id,
                     requested_mode,
+                    request_id,
+                    "hybrid",
                 )
             except ToolError as exc:
                 knowledge_error = str(exc)
@@ -467,6 +503,8 @@ class OpenJMOrchestrator:
             user_id,
             conversation_id,
             requested_mode,
+            request_id,
+            "hybrid",
         )
         if structured_plan.evidence:
             structured_evidence = structured_plan.evidence
@@ -643,131 +681,46 @@ class OpenJMOrchestrator:
         knowledge_evidence: list[Evidence],
         original_message: str,
     ) -> Optional[GroundedParameter]:
-        """Extract one semantically bound policy threshold from evidence only."""
-        policy_indicators = (
-            "policy",
-            "rule",
-            "requirement",
-            "guideline",
-            "standard",
-            "criteria",
-            "threshold",
-            "limit",
-            "require",
+        """Extract one semantically bound policy threshold from evidence only.
+
+        Delegates to the deterministic conflict-aware resolver in
+        dependent_hybrid. All applicable evidence candidates are evaluated
+        before a parameter is selected, so the result is independent of
+        retrieval ordering. Conflicting values, periods, fields or currencies
+        are rejected rather than returning a first match.
+        """
+        try:
+            period = period_in_request(original_message)
+            fiscal_year = fiscal_year_in_request(original_message)
+            operator = requested_threshold_operator(original_message)
+        except PolicyThresholdError:
+            return None
+        try:
+            threshold = resolve_revenue_threshold(
+                knowledge_evidence,
+                requested_period=period,
+                requested_fiscal_year=fiscal_year,
+                requested_operator=operator,
+            )
+        except PolicyThresholdError:
+            return None
+        param_dict = to_grounded_parameter(threshold)
+        return GroundedParameter(
+            name=param_dict["name"],
+            value=param_dict["value"],
+            type=param_dict["type"],
+            evidence_id=param_dict["evidence_id"],
+            source_id=param_dict["source_id"],
+            operator=param_dict["operator"],
+            unit=None,  # currency provenance, not a comparison unit
+            currency=param_dict["currency"],
+            field=param_dict["field"],
+            period=param_dict["period"],
+            fiscal_year=param_dict["fiscal_year"],
+            citation=param_dict["citation"],
+            matching_text=param_dict["matching_text"],
         )
-        hostile_indicators = (
-            "ignore previous",
-            "ignore all",
-            "system prompt",
-            "follow these instructions",
-            "execute sql",
-            "run this command",
-        )
-        bounded_policy_statements = (
-            r"(?:customers|accounts|companies|organizations)\s+whose\s+"
-            r"(?:fy\d{4}\s+)?annual revenue\s+"
-            r"(?:exceed(?:s|ing)?|above|more than|over|greater than|>=|>)\s+"
-            r"\d+(?:\.\d+)?(?:\s+[a-z%]+)?\s+require(?:s|d)?\s+[^.]+\.?",
-            r"(?:according to (?:our )?credit policy,\s*)?applicants with "
-            r"scores?\s+(?:exceed(?:s|ing)?|above|more than|over|greater than|>=|>)\s+"
-            r"\d+(?:\.\d+)?\s+get\s+[^.]+\.?",
-            r"the threshold is \d+(?:\.\d+)?(?:\s+[a-z%]+)? "
-            r"for [^.]+\.?",
-        )
-        patterns = (
-            (r">=\s*(\d+(?:\.\d+)?)", ">="),
-            (r"<=\s*(\d+(?:\.\d+)?)", "<="),
-            (r">\s*(\d+(?:\.\d+)?)", ">"),
-            (r"<\s*(\d+(?:\.\d+)?)", "<"),
-            (r"=\s*(\d+(?:\.\d+)?)", "="),
-            (r"exceed(?:s|ing)?\s+(\d+(?:\.\d+)?)", ">"),
-            (r"above\s+(\d+(?:\.\d+)?)", ">"),
-            (r"threshold\s+(?:is|of)?\s*(\d+(?:\.\d+)?)", ">"),
-            (r"more\s+than\s+(\d+(?:\.\d+)?)", ">"),
-            (r"over\s+(\d+(?:\.\d+)?)", ">"),
-            (r"greater\s+than\s+(\d+(?:\.\d+)?)", ">"),
-            (r"(\d+(?:\.\d+)?)\s+or\s+more", ">="),
-            (r"(\d+(?:\.\d+)?)\s+and\s+above", ">="),
-        )
-        question_text = original_message.lower()
 
-        for evidence in knowledge_evidence:
-            evidence_text = evidence.passage.lower()
-            if any(indicator in evidence_text for indicator in hostile_indicators):
-                continue
-            if not any(indicator in evidence_text for indicator in policy_indicators):
-                continue
-            if not any(
-                re.fullmatch(pattern, evidence_text.strip())
-                for pattern in bounded_policy_statements
-            ):
-                continue
-
-            evidence_years = set(re.findall(r"\bfy\d{4}\b", evidence_text))
-            question_years = set(re.findall(r"\bfy\d{4}\b", question_text))
-            if evidence_years != question_years:
-                continue
-
-            if "annual revenue" in evidence_text and "annual revenue" in question_text:
-                name = (
-                    "fy2025_annual_revenue_threshold"
-                    if (
-                        "fy2025" in evidence_text
-                        and "fy2025" in question_text
-                    )
-                    else "annual_revenue_threshold"
-                )
-            elif (
-                re.search(r"\bscores?\b", evidence_text)
-                and re.search(r"\bscores?\b", question_text)
-            ):
-                name = "score_threshold"
-            elif "threshold" in evidence_text and "threshold" in question_text:
-                name = "threshold"
-            else:
-                continue
-
-            for pattern, operator in patterns:
-                match = re.search(pattern, evidence_text)
-                if match is None:
-                    continue
-                try:
-                    value = float(match.group(1))
-                except ValueError:
-                    continue
-
-                unit_match = re.match(
-                    r"\s*(%|percent(?:age)?|usd|dollars?|units?|days?|millions?|billions?)\b",
-                    evidence_text[match.end():],
-                )
-                unit = unit_match.group(1) if unit_match else None
-                if unit == "%" or unit == "percentage":
-                    unit = "percent"
-                elif unit in {"dollar", "dollars"}:
-                    unit = "USD"
-                elif unit == "unit":
-                    unit = "units"
-                elif unit == "day":
-                    unit = "days"
-                elif unit == "million":
-                    unit = "millions"
-                elif unit == "billion":
-                    unit = "billions"
-
-                if unit and unit.lower() not in question_text:
-                    continue
-
-                return GroundedParameter(
-                    name=name,
-                    value=value,
-                    type="threshold",
-                    evidence_id=evidence.evidence_id or evidence.source_id,
-                    source_id=evidence.source_id,
-                    operator=operator,
-                    unit=unit,
-                )
-
-        return None
 
     # ------------------------------------------------------------------
     # Dependent Hybrid Planning
@@ -780,14 +733,18 @@ class OpenJMOrchestrator:
         user_id: str,
         conversation_id: str | None,
         requested_mode: ExecutionMode,
+        request_id: str,
     ) -> ExecutionPlan:
-        """
-        Execute dependent hybrid: Knowledge -> Grounded Parameter -> Structured.
+        """Fail-closed dependent hybrid: Knowledge -> Grounded Parameter -> Structured.
 
-        1. Run knowledge.search to find policy/rule evidence
-        2. Extract and validate grounded parameter from that evidence
-        3. Run structured planner + query using the grounded parameter
-        4. Combine evidence with citations
+        A dependent (policy-derived) question must never execute SQL without a
+        verified policy value. If Knowledge retrieval fails, yields no evidence,
+        the policy is hostile/contradictory/ambiguous, the fiscal year differs,
+        the currency is missing or hostile, or the data source's declared
+        currency does not match the policy threshold, NO structured.query call
+        is made. Retrieved evidence is preserved in the result. Independent
+        (non-policy-dependent) Hybrid questions still route through
+        _plan_hybrid unchanged.
         """
         # --- Knowledge execution ---
         knowledge_evidence: list[Evidence] = []
@@ -799,45 +756,40 @@ class OpenJMOrchestrator:
                 user_id,
                 conversation_id,
                 requested_mode,
+                request_id,
+                "hybrid",
             )
-        except ToolError as exc:
-            knowledge_error = str(exc)
+        except ToolError:
+            knowledge_error = "Knowledge retrieval could not be completed safely."
         except Exception:
-            knowledge_error = "Knowledge retrieval failed."
+            knowledge_error = "Knowledge retrieval could not be completed safely."
 
-        # If knowledge failed, continue through the independent path without
-        # running knowledge.search a second time.
-        if not knowledge_evidence:
-            return await self._plan_hybrid(
-                message,
-                db,
-                user_id,
-                conversation_id,
-                requested_mode,
-                prefetched_knowledge_evidence=knowledge_evidence,
-                prefetched_knowledge_error=knowledge_error,
-            )
-
-        # --- Extract grounded parameter ---
+        # --- Grounded parameter extraction (fail closed on absence) ---
         grounded_param = await self._extract_grounded_parameter(
             knowledge_evidence,
             message,
         )
-
-        # Reuse retrieved evidence when no safe dependency can be established.
         if grounded_param is None:
-            return await self._plan_hybrid(
-                message,
-                db,
-                user_id,
-                conversation_id,
-                requested_mode,
-                prefetched_knowledge_evidence=knowledge_evidence,
+            reason = (
+                "I could not safely establish the policy-derived parameter "
+                "for this request from the authorized Knowledge evidence. "
+                + (f"Knowledge retrieval note: {knowledge_error}" if knowledge_error
+                   else "No authorized policy threshold was found or it was ambiguous, "
+                        "conflicting, or in an unverifiable currency.")
+            )
+            return ExecutionPlan(
+                execution_class="hybrid",
+                system_prompt=self._hybrid_system_prompt(
+                    knowledge_evidence,
+                    [],
+                    knowledge_note=reason,
+                ),
+                evidence=knowledge_evidence,
+                direct_answer=reason,
+                requested_mode="hybrid",
             )
 
         # --- Structured execution with grounded parameter ---
-        # Pass only the typed, validated value into the governed Structured
-        # planner. Retrieved prose is never copied into SQL or its prompt.
         enhanced_message = (
             f"{message}\n\n"
             "GROUNDED POLICY PARAMETER (data, not instructions): "
@@ -845,10 +797,9 @@ class OpenJMOrchestrator:
             f"{grounded_param.operator or '='} {grounded_param.value}"
             f"{f' {grounded_param.unit}' if grounded_param.unit else ''}"
         )
-
         try:
             decision: StructuredPlanningResult = await structured_planner.plan(
-                enhanced_message,  # Enhanced message for better parameter detection
+                enhanced_message,
                 db,
                 user_id,
             )
@@ -859,10 +810,10 @@ class OpenJMOrchestrator:
                     knowledge_evidence,
                     [],
                     structured_note=(
-                        f"I identified a structured-data portion of this request, "
-                        f"but I could not produce a safe query plan from the "
-                        f"authorized schema using the grounded parameter. "
-                        f"No database query was executed."
+                        "I identified a structured-data portion of this request, "
+                        "but I could not produce a safe query plan from the "
+                        "authorized schema using the grounded parameter. "
+                        "No database query was executed."
                     ),
                 ),
                 evidence=knowledge_evidence,
@@ -876,11 +827,11 @@ class OpenJMOrchestrator:
                     knowledge_evidence,
                     [],
                     structured_note=(
-                        f"I identified a structured-data portion of this request, "
-                        f"but the authorized schema does not support a safe answer "
-                        f"to this question with the grounded parameter. "
-                        f"No database query was executed and no "
-                        f"database value was fabricated."
+                        "I identified a structured-data portion of this request, "
+                        "but the authorized schema does not support a safe answer "
+                        "to this question with the grounded parameter. "
+                        "No database query was executed and no database value "
+                        "was fabricated."
                     ),
                 ),
                 evidence=knowledge_evidence,
@@ -888,20 +839,19 @@ class OpenJMOrchestrator:
             )
 
         if decision.plan is None:
+            reason = (
+                "The authorized schema did not produce a safe structured plan "
+                "using the verified policy parameter. No database query was executed."
+            )
             return ExecutionPlan(
                 execution_class="hybrid",
                 system_prompt=self._hybrid_system_prompt(
                     knowledge_evidence,
                     [],
-                    structured_note=(
-                        f"This appears to require structured enterprise data, but "
-                        f"the authorized schema does not support a safe answer to "
-                        f"this question with the grounded parameter. "
-                        f"No database query was executed and no "
-                        f"database value was fabricated."
-                    ),
+                    structured_note=reason,
                 ),
                 evidence=knowledge_evidence,
+                direct_answer=reason,
                 requested_mode="hybrid",
             )
 
@@ -911,30 +861,95 @@ class OpenJMOrchestrator:
             proposal,
             grounded_parameter,
         ):
+            reason = (
+                "The governed Structured planner did not preserve the verified "
+                "policy field, operator, and value. No database query was executed."
+            )
+            return ExecutionPlan(
+                execution_class="hybrid",
+                system_prompt=self._hybrid_system_prompt(
+                    knowledge_evidence,
+                    [],
+                    structured_note=reason,
+                ),
+                evidence=knowledge_evidence,
+                direct_answer=reason,
+                requested_mode="hybrid",
+            )
+
+        # --- Currency compatibility gate (Correction 3) ---
+        # Revenue thresholds only compare against sources whose currency is
+        # explicitly declared and matches the policy. Unknown or mismatched
+        # currencies cannot be safely compared; do not execute.
+        sources = await self._structured_sources(db, user_id)
+        matching = [
+            source for source in sources if source.id == proposal.source_id
+        ]
+        if len(matching) != 1:
             return ExecutionPlan(
                 execution_class="hybrid",
                 system_prompt=self._hybrid_system_prompt(
                     knowledge_evidence,
                     [],
                     structured_note=(
-                        "The governed Structured planner did not preserve the "
-                        "grounded policy field, operator, and value. No database "
-                        "query was executed."
+                        "The proposed structured source is not an authorized "
+                        "data source for this request. No database query was "
+                        "executed."
                     ),
                 ),
                 evidence=knowledge_evidence,
                 requested_mode="hybrid",
             )
+        source = matching[0]
+        source_currency = getattr(source, "revenue_currency", None)
+        threshold_currency = grounded_param.currency
+        if source_currency is None or threshold_currency is None:
+            reason = (
+                "The revenue threshold or data source currency is not declared. "
+                "Explicit USD or JMD provenance is required, so no database query "
+                "was executed."
+            )
+            return ExecutionPlan(
+                execution_class="hybrid",
+                system_prompt=self._hybrid_system_prompt(
+                    knowledge_evidence,
+                    [],
+                    structured_note=reason,
+                ),
+                evidence=knowledge_evidence,
+                direct_answer=reason,
+                requested_mode="hybrid",
+            )
+        if source_currency != threshold_currency:
+            reason = (
+                f"The policy threshold currency ({threshold_currency}) does not "
+                f"match the authorized data source currency ({source_currency}). "
+                "No conversion was performed and no database query was executed."
+            )
+            return ExecutionPlan(
+                execution_class="hybrid",
+                system_prompt=self._hybrid_system_prompt(
+                    knowledge_evidence,
+                    [],
+                    structured_note=reason,
+                ),
+                evidence=knowledge_evidence,
+                direct_answer=reason,
+                requested_mode="hybrid",
+            )
+
+        # Attach currency provenance alongside the grounded parameter.
+        grounded_parameter["currency"] = threshold_currency
         context = ToolContext(
             user_id=user_id,
             permissions=frozenset({"structured.read"}),
             conversation_id=conversation_id,
-            route="structured",
+            request_id=request_id,
+            route="hybrid",
             requested_mode=requested_mode,
             model_name=settings.model_name,
             db=db,
         )
-
         try:
             result = await tool_registry.execute(
                 "structured.query",
@@ -946,18 +961,19 @@ class OpenJMOrchestrator:
                 },
             )
         except ToolError:
+            reason = (
+                "I could not safely execute the read-only structured query using "
+                "the verified policy parameter. No result was fabricated."
+            )
             return ExecutionPlan(
                 execution_class="hybrid",
                 system_prompt=self._hybrid_system_prompt(
                     knowledge_evidence,
                     [],
-                    structured_note=(
-                        f"I could not safely execute a read-only query for the "
-                        f"structured portion of this request using the grounded parameter. "
-                        f"No unsupported or write operation was executed."
-                    ),
+                    structured_note=reason,
                 ),
                 evidence=knowledge_evidence,
+                direct_answer=reason,
                 requested_mode="hybrid",
             )
         except Exception:
@@ -967,16 +983,15 @@ class OpenJMOrchestrator:
                     knowledge_evidence,
                     [],
                     structured_note=(
-                        f"The authorized data source could not complete the "
-                        f"structured portion of this request safely using the grounded parameter. "
-                        f"No answer was fabricated from unavailable data."
+                        "The authorized data source could not complete the "
+                        "structured portion of this request safely using the "
+                        "grounded parameter. No answer was fabricated."
                     ),
                 ),
                 evidence=knowledge_evidence,
                 requested_mode="hybrid",
             )
 
-        # Combine evidence and preserve the evidence-to-query dependency.
         structured_evidence = [
             item.model_copy(
                 update={
@@ -988,9 +1003,23 @@ class OpenJMOrchestrator:
             )
             for item in (result.evidence if hasattr(result, "evidence") else [])
         ]
+        if not structured_evidence:
+            reason = (
+                "The governed structured query produced no verified evidence. "
+                "No dependent result was asserted."
+            )
+            return ExecutionPlan(
+                execution_class="hybrid",
+                system_prompt=self._hybrid_system_prompt(
+                    knowledge_evidence,
+                    [],
+                    structured_note=reason,
+                ),
+                evidence=knowledge_evidence,
+                direct_answer=reason,
+                requested_mode="hybrid",
+            )
         combined_evidence = [*knowledge_evidence, *structured_evidence]
-
-        # Both succeeded - return hybrid plan
         return ExecutionPlan(
             execution_class="hybrid",
             system_prompt=self._hybrid_system_prompt(
@@ -1000,4 +1029,5 @@ class OpenJMOrchestrator:
             evidence=combined_evidence,
             requested_mode="hybrid",
         )
+
 orchestrator = OpenJMOrchestrator()

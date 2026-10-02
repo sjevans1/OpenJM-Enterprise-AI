@@ -87,11 +87,16 @@ class DataSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     engine: DataEngine
     connection_uri: str = Field(min_length=1, max_length=4000)
+    revenue_currency: Literal["USD", "JMD"] | None = None
     enabled: bool = True
 
 
 class DataSourceEnabledUpdate(BaseModel):
     enabled: bool
+
+
+class DataSourceCurrencyUpdate(BaseModel):
+    revenue_currency: Literal["USD", "JMD"] | None
 
 
 class DataColumnSchema(BaseModel):
@@ -121,6 +126,7 @@ class DataSourceOut(BaseModel):
     id: str
     name: str
     engine: DataEngine
+    revenue_currency: Literal["USD", "JMD"] | None = None
     status: str
     enabled: bool
     tables: list[DataTableSchema] = Field(default_factory=list)

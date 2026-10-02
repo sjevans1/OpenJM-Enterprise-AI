@@ -73,6 +73,7 @@ class DataSource(Base):
     name: Mapped[str] = mapped_column(String(240))
     engine: Mapped[str] = mapped_column(String(32))
     connection_secret: Mapped[str] = mapped_column(Text)
+    revenue_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="untested")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     schema_json: Mapped[str | None] = mapped_column(Text, nullable=True)

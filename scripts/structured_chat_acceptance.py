@@ -105,7 +105,8 @@ def main() -> int:
         grounded = client.post(
             f"{base}/api/chat",
             json={
-                "message": "What is the total revenue for Blue Mountain Cafe?"
+                "message": "What is the total revenue for Blue Mountain Cafe?",
+                "mode": "data",
             },
         )
         grounded.raise_for_status()
@@ -150,7 +151,8 @@ def main() -> int:
         while_disabled = client.post(
             f"{base}/api/chat",
             json={
-                "message": "What is the total revenue for Blue Mountain Cafe?"
+                "message": "What is the total revenue for Blue Mountain Cafe?",
+                "mode": "data",
             },
         )
         while_disabled.raise_for_status()
@@ -178,7 +180,8 @@ def main() -> int:
         unsupported = client.post(
             f"{base}/api/chat",
             json={
-                "message": "What is the total payroll bonus this month?"
+                "message": "What is the total payroll bonus this month?",
+                "mode": "data",
             },
         )
         unsupported.raise_for_status()
