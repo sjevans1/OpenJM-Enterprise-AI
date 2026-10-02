@@ -383,38 +383,59 @@ async def test_scoped_executor_rejects_other_schema_before_credential_decrypt(mo
         )
 
 
-def test_scoped_ctes_fail_closed_until_lexical_resolution_is_supported():
-    """Nested CTE aliases cannot cloak out-of-scope physical tables."""
+def test_lexical_cte_resolution_rejects_unpinned_physical_tables():
+    """A CTE alias in another scope must never hide a real unpinned table."""
     from app.services.sql_policy import SQLPolicyError, validate_and_rewrite_sql
-    unsafe_or_unsupported = [
+    dangerous_queries = [
         "WITH finance AS (SELECT revenue FROM public.finance) "
         "SELECT x.revenue FROM private.finance AS x "
         "JOIN finance ON finance.revenue = x.revenue",
         "SELECT revenue FROM private.finance WHERE EXISTS ("
         "WITH finance AS (SELECT revenue FROM public.finance) "
         "SELECT revenue FROM finance)",
-        "WITH approved AS (SELECT revenue FROM public.finance) "
-        "SELECT revenue FROM approved",
+        "WITH payroll AS (SELECT revenue FROM payroll) "
+        "SELECT revenue FROM public.finance",
     ]
-    for query in unsafe_or_unsupported:
-        with pytest.raises(SQLPolicyError, match="CTEs require scope-aware"):
-            validate_and_rewrite_sql(
-                query, dialect="postgres",
-                allowed_tables={"public.finance"},
-                allowed_columns={"public.finance": {"revenue"}},
-                max_rows=20, require_exact_table_match=True,
-            )
+    for query in dangerous_queries:
+        for exact in (False, True):
+            with pytest.raises(SQLPolicyError, match="unauthorized"):
+                validate_and_rewrite_sql(
+                    query, dialect="postgres",
+                    allowed_tables={"public.finance"},
+                    allowed_columns={"public.finance": {"revenue"}},
+                    max_rows=20,
+                    require_exact_table_match=exact,
+                )
 
-    # Preserve the existing unscope-aware Chat policy contract separately.
-    old_style = validate_and_rewrite_sql(
-        "WITH approved AS (SELECT revenue FROM public.finance) "
-        "SELECT revenue FROM approved",
+
+def test_valid_cte_can_reference_exact_pinned_table():
+    from app.services.sql_policy import validate_and_rewrite_sql
+    safe = "WITH approved AS (SELECT revenue FROM public.finance) SELECT revenue FROM approved"
+    result = validate_and_rewrite_sql(
+        safe,
         dialect="postgres",
         allowed_tables={"public.finance"},
         allowed_columns={"public.finance": {"revenue"}},
         max_rows=20,
+        require_exact_table_match=True,
     )
-    assert old_style.tables == ("public.finance",)
+    assert result.tables == ("public.finance",)
+
+
+def test_recursive_cte_is_refused_in_pinned_mode():
+    from app.services.sql_policy import SQLPolicyError, validate_and_rewrite_sql
+    query = (
+        "WITH RECURSIVE counter(n) AS "
+        "(SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 10) "
+        "SELECT revenue FROM public.finance"
+    )
+    with pytest.raises(SQLPolicyError, match="Recursive CTE"):
+        validate_and_rewrite_sql(
+            query,
+            dialect="postgres", allowed_tables={"public.finance"},
+            allowed_columns={"public.finance": {"revenue"}},
+            max_rows=20, require_exact_table_match=True,
+        )
 
 
 @pytest.mark.asyncio

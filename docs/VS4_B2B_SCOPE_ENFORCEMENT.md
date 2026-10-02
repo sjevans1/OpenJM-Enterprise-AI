@@ -101,13 +101,16 @@ any query. Their deterministic security regressions are in
 a public report execution path.
 
 
-### Scoped CTE limitation
+### Scope-aware CTE validation
 
-Until SQLGlot lexical CTE-scope resolution is incorporated with separate
-negative security tests, **source-pinned report SQL rejects all CTEs**. This is
-intentional fail-closed behavior: a nested CTE named like a real table could
-otherwise conceal an out-of-scope base table from global-name matching.
-Direct single-statement SELECT/aggregate queries against exactly pinned
-tables remain permitted. Existing unscoped Chat's CTE support is unchanged.
-B2C cannot remove this restriction without replacing the global CTE-name
-check with validated per-query-scope source resolution.
+Scoped SQL uses SQLGlot's lexical `traverse_scope` resolution to collect real
+physical table sources from every nested query/CTE scope. CTE aliases and
+derived subqueries are not mistaken for physical tables. All physical table
+identities still require the exact pinned schema/table grant; nested CTE name
+collisions cannot hide an unpinned real table. These guarantees are also
+applied to the shared unscoped SQL table-source validator.
+
+Recursive CTEs are **not** permitted in pinned report execution because
+recursive query resource budgets are not part of this vertical slice. Normal
+bounded, nonrecursive CTE and single SELECT reporting queries remain
+supported and covered by deterministic security tests.

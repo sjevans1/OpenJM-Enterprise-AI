@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.scope import traverse_scope
 
 
 class SQLPolicyError(RuntimeError):
@@ -38,7 +39,8 @@ class SQLPolicyDecision:
 def _table_name(table: exp.Table) -> str:
     name = table.name.lower()
     db = (table.db or "").lower()
-    return f"{db}.{name}" if db else name
+    catalog = (table.catalog or "").lower()
+    return ".".join(part for part in (catalog, db, name) if part)
 
 
 def _function_name(node: exp.Func) -> str:
@@ -89,12 +91,11 @@ def validate_and_rewrite_sql(
     query = statements[0]
     if not isinstance(query, exp.Query):
         raise SQLPolicyError("Only SELECT/CTE read queries are allowed")
-    if require_exact_table_match and query.find(exp.CTE):
-        # CTE aliases require lexical scope resolution. The generic validator
-        # has a global alias list; an inner CTE could otherwise conceal an
-        # outer physical table with the same name. Refuse scoped CTEs until
-        # proper scope-aware provenance is implemented and tested.
-        raise SQLPolicyError("CTEs require scope-aware validation for pinned reports")
+    if require_exact_table_match and any(
+        with_clause.args.get("recursive")
+        for with_clause in query.find_all(exp.With)
+    ):
+        raise SQLPolicyError("Recursive CTEs are not supported in pinned reports")
 
     for node_type in FORBIDDEN_NODES:
         if query.find(node_type):
@@ -108,27 +109,21 @@ def validate_and_rewrite_sql(
             raise SQLPolicyError(f"Function {name} is not allowed")
 
     normalized_allowed = {item.lower() for item in allowed_tables}
-    cte_names = {
-        str(cte.alias_or_name).lower()
-        for cte in query.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
-    referenced_tables = tuple(
-        sorted(
-            {
-                _table_name(table)
-                for table in query.find_all(exp.Table)
-                # An unqualified CTE name can shadow a base table, but a
-                # schema-qualified table such as private.finance is NEVER
-                # the CTE "finance" and must remain subject to authorization.
-                if not (
-                    table.name.lower() in cte_names
-                    and not table.db
-                    and not table.catalog
-                )
-            }
-        )
-    )
+    # Resolve physical tables with SQLGlot's lexical source scopes.
+    # A CTE/subquery is a Scope, not a physical exp.Table. A globally
+    # collected CTE-name set can accidentally hide a real table in an outer
+    # or unrelated nested scope when aliases collide.
+    try:
+        query_scopes = traverse_scope(query)
+        referenced_tables = tuple(sorted({
+            _table_name(source)
+            for query_scope in query_scopes
+            for _, source in query_scope.selected_sources.values()
+            if isinstance(source, exp.Table)
+        }))
+    except Exception as exc:
+        raise SQLPolicyError("SQL source scopes could not be validated") from exc
+
     if not referenced_tables:
         raise SQLPolicyError("Structured queries must reference an authorized table")
 
@@ -172,8 +167,6 @@ def validate_and_rewrite_sql(
                 continue
             qualifier = (column.table or "").lower()
             if qualifier:
-                if qualifier in cte_names:
-                    continue
                 canonical = aliases.get(qualifier, qualifier)
                 candidates = (
                     normalized_columns.get(canonical)
