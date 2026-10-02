@@ -57,6 +57,17 @@ def _source_ids(evidence: list[Evidence]) -> tuple[set[str], set[str]]:
     for item in evidence:
         if item.source_type == "structured_query":
             sources.add(item.source_id)
+            # Dependent-Hybrid SQL Evidence references the policy document used
+            # to derive its predicate. Revocation of that policy must invalidate
+            # the snapshot even if its original DOC Evidence was omitted.
+            parameter = item.provenance.get("grounded_parameter")
+            if parameter is not None:
+                if not isinstance(parameter, dict):
+                    raise HTTPException(status_code=422, detail="Invalid policy provenance")
+                policy_source = parameter.get("source_id")
+                if not isinstance(policy_source, str) or not policy_source:
+                    raise HTTPException(status_code=422, detail="Invalid policy provenance")
+                documents.add(policy_source)
             continue
         documents.add(item.source_id)
         equivalent = item.provenance.get("equivalent_sources", [])
@@ -202,7 +213,9 @@ async def create_report(
     if prior is not None:
         return await _detail(db, prior)
 
-    if not message.content or len(message.content) > MAX_ANSWER_CHARS:
+    if payload.title is not None and not payload.title.strip():
+        raise HTTPException(status_code=422, detail="Report title must not be blank")
+    if not message.content or len(message.content) > MAX_ANSWER_CHARS or len(message.content.encode("utf-8")) > MAX_SNAPSHOT_BYTES:
         raise HTTPException(status_code=422, detail="Answer is not a bounded report")
     evidence = _parse_evidence(message.evidence_json)
     if not await _sources_available(db, evidence):
