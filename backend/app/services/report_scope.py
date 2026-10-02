@@ -100,9 +100,26 @@ def source_scope_still_authorized(
     ):
         return False
     granted = {item.strip().casefold() for item in authorized if item.strip()}
-    discovered = {
-        name.casefold()
-        for table in decode_schema(source.schema_json)
-        for name in (table.name, table.qualified_name)
-    }
-    return pinned_tables.issubset(granted & discovered)
+    if not pinned_tables.issubset(granted):
+        return False
+
+    # An unqualified table name shared by multiple discovered schemas is not
+    # a unique capability. Never let a pin for "finance" also cover
+    # "private.finance" simply because the final table name matches.
+    discovered_tables = decode_schema(source.schema_json)
+    for pin in pinned_tables:
+        matches = [
+            table for table in discovered_tables
+            if pin in {table.name.casefold(), table.qualified_name.casefold()}
+        ]
+        if len(matches) != 1:
+            return False
+        # PostgreSQL can resolve an unqualified name through search_path.
+        # Scoped reports require the explicitly schema-qualified pin.
+        if source.engine == "postgresql" and (
+            "." not in pin or pin != matches[0].qualified_name.casefold()
+        ):
+            return False
+        if "." in pin and pin != matches[0].qualified_name.casefold():
+            return False
+    return True
