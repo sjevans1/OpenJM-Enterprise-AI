@@ -187,3 +187,75 @@ test('deleting one report does not cancel opening another report', async () => {
 
   expect(await screen.findByText('Concurrent historical answer')).toBeTruthy()
 })
+
+
+test('preparing a rerun fills a new Chat composer without executing it', async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) {
+      return jsonResponse([])
+    }
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/rerun-preview') {
+      return jsonResponse({
+        report_id: 'report-a',
+        source_message_id: 'message-a',
+        original_question: 'What was the FY2025 policy and revenue?',
+        mode: 'hybrid',
+        snapshot_as_of: reportA.snapshot_as_of,
+        original_source_count: 2,
+        requires_explicit_send: true,
+        executes_queries: false,
+      })
+    }
+    if (url === '/api/chat') throw new Error('Chat must not auto-execute on preflight')
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Prepare rerun in Chat/ }))
+
+  const composer = await screen.findByPlaceholderText('Ask OpenJM about your work...')
+  await waitFor(() => expect((composer as HTMLTextAreaElement).value).toBe(
+    'What was the FY2025 policy and revenue?'
+  ))
+  expect(screen.getByText(/Review this historical report question/)).toBeTruthy()
+  expect(screen.getByText('Hybrid')).toBeTruthy()
+  expect(fetchMock.mock.calls.filter((args) => String(args[0]) === '/api/chat')).toHaveLength(0)
+})
+
+
+test('preflight refusal clears stale report instead of putting leaked text in Chat', async () => {
+  let revoked = false
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) {
+      return jsonResponse([])
+    }
+    if (url === '/api/reports') {
+      return jsonResponse(revoked
+        ? [{ ...reportA, available: false, title: 'Unavailable saved report' }]
+        : [reportA])
+    }
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/rerun-preview') {
+      revoked = true
+      return jsonResponse({ detail: 'Report source is unavailable or no longer authorized' }, 409)
+    }
+    throw new Error(`Unexpected request: ${init?.method || 'GET'} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  expect(await screen.findByText('Historical confidential answer')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /Prepare rerun in Chat/ }))
+  expect(await screen.findByText('Report source is unavailable or no longer authorized')).toBeTruthy()
+  expect(screen.queryByText('Historical confidential answer')).toBeNull()
+  expect(screen.queryByText('Historical policy passage')).toBeNull()
+  expect(screen.queryByText(/Review this historical report question/)).toBeNull()
+})

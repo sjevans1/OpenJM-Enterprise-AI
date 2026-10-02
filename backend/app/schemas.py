@@ -172,3 +172,16 @@ class SavedReportDetail(SavedReportSummary):
     answer: str
     evidence: list[Evidence]
     is_live: Literal[False] = False
+
+
+class ReportRerunPreview(BaseModel):
+    """Read-only proposal, NOT a capability grant or an executed report."""
+
+    report_id: str
+    source_message_id: str
+    original_question: str
+    mode: Literal["knowledge", "data", "hybrid"]
+    snapshot_as_of: datetime
+    original_source_count: int
+    requires_explicit_send: Literal[True] = True
+    executes_queries: Literal[False] = False
