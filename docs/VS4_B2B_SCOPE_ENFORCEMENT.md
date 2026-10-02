@@ -75,3 +75,27 @@ The frontend, Workspace and consumer APIs are unchanged.
 - [ ] Maintainer review/merge approval.
 
 Keep PR small, never enable report execution until B2C meets all gates.
+
+## Security-review hardening: schema identity and evidence provenance
+
+The B2B security review found two additional routes requiring fail-closed checks:
+
+- **Schema-name ambiguity:** a pin for `finance` must not grant
+  `private.finance`. Scoped SQL policy uses **exact parsed table identities**
+  rather than the legacy fallback to the final name segment. A discovered
+  unqualified table is rejected when multiple schemas contain the same base
+  name. PostgreSQL report pins must be explicitly schema-qualified; older
+  unqualified report evidence is refused until safely re-established as
+  canonical schema-qualified scope.
+- **CTE shadowing:** `WITH finance AS (...)` must not hide a reference to
+  `private.finance`; only unqualified CTE references are excluded from base
+  table authorization checks.
+- **Untrusted vector provenance:** retrieved `equivalent_sources` must be a
+  bounded list of valid source identities entirely contained in the pinned
+  document set, and Knowledge evidence must have source type `document`.
+  Malformed elements are denied rather than silently skipped.
+
+These guards operate before source credential decryption and before executing
+any query. Their deterministic security regressions are in
+`backend/tests/test_report_scope_enforcement.py`. None of the changes expose
+a public report execution path.
