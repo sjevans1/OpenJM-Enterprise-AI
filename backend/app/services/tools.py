@@ -298,11 +298,25 @@ class KnowledgeSearchTool:
             for item in evidence
         ]
         for item in normalized:
-            equivalent_source_ids = {
-                str(source.get("source_id") or "")
-                for source in item.provenance.get("equivalent_sources", [])
-                if isinstance(source, dict)
-            }
+            # Retrieved provenance is untrusted, even if the vector search was
+            # restricted to known document collections. Reject malformed
+            # equivalent-source records instead of silently skipping them.
+            equivalents = item.provenance.get("equivalent_sources", [])
+            if (
+                item.source_type != "document"
+                or not isinstance(equivalents, list)
+                or len(equivalents) > 24
+            ):
+                raise ToolPermissionError("Knowledge evidence provenance is invalid")
+            equivalent_source_ids: set[str] = set()
+            for equivalent in equivalents:
+                if (
+                    not isinstance(equivalent, dict)
+                    or not isinstance(equivalent.get("source_id"), str)
+                    or not equivalent["source_id"]
+                ):
+                    raise ToolPermissionError("Knowledge evidence provenance is invalid")
+                equivalent_source_ids.add(equivalent["source_id"])
             if (
                 item.source_id not in authorized_source_ids
                 or not equivalent_source_ids.issubset(authorized_source_ids)
