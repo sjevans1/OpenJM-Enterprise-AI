@@ -18,6 +18,9 @@ from app.services.execution_trace import (
 )
 from app.services.knowledge import knowledge_engine
 from app.services.structured_executor import execute_structured_query
+from app.services.report_scope import (
+    ReportSourceScope, ReportScopeError, source_scope_still_authorized,
+)
 from app.services.structured_planner import StructuredPlan, StructuredPlanner
 
 
@@ -63,6 +66,7 @@ class ToolContext:
     requested_mode: str | None = None
     model_name: str | None = None
     db: AsyncSession | None = None
+    report_scope: ReportSourceScope | None = None
 
 
 @dataclass
@@ -242,17 +246,24 @@ class KnowledgeSearchTool:
         if context.db is None:
             raise ToolInputError("knowledge.search requires a database session")
 
+        statement = select(Document).where(
+            Document.user_id == context.user_id,
+            Document.status == "ready",
+            Document.indexed.is_(True),
+        )
+        if context.report_scope is not None:
+            try:
+                document_ids = context.report_scope.require_documents()
+            except ReportScopeError as exc:
+                raise ToolPermissionError("Report does not permit Knowledge retrieval") from exc
+            statement = statement.where(Document.id.in_(document_ids))
         documents = (
-            await context.db.execute(
-                select(Document)
-                .where(
-                    Document.user_id == context.user_id,
-                    Document.status == "ready",
-                    Document.indexed.is_(True),
-                )
-                .order_by(Document.created_at.desc())
-            )
+            await context.db.execute(statement.order_by(Document.created_at.desc()))
         ).scalars().all()
+        if context.report_scope is not None and (
+            {doc.id for doc in documents} != context.report_scope.document_ids
+        ):
+            raise ToolPermissionError("Pinned Knowledge document is no longer authorized")
         refs = [(item.id, item.original_name) for item in documents]
         authorized_source_ids = {document_id for document_id, _ in refs}
         evidence = await knowledge_engine.retrieve(
@@ -436,6 +447,16 @@ class StructuredQueryTool:
             raise ToolInputError("structured.query requires source_id")
         if not isinstance(sql, str) or not sql.strip():
             raise ToolInputError("structured.query requires SQL")
+        scoped_tables = None
+        if context.report_scope is not None:
+            try:
+                scoped_tables = context.report_scope.tables_for(source_id)
+            except ReportScopeError as exc:
+                raise ToolPermissionError("Report does not permit this data source") from exc
+            if grounded_parameter is not None and (
+                grounded_parameter["source_id"] not in context.report_scope.document_ids
+            ):
+                raise ToolPermissionError("Report does not permit this policy document")
 
         result = await context.db.execute(
             select(DataSource).where(
@@ -446,6 +467,10 @@ class StructuredQueryTool:
         source = result.scalars().first()
         if source is None:
             raise ToolPermissionError("Data source is unavailable or unauthorized")
+        if scoped_tables is not None and not source_scope_still_authorized(
+            source, scoped_tables
+        ):
+            raise ToolPermissionError("Pinned table grant or schema has changed")
 
         if grounded_parameter is not None:
             document_result = await context.db.execute(
@@ -480,7 +505,13 @@ class StructuredQueryTool:
                     "SQL does not preserve the verified grounded policy predicate"
                 )
 
-        query_result = await execute_structured_query(source, sql)
+        query_result = (
+            await execute_structured_query(source, sql)
+            if scoped_tables is None
+            else await execute_structured_query(
+                source, sql, scoped_tables=scoped_tables
+            )
+        )
         preview_rows = [list(row) for row in query_result.rows[:20]]
         passage = json.dumps(
             {
