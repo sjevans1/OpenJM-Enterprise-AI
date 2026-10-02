@@ -1,7 +1,7 @@
 # VS4-A ACCEPTANCE REPORT
 Saved Report Snapshots — OpenJM Enterprise AI
-Branch: feature/vs4-a-saved-report-snapshots (DRAFT, unmerged)
-Final commit SHA: f16ca5662acbfb1e9a6f36bfb287c7d94b13c5
+Acceptance branch: feature/vs4-a-saved-report-snapshots (integration history recorded in PR #14)
+Verified implementation checkpoint: 6f445d0e47362495108dc2a6f2108f6b30057abb (GitHub-confirmed PR #14 head when reviewed; later documentation commits do not alter the tested application code)
 Base checkpoint: b6fe45af79781172487de99205429fb63cc5cd82
 
 ## Summary of corrections
@@ -97,4 +97,4 @@ Frontend (after changes): 4 tests passed; production build passed; audit 0 vulne
 ## Merge-readiness conclusion
 All five gates (A-E) executed with actual outputs and recorded above. Backend 269 passed; frontend 4 tests + build + audit clean; DB upgrade verified on a temporary copy with real DB unmodified; live local acceptance fully passed. Two verified correction commits added to the existing branch. Draft PR #14 updated with evidence.
 
-Status: NOT ready to merge. Requires explicit maintainer authorization. Branch kept unmerged per standing instruction.
+Acceptance status: Gates A–E reported passing by Hermes on the implementation checkpoint above; GitHub Actions did not run for that commit. The maintainer explicitly authorized correcting this record and merging PR #14 on October 2, 2026. For the authoritative merge status, commit and timestamp, see https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/14. This report does not claim an independent rerun of local tests after this documentation-only correction.
