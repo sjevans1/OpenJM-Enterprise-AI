@@ -179,6 +179,8 @@ export default function App() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const reportOpenSequence = useRef(0)
+  const pendingReportId = useRef<string | null>(null)
 
   // Persist selected mode across sessions via localStorage.
   useEffect(() => {
@@ -218,7 +220,22 @@ export default function App() {
 
   const loadReports = async () => {
     try {
-      setReports(await api.reports())
+      const loaded = await api.reports()
+      setReports(loaded)
+      const pendingId = pendingReportId.current
+      if (pendingId) {
+        const pendingSummary = loaded.find((report) => report.id === pendingId)
+        if (!pendingSummary?.available) {
+          reportOpenSequence.current += 1
+          pendingReportId.current = null
+          setReportBusyId((current) => current === pendingId ? null : current)
+        }
+      }
+      setActiveReport((current) => {
+        if (!current) return null
+        const summary = loaded.find((report) => report.id === current.id)
+        return summary?.available ? current : null
+      })
     } catch (error) {
       setReportError(error instanceof Error ? error.message : 'Unable to load saved reports')
     }
@@ -387,7 +404,8 @@ export default function App() {
     setReportBusyId(message.id)
     setChatError(null)
     try {
-      await api.saveReport(message.id)
+      const saved = await api.saveReport(message.id)
+      setReports((current) => [saved, ...current.filter((report) => report.id !== saved.id)])
       await loadReports()
     } catch (error) {
       setChatError(error instanceof Error ? error.message : 'Unable to save report')
@@ -397,18 +415,29 @@ export default function App() {
   }
 
   const openReport = async (id: string) => {
+    const requestSequence = ++reportOpenSequence.current
+    pendingReportId.current = id
     setActiveReport(null)
     setReportError(null)
     setReportBusyId(id)
     try {
       const report = await api.report(id)
-      setActiveReport(report)
+      if (
+        requestSequence === reportOpenSequence.current
+        && pendingReportId.current === id
+      ) {
+        setActiveReport(report)
+        pendingReportId.current = null
+      }
     } catch (error) {
       // Never render a cached snapshot when server revocation checks fail.
-      setReportError(error instanceof Error ? error.message : 'Report unavailable')
-      await loadReports()
+      if (requestSequence === reportOpenSequence.current) {
+        pendingReportId.current = null
+        setReportError(error instanceof Error ? error.message : 'Report unavailable')
+        await loadReports()
+      }
     } finally {
-      setReportBusyId(null)
+      setReportBusyId((current) => current === id ? null : current)
     }
   }
 
@@ -417,12 +446,17 @@ export default function App() {
     setReportBusyId(id)
     try {
       await api.deleteReport(id)
-      if (activeReport?.id === id) setActiveReport(null)
+      if (pendingReportId.current === id) {
+        reportOpenSequence.current += 1
+        pendingReportId.current = null
+      }
+      setActiveReport((current) => current?.id === id ? null : current)
+      setReports((current) => current.filter((report) => report.id !== id))
       await loadReports()
     } catch (error) {
       setReportError(error instanceof Error ? error.message : 'Unable to delete report')
     } finally {
-      setReportBusyId(null)
+      setReportBusyId((current) => current === id ? null : current)
     }
   }
 
@@ -477,6 +511,8 @@ export default function App() {
           <button
             className={view === 'reports' ? 'nav-item active' : 'nav-item'}
             onClick={() => {
+              reportOpenSequence.current += 1
+              pendingReportId.current = null
               setView('reports')
               setActiveReport(null)
               setReportError(null)
