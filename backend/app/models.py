@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -121,3 +121,27 @@ class ExecutionTrace(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class SavedReport(Base):
+    """Read-only persisted snapshot; never a stored executable SQL plan."""
+
+    __tablename__ = "saved_reports"
+    __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_saved_report_owner_message"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    answer_text: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    execution_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

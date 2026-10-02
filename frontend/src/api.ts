@@ -97,6 +97,24 @@ export type DataSourceCreate = {
   enabled: boolean
 }
 
+export type SavedReportSummary = {
+  id: string
+  title: string
+  conversation_id: string
+  message_id: string
+  execution_class: string
+  snapshot_as_of: string
+  created_at: string
+  source_count: number
+  available: boolean
+}
+
+export type SavedReportDetail = SavedReportSummary & {
+  answer: string
+  evidence: Evidence[]
+  is_live: false
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
@@ -113,6 +131,20 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  reports: () => request<SavedReportSummary[]>('/api/reports'),
+  report: (id: string) => request<SavedReportDetail>(`/api/reports/${encodeURIComponent(id)}`),
+  saveReport: (messageId: string) =>
+    request<SavedReportDetail>('/api/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message_id: messageId }),
+    }),
+  deleteReport: async (id: string): Promise<void> => {
+    const response = await fetch(`/api/reports/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error('Could not delete the saved report')
+    // The API intentionally returns 204 No Content.
+  },
+
   conversations: () => request<Conversation[]>('/api/conversations'),
 
   conversation: (id: string) =>

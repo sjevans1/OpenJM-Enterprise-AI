@@ -650,3 +650,55 @@ button { cursor: pointer; }
   .document-row { grid-template-columns: minmax(0,1fr) 36px; }
   .document-row .doc-status { display: none; }
 }
+
+
+/* VS4-A: Saved Reports are historical, non-executable evidence snapshots. */
+.snapshot-actions { margin-top: 10px; }
+.snapshot-actions button {
+  border: 1px solid #b9dce0;
+  background: #effafa;
+  color: #087681;
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 8px;
+}
+.snapshot-actions button:disabled { cursor: default; opacity: .65; }
+.reports-stage { padding: 26px 34px; overflow-y: auto; }
+.reports-explainer {
+  border: 1px solid #d0e6e7;
+  background: #f0fafa;
+  color: #3d6267;
+  border-radius: 12px;
+  padding: 13px 16px;
+  line-height: 1.55;
+  font-size: 12px;
+  margin-bottom: 18px;
+}
+.reports-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 290px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.reports-list, .report-detail {
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  padding: 14px;
+  background: white;
+  min-height: 220px;
+}
+.reports-list-item { display: flex; gap: 5px; align-items: flex-start; border-bottom: 1px solid #e7edef; padding: 7px 0; }
+.reports-list-item:last-child { border-bottom: 0; }
+.report-open { display: flex; flex: 1; flex-direction: column; text-align: left; border: 0; border-radius: 8px; padding: 9px; background: transparent; color: var(--ink); gap: 5px; overflow: hidden; }
+.report-open.selected, .report-open:hover:not(:disabled) { background: #eaf7f7; }
+.report-open:disabled { opacity: .58; cursor: default; }
+.report-open strong { font-size: 13px; font-weight: 700; max-width: 100%; overflow-wrap: anywhere; }
+.report-open small { font-size: 11px; color: #68828a; }
+.report-as-of { border: 1px solid #d6e5e6; border-radius: 9px; color: #406870; background: #f5fafb; font-size: 11px; padding: 10px; margin-bottom: 16px; line-height: 1.6; }
+.report-detail h2 { margin: 0 0 18px; font-size: 22px; }
+.reports-empty { color: var(--muted); font-size: 13px; line-height: 1.7; padding: 22px; }
+@media (max-width: 1000px) {
+  .reports-layout { grid-template-columns: 1fr; }
+  .reports-stage { padding: 18px; }
+}

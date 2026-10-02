@@ -26,9 +26,11 @@ import {
   type Evidence,
   type ExecutionMode,
   type Message,
+  type SavedReportSummary,
+  type SavedReportDetail,
 } from './api'
 
-type View = 'chat' | 'knowledge' | 'data'
+type View = 'chat' | 'knowledge' | 'data' | 'reports'
 
 const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
   { value: 'chat', label: 'Chat' },
@@ -38,7 +40,6 @@ const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
 ]
 
 const futureNav = [
-  { label: 'Reports', icon: Gauge },
   { label: 'Automations', icon: Workflow },
   { label: 'Administration', icon: Settings },
 ]
@@ -170,10 +171,16 @@ export default function App() {
   const [sourceName, setSourceName] = useState('')
   const [sourceEngine, setSourceEngine] = useState<'sqlite' | 'postgresql'>('sqlite')
   const [sourceUri, setSourceUri] = useState('')
+  const [reports, setReports] = useState<SavedReportSummary[]>([])
+  const [activeReport, setActiveReport] = useState<SavedReportDetail | null>(null)
+  const [reportError, setReportError] = useState<string | null>(null)
+  const [reportBusyId, setReportBusyId] = useState<string | null>(null)
   const [selectedMode, setSelectedMode] = useState<ExecutionMode>('chat')
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const reportOpenSequence = useRef(0)
+  const pendingReportId = useRef<string | null>(null)
 
   // Persist selected mode across sessions via localStorage.
   useEffect(() => {
@@ -211,10 +218,34 @@ export default function App() {
     }
   }
 
+  const loadReports = async () => {
+    try {
+      const loaded = await api.reports()
+      setReports(loaded)
+      const pendingId = pendingReportId.current
+      if (pendingId) {
+        const pendingSummary = loaded.find((report) => report.id === pendingId)
+        if (!pendingSummary?.available) {
+          reportOpenSequence.current += 1
+          pendingReportId.current = null
+          setReportBusyId((current) => current === pendingId ? null : current)
+        }
+      }
+      setActiveReport((current) => {
+        if (!current) return null
+        const summary = loaded.find((report) => report.id === current.id)
+        return summary?.available ? current : null
+      })
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : 'Unable to load saved reports')
+    }
+  }
+
   useEffect(() => {
     loadConversations()
     loadDocuments()
     loadDataSources()
+    loadReports()
   }, [])
 
   const openConversation = async (id: string) => {
@@ -368,6 +399,67 @@ export default function App() {
     }
   }
 
+  const saveReport = async (message: Message) => {
+    if (reportBusyId || !message.evidence?.length) return
+    setReportBusyId(message.id)
+    setChatError(null)
+    try {
+      const saved = await api.saveReport(message.id)
+      setReports((current) => [saved, ...current.filter((report) => report.id !== saved.id)])
+      await loadReports()
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : 'Unable to save report')
+    } finally {
+      setReportBusyId(null)
+    }
+  }
+
+  const openReport = async (id: string) => {
+    const requestSequence = ++reportOpenSequence.current
+    pendingReportId.current = id
+    setActiveReport(null)
+    setReportError(null)
+    setReportBusyId(id)
+    try {
+      const report = await api.report(id)
+      if (
+        requestSequence === reportOpenSequence.current
+        && pendingReportId.current === id
+      ) {
+        setActiveReport(report)
+        pendingReportId.current = null
+      }
+    } catch (error) {
+      // Never render a cached snapshot when server revocation checks fail.
+      if (requestSequence === reportOpenSequence.current) {
+        pendingReportId.current = null
+        setReportError(error instanceof Error ? error.message : 'Report unavailable')
+        await loadReports()
+      }
+    } finally {
+      setReportBusyId((current) => current === id ? null : current)
+    }
+  }
+
+  const deleteReport = async (id: string) => {
+    setReportError(null)
+    setReportBusyId(id)
+    try {
+      await api.deleteReport(id)
+      if (pendingReportId.current === id) {
+        reportOpenSequence.current += 1
+        pendingReportId.current = null
+      }
+      setActiveReport((current) => current?.id === id ? null : current)
+      setReports((current) => current.filter((report) => report.id !== id))
+      await loadReports()
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : 'Unable to delete report')
+    } finally {
+      setReportBusyId((current) => current === id ? null : current)
+    }
+  }
+
   const activeExecutionClass = useMemo(() => {
     const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
     return lastAssistant?.execution_class
@@ -414,6 +506,22 @@ export default function App() {
             <Database size={17} />
             Data
             <span className="count-pill">{dataSources.length}</span>
+          </button>
+
+          <button
+            className={view === 'reports' ? 'nav-item active' : 'nav-item'}
+            onClick={() => {
+              reportOpenSequence.current += 1
+              pendingReportId.current = null
+              setView('reports')
+              setActiveReport(null)
+              setReportError(null)
+              loadReports()
+            }}
+          >
+            <Gauge size={17} />
+            Reports
+            <span className="count-pill">{reports.length}</span>
           </button>
 
           <div className="nav-divider" />
@@ -546,6 +654,19 @@ export default function App() {
                         <div className="message-content">{message.content}</div>
                         {message.role === 'assistant' && (
                           <EvidencePanel evidence={message.evidence || []} />
+                        )}
+                        {message.role === 'assistant' && (message.evidence?.length || 0) > 0 && (
+                          <div className="snapshot-actions">
+                            <button
+                              type="button"
+                              disabled={Boolean(reportBusyId) || reports.some((report) => report.message_id === message.id)}
+                              onClick={() => saveReport(message)}
+                            >
+                              {reports.some((report) => report.message_id === message.id)
+                                ? 'Report saved'
+                                : reportBusyId === message.id ? 'Saving…' : 'Save as report'}
+                            </button>
+                          </div>
                         )}
                       </div>
                     </article>
@@ -699,7 +820,71 @@ export default function App() {
               </div>
             </section>
           </>
-        ) : (
+        ) : view === 'reports' ? (
+          <>
+            <header className="workspace-header">
+              <div>
+                <div className="eyebrow">Governed evidence snapshots</div>
+                <h1>Saved Reports</h1>
+              </div>
+              <span className="system-badge"><ShieldCheck size={14} /> Read-only snapshots</span>
+            </header>
+            <section className="reports-stage">
+              <div className="reports-explainer">
+                Reports preserve previously completed, evidence-backed answers.
+                They are not live dashboards and never rerun Knowledge or SQL.
+                Opening a report checks current source availability.
+              </div>
+              {reportError && <div className="error-banner">{reportError}</div>}
+              <div className="reports-layout">
+                <div className="reports-list">
+                  {reports.length === 0 ? (
+                    <div className="reports-empty">
+                      No reports saved yet. In Chat, choose “Save as report” on an evidence-backed answer.
+                    </div>
+                  ) : reports.map((report) => (
+                    <div className="reports-list-item" key={report.id}>
+                      <button
+                        className={activeReport?.id === report.id ? 'report-open selected' : 'report-open'}
+                        disabled={!report.available || reportBusyId === report.id}
+                        onClick={() => openReport(report.id)}
+                      >
+                        <strong>{report.title}</strong>
+                        <small>{new Date(report.snapshot_as_of).toLocaleString()}</small>
+                        <small>{report.available ? `${report.source_count} source(s) · Snapshot` : 'Source unavailable'}</small>
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        type="button"
+                        title="Delete report snapshot"
+                        aria-label="Delete report snapshot"
+                        disabled={Boolean(reportBusyId)}
+                        onClick={() => deleteReport(report.id)}
+                      ><Trash2 size={15} /></button>
+                    </div>
+                  ))}
+                </div>
+                <div className="report-detail">
+                  {activeReport ? (
+                    <>
+                      <div className="report-as-of">
+                        Saved evidence snapshot · As of {new Date(activeReport.snapshot_as_of).toLocaleString()}
+                        <br />Not live · No queries executed when viewing
+                      </div>
+                      <h2>{activeReport.title}</h2>
+                      <div className="message-content">{activeReport.answer}</div>
+                      <EvidencePanel evidence={activeReport.evidence} />
+                    </>
+                  ) : (
+                    <div className="reports-empty">
+                      Select an available report to view its historical answer and citations.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          </>
+) : (
           <>
             <header className="workspace-header">
               <div>

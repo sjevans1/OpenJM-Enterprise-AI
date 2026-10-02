@@ -1,0 +1,473 @@
+"""VS4-A snapshot API security regression tests (isolated SQLite, no LLM)."""
+import json
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.api.reports import settings as report_settings
+from app.db import Base, enable_sqlite_foreign_keys, get_db
+from app.main import app
+from app.models import Conversation, DataSource, Document, Message, SavedReport
+
+
+@pytest.fixture
+async def session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    event.listen(engine.sync_engine, "connect", enable_sqlite_foreign_keys)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        # New SavedReport metadata is created without altering legacy rows.
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as db:
+        yield db
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(session):
+    async def override_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_db
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as http:
+        yield http
+    app.dependency_overrides.clear()
+
+
+async def seed(
+    db,
+    *,
+    owner=None,
+    source_kind="document",
+    role="assistant",
+    class_name=None,
+    evidence_override=None,
+):
+    owner = owner or report_settings.dev_user_id
+    conv = Conversation(user_id=owner, title="Policy check")
+    db.add(conv)
+    await db.flush()
+    document = Document(
+        user_id=owner,
+        original_name="policy.txt",
+        stored_path="/tmp/unit-only-policy",
+        size_bytes=25,
+        status="ready",
+        indexed=True,
+    )
+    source = DataSource(
+        user_id=owner,
+        name="readonly finance",
+        engine="sqlite",
+        connection_secret="unit-only-not-a-real-secret",
+        status="connected",
+        enabled=True,
+        schema_json="[]",
+        authorized_objects_json=json.dumps(["finance"]),
+    )
+    db.add_all([document, source])
+    await db.flush()
+    if evidence_override is not None:
+        evidence = evidence_override
+    elif source_kind == "document":
+        evidence = [{
+            "source_type": "document",
+            "source_id": document.id,
+            "title": "Policy",
+            "passage": "The FY2025 threshold is USD 300.",
+        }]
+    elif source_kind == "hybrid":
+        evidence = [
+            {
+                "source_type": "document",
+                "source_id": document.id,
+                "title": "Policy",
+                "passage": "The FY2025 threshold is USD 300.",
+            },
+            {
+                "source_type": "structured_query",
+                "source_id": source.id,
+                "title": "Finance",
+                "passage": '{"columns":["name"],"rows":[["Delta Co"]],"row_count":1}',
+                "metadata": {"tables": ["finance"], "sql": "SELECT name FROM finance"},
+                "provenance": {
+                    "grounded_parameter": {
+                        "source_id": document.id,
+                        "value": "300",
+                    }
+                },
+            },
+        ]
+    else:
+        evidence = [{
+            "source_type": "structured_query",
+            "source_id": source.id,
+            "title": "Finance",
+            "passage": '{"columns":["revenue"],"rows":[[325]],"row_count":1}',
+            "metadata": {"tables": ["finance"], "sql": "SELECT revenue FROM finance"},
+        }]
+    message = Message(
+        conversation_id=conv.id,
+        role=role,
+        content="Delta Co met the policy threshold.",
+        execution_class=class_name or (
+            "hybrid" if source_kind == "hybrid" else (
+                "structured" if source_kind == "data" else "knowledge"
+            )
+        ),
+        requested_mode="hybrid" if source_kind == "hybrid" else "knowledge",
+        evidence_json=json.dumps(evidence),
+    )
+    db.add(message)
+    await db.commit()
+    return message, document, source
+
+
+@pytest.mark.asyncio
+async def test_save_reopen_snapshot_and_duplicate_is_idempotent(client, session):
+    message, document, source = await seed(session)
+    first = await client.post("/api/reports", json={"message_id": message.id, "title": "Review"})
+    assert first.status_code == 201, first.text
+    saved = first.json()
+    assert saved["is_live"] is False
+    assert saved["answer"] == message.content
+    assert saved["evidence"][0]["source_id"] == document.id
+    assert saved["snapshot_as_of"]
+    again = await client.post(
+        "/api/reports",
+        json={"message_id": message.id, "title": "Changing name is not allowed"},
+    )
+    assert again.status_code == 201
+    assert again.json()["id"] == saved["id"]
+    assert again.json()["title"] == "Review"
+    opened = await client.get("/api/reports/" + saved["id"])
+    assert opened.status_code == 200
+    assert opened.json()["answer"] == message.content
+    rows = (await session.execute(select(SavedReport))).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_structured_report_requires_enabled_source_on_every_read(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+    report_id = created.json()["id"]
+    source.enabled = False
+    await session.commit()
+    response = await client.get("/api/reports/" + report_id)
+    assert response.status_code == 409
+    assert "325" not in response.text
+    listing = await client.get("/api/reports")
+    assert listing.status_code == 200
+    assert listing.json()[0]["available"] is False
+    assert listing.json()[0]["title"] == "Unavailable saved report"
+
+
+@pytest.mark.asyncio
+async def test_structured_table_revocation_denies_snapshot_content(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+
+    source.authorized_objects_json = json.dumps(["still_authorized"])
+    await session.commit()
+
+    detail = await client.get("/api/reports/" + created.json()["id"])
+    assert detail.status_code == 409
+    assert "325" not in detail.text
+    assert "finance" not in detail.text.lower()
+    listing = (await client.get("/api/reports")).json()
+    assert listing[0]["available"] is False
+    assert listing[0]["title"] == "Unavailable saved report"
+
+
+@pytest.mark.asyncio
+async def test_structured_evidence_without_bounded_tables_fails_closed(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    evidence = json.loads(message.evidence_json or "[]")
+    evidence[0]["metadata"] = {}
+    message.evidence_json = json.dumps(evidence)
+    await session.commit()
+
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_deleted_document_blocks_stale_answer(client, session):
+    message, document, source = await seed(session)
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+    await session.delete(document)
+    await session.commit()
+    forbidden = await client.get("/api/reports/" + created.json()["id"])
+    assert forbidden.status_code == 409
+    assert "threshold" not in forbidden.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_hybrid_requires_both_evidence_sources(client, session):
+    message, document, source = await seed(session, source_kind="hybrid")
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 201
+    assert response.json()["source_count"] == 2
+    source.enabled = False
+    await session.commit()
+    forbidden = await client.get("/api/reports/" + response.json()["id"])
+    assert forbidden.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_cross_user_message_cannot_be_saved(client, session):
+    message, document, source = await seed(session, owner="other-user")
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_non_assistant_message_cannot_be_saved(client, session):
+    message, document, source = await seed(session, role="user")
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_general_chat_without_evidence_cannot_be_saved(client, session):
+    message, document, source = await seed(
+        session, class_name="general", evidence_override=[]
+    )
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_no_evidence_cannot_be_saved(client, session):
+    message, document, source = await seed(session, evidence_override=[])
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_equivalent_source_revocation_denies_access(client, session):
+    message, document, source = await seed(session)
+    # The equivalent source ID does not exist or belong to the caller.
+    message.evidence_json = json.dumps([{
+        "source_type": "document",
+        "source_id": document.id,
+        "title": "Policy",
+        "passage": "review threshold is 300",
+        "provenance": {
+            "equivalent_sources": [{"source_id": "revoked-other-source"}]
+        },
+    }])
+    await session.commit()
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_equivalent_source_revoked_after_save_denies_detail(client, session):
+    message, document, source = await seed(session)
+    equivalent = Document(
+        user_id=report_settings.dev_user_id,
+        original_name="equivalent-policy.txt",
+        stored_path="/tmp/unit-only-equivalent-policy",
+        size_bytes=25,
+        status="ready",
+        indexed=True,
+    )
+    session.add(equivalent)
+    await session.flush()
+    evidence = json.loads(message.evidence_json or "[]")
+    evidence[0]["provenance"] = {
+        "equivalent_sources": [{"source_id": equivalent.id}]
+    }
+    message.evidence_json = json.dumps(evidence)
+    await session.commit()
+    saved = await client.post("/api/reports", json={"message_id": message.id})
+    assert saved.status_code == 201
+
+    equivalent.indexed = False
+    await session.commit()
+    blocked = await client.get("/api/reports/" + saved.json()["id"])
+    assert blocked.status_code == 409
+    assert "threshold" not in blocked.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_invalid_evidence_types_rejected(client, session):
+    message, document, source = await seed(session, evidence_override=[{
+        "source_type": "unregistered",
+        "source_id": "opaque",
+        "title": "External",
+        "passage": "unsafe",
+    }])
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_malformed_evidence_rejected(client, session):
+    message, document, source = await seed(session)
+    message.evidence_json = "{not-json"
+    await session.commit()
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_save_request_rejects_client_supplied_snapshot_or_execution_fields(client, session):
+    message, document, source = await seed(session)
+    response = await client.post(
+        "/api/reports",
+        json={
+            "message_id": message.id,
+            "answer": "client-controlled",
+            "evidence": [],
+            "sql": "SELECT secret FROM forbidden",
+            "model": "unauthorized-model",
+            "tool": "structured.query",
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_delete_snapshot_leaves_source_and_message(client, session):
+    message, document, source = await seed(session)
+    saved = await client.post("/api/reports", json={"message_id": message.id})
+    report_id = saved.json()["id"]
+    assert (await client.delete("/api/reports/" + report_id)).status_code == 204
+    assert (await client.delete("/api/reports/" + report_id)).status_code == 204
+    assert (await client.get("/api/reports/" + report_id)).status_code == 404
+    assert (await session.execute(select(Message).where(Message.id == message.id))).scalar_one()
+    assert (await session.execute(select(Document).where(Document.id == document.id))).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_pagination_and_limits(client, session):
+    message, document, source = await seed(session)
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+    assert len((await client.get("/api/reports?limit=1&offset=0")).json()) == 1
+    assert (await client.get("/api/reports?limit=1&offset=1")).json() == []
+    assert (await client.get("/api/reports?limit=1000")).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_deleted_owning_conversation_denies_access(client, session):
+    message, document, source = await seed(session)
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    report_id = created.json()["id"]
+    conversation = (
+        await session.execute(
+            select(Conversation).where(Conversation.id == message.conversation_id)
+        )
+    ).scalar_one()
+    await session.delete(conversation)
+    await session.commit()
+    response = await client.get("/api/reports/" + report_id)
+    assert response.status_code == 404
+    assert "Delta" not in response.text
+    assert (
+        await session.execute(select(SavedReport).where(SavedReport.id == report_id))
+    ).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_nested_policy_provenance_revocation_denies_report(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    message.evidence_json = json.dumps([{
+        "source_type": "structured_query",
+        "source_id": source.id,
+        "title": "Finance",
+        "passage": '{"columns":["revenue"],"rows":[[325]],"row_count":1}',
+        "metadata": {"tables": ["finance"], "sql": "SELECT revenue FROM finance"},
+        "provenance": {
+            "grounded_parameter": {
+                "source_id": document.id,
+                "value": "300",
+                "currency": "USD",
+            }
+        },
+    }])
+    await session.commit()
+    saved = await client.post("/api/reports", json={"message_id": message.id})
+    assert saved.status_code == 201
+    assert saved.json()["source_count"] == 2
+    await session.delete(document)
+    await session.commit()
+    blocked = await client.get("/api/reports/" + saved.json()["id"])
+    assert blocked.status_code == 409
+    assert "325" not in blocked.text
+
+
+@pytest.mark.asyncio
+async def test_blank_report_title_rejected(client, session):
+    message, document, source = await seed(session)
+    response = await client.post(
+        "/api/reports", json={"message_id": message.id, "title": "   "}
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_oversized_answer_rejected(client, session):
+    message, document, source = await seed(session)
+    message.content = "X" * 24001
+    await session.commit()
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_snapshot_is_immutable_when_source_message_changes(client, session):
+    message, document, source = await seed(session)
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+    original = created.json()
+
+    message.content = "A later edited answer"
+    message.evidence_json = json.dumps([{
+        "source_type": "document",
+        "source_id": document.id,
+        "title": "Later evidence",
+        "passage": "A later edited passage",
+    }])
+    await session.commit()
+
+    reopened = await client.get("/api/reports/" + original["id"])
+    assert reopened.status_code == 200
+    assert reopened.json()["answer"] == original["answer"]
+    assert reopened.json()["evidence"] == original["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_another_users_report_id_is_not_readable_or_deletable(client, session):
+    message, document, source = await seed(session, owner="other-user")
+    report = SavedReport(
+        user_id="other-user",
+        conversation_id=message.conversation_id,
+        message_id=message.id,
+        title="Other user's report",
+        answer_text=message.content,
+        evidence_json=message.evidence_json,
+        execution_class="knowledge",
+        requested_mode="knowledge",
+        source_count=1,
+        snapshot_as_of=message.created_at,
+    )
+    session.add(report)
+    await session.commit()
+
+    assert (await client.get("/api/reports/" + report.id)).status_code == 404
+    assert (await client.delete("/api/reports/" + report.id)).status_code == 204
+    assert (
+        await session.execute(select(SavedReport).where(SavedReport.id == report.id))
+    ).scalar_one()
