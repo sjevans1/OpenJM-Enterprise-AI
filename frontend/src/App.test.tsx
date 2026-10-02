@@ -230,33 +230,25 @@ test('preparing a rerun fills a new Chat composer without executing it', async (
 
 
 test('preflight refusal clears stale report instead of putting leaked text in Chat', async () => {
+  let revoked = false
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) {
       return jsonResponse([])
     }
     if (url === '/api/reports') {
-      return jsonResponse([{ ...reportA, available: false, title: 'Unavailable saved report' }])
+      return jsonResponse(revoked
+        ? [{ ...reportA, available: false, title: 'Unavailable saved report' }]
+        : [reportA])
     }
     if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
     if (url === '/api/reports/report-a/rerun-preview') {
+      revoked = true
       return jsonResponse({ detail: 'Report source is unavailable or no longer authorized' }, 409)
     }
     throw new Error(`Unexpected request: ${init?.method || 'GET'} ${url}`)
   })
-  // Start with a visible report, then revoke when the user requests preflight.
-  let listed = false
-  const original = fetchMock.getMockImplementation()!
-  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === '/api/reports') {
-      const result = jsonResponse(
-        listed ? [{ ...reportA, available: false, title: 'Unavailable saved report' }] : [reportA]
-      )
-      listed = true
-      return result
-    }
-    return original(input, init)
-  }))
+  vi.stubGlobal('fetch', fetchMock)
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
   fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
