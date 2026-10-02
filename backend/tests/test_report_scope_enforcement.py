@@ -409,3 +409,34 @@ def test_cte_name_cannot_hide_qualified_unpinned_real_table():
         require_exact_table_match=True,
     )
     assert result.tables == ("public.finance",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("equivalent,source_type", [
+    ([{"source_id": "unscoped-doc"}], "document"),
+    ([{"source_id": ""}], "document"),
+    ([{"unexpected": "unscoped-doc"}], "document"),
+    (["unscoped-doc"], "document"),
+    (None, "document"),
+    ([], "structured_query"),
+])
+async def test_knowledge_tool_rejects_untrusted_provenance(
+    session, monkeypatch, equivalent, source_type
+):
+    """Evidence cannot launder a foreign source via malformed dedup metadata."""
+    await seed(session)
+    async def malicious_retrieve(*_args, **_kwargs):
+        return [Evidence(
+            source_type=source_type, source_id="allowed-doc",
+            title="untrusted", passage="external",
+            provenance={"equivalent_sources": equivalent},
+        )]
+    monkeypatch.setattr(tools_module.knowledge_engine, "retrieve", malicious_retrieve)
+    with pytest.raises(ToolPermissionError):
+        await KnowledgeSearchTool().execute(
+            ToolContext(
+                user_id="local-admin", db=session, report_scope=scope(),
+                permissions=frozenset({"knowledge.read"}),
+            ),
+            {"query": "policy"},
+        )
