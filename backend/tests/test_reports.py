@@ -286,3 +286,48 @@ async def test_deleted_owning_conversation_denies_access(client, session):
     response = await client.get("/api/reports/" + report_id)
     assert response.status_code in (404, 409)
     assert "Delta" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_nested_policy_provenance_revocation_denies_report(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    message.evidence_json = json.dumps([{
+        "source_type": "structured_query",
+        "source_id": source.id,
+        "title": "Finance",
+        "passage": '{"columns":["revenue"],"rows":[[325]],"row_count":1}',
+        "provenance": {
+            "grounded_parameter": {
+                "source_id": document.id,
+                "value": "300",
+                "currency": "USD",
+            }
+        },
+    }])
+    await session.commit()
+    saved = await client.post("/api/reports", json={"message_id": message.id})
+    assert saved.status_code == 201
+    assert saved.json()["source_count"] == 2
+    await session.delete(document)
+    await session.commit()
+    blocked = await client.get("/api/reports/" + saved.json()["id"])
+    assert blocked.status_code == 409
+    assert "325" not in blocked.text
+
+
+@pytest.mark.asyncio
+async def test_blank_report_title_rejected(client, session):
+    message, document, source = await seed(session)
+    response = await client.post(
+        "/api/reports", json={"message_id": message.id, "title": "   "}
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_oversized_answer_rejected(client, session):
+    message, document, source = await seed(session)
+    message.content = "X" * 24001
+    await session.commit()
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
