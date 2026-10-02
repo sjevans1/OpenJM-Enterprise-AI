@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -12,6 +13,19 @@ from app.core.config import get_settings
 
 settings = get_settings()
 engine = create_async_engine(settings.database_url, future=True)
+
+
+def enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+    """Make declared SQLite foreign keys effective on a SQLite connection."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+if settings.database_url.startswith("sqlite"):
+    event.listen(engine.sync_engine, "connect", enable_sqlite_foreign_keys)
+
+
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

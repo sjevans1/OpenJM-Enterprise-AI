@@ -3,11 +3,11 @@ import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.reports import settings as report_settings
-from app.db import Base, get_db
+from app.db import Base, enable_sqlite_foreign_keys, get_db
 from app.main import app
 from app.models import Conversation, DataSource, Document, Message, SavedReport
 
@@ -15,6 +15,7 @@ from app.models import Conversation, DataSource, Document, Message, SavedReport
 @pytest.fixture
 async def session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    event.listen(engine.sync_engine, "connect", enable_sqlite_foreign_keys)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # New SavedReport metadata is created without altering legacy rows.
@@ -67,6 +68,7 @@ async def seed(
         status="connected",
         enabled=True,
         schema_json="[]",
+        authorized_objects_json=json.dumps(["finance"]),
     )
     db.add_all([document, source])
     await db.flush()
@@ -92,6 +94,7 @@ async def seed(
                 "source_id": source.id,
                 "title": "Finance",
                 "passage": '{"columns":["name"],"rows":[["Delta Co"]],"row_count":1}',
+                "metadata": {"tables": ["finance"], "sql": "SELECT name FROM finance"},
                 "provenance": {
                     "grounded_parameter": {
                         "source_id": document.id,
@@ -106,6 +109,7 @@ async def seed(
             "source_id": source.id,
             "title": "Finance",
             "passage": '{"columns":["revenue"],"rows":[[325]],"row_count":1}',
+            "metadata": {"tables": ["finance"], "sql": "SELECT revenue FROM finance"},
         }]
     message = Message(
         conversation_id=conv.id,
@@ -163,6 +167,36 @@ async def test_structured_report_requires_enabled_source_on_every_read(client, s
     assert listing.status_code == 200
     assert listing.json()[0]["available"] is False
     assert listing.json()[0]["title"] == "Unavailable saved report"
+
+
+@pytest.mark.asyncio
+async def test_structured_table_revocation_denies_snapshot_content(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+
+    source.authorized_objects_json = json.dumps(["still_authorized"])
+    await session.commit()
+
+    detail = await client.get("/api/reports/" + created.json()["id"])
+    assert detail.status_code == 409
+    assert "325" not in detail.text
+    assert "finance" not in detail.text.lower()
+    listing = (await client.get("/api/reports")).json()
+    assert listing[0]["available"] is False
+    assert listing[0]["title"] == "Unavailable saved report"
+
+
+@pytest.mark.asyncio
+async def test_structured_evidence_without_bounded_tables_fails_closed(client, session):
+    message, document, source = await seed(session, source_kind="data")
+    evidence = json.loads(message.evidence_json or "[]")
+    evidence[0]["metadata"] = {}
+    message.evidence_json = json.dumps(evidence)
+    await session.commit()
+
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -238,6 +272,35 @@ async def test_equivalent_source_revocation_denies_access(client, session):
 
 
 @pytest.mark.asyncio
+async def test_equivalent_source_revoked_after_save_denies_detail(client, session):
+    message, document, source = await seed(session)
+    equivalent = Document(
+        user_id=report_settings.dev_user_id,
+        original_name="equivalent-policy.txt",
+        stored_path="/tmp/unit-only-equivalent-policy",
+        size_bytes=25,
+        status="ready",
+        indexed=True,
+    )
+    session.add(equivalent)
+    await session.flush()
+    evidence = json.loads(message.evidence_json or "[]")
+    evidence[0]["provenance"] = {
+        "equivalent_sources": [{"source_id": equivalent.id}]
+    }
+    message.evidence_json = json.dumps(evidence)
+    await session.commit()
+    saved = await client.post("/api/reports", json={"message_id": message.id})
+    assert saved.status_code == 201
+
+    equivalent.indexed = False
+    await session.commit()
+    blocked = await client.get("/api/reports/" + saved.json()["id"])
+    assert blocked.status_code == 409
+    assert "threshold" not in blocked.text.lower()
+
+
+@pytest.mark.asyncio
 async def test_invalid_evidence_types_rejected(client, session):
     message, document, source = await seed(session, evidence_override=[{
         "source_type": "unregistered",
@@ -246,6 +309,32 @@ async def test_invalid_evidence_types_rejected(client, session):
         "passage": "unsafe",
     }])
     response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_malformed_evidence_rejected(client, session):
+    message, document, source = await seed(session)
+    message.evidence_json = "{not-json"
+    await session.commit()
+    response = await client.post("/api/reports", json={"message_id": message.id})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_save_request_rejects_client_supplied_snapshot_or_execution_fields(client, session):
+    message, document, source = await seed(session)
+    response = await client.post(
+        "/api/reports",
+        json={
+            "message_id": message.id,
+            "answer": "client-controlled",
+            "evidence": [],
+            "sql": "SELECT secret FROM forbidden",
+            "model": "unauthorized-model",
+            "tool": "structured.query",
+        },
+    )
     assert response.status_code == 422
 
 
@@ -284,8 +373,11 @@ async def test_deleted_owning_conversation_denies_access(client, session):
     await session.delete(conversation)
     await session.commit()
     response = await client.get("/api/reports/" + report_id)
-    assert response.status_code in (404, 409)
+    assert response.status_code == 404
     assert "Delta" not in response.text
+    assert (
+        await session.execute(select(SavedReport).where(SavedReport.id == report_id))
+    ).scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio
@@ -296,6 +388,7 @@ async def test_nested_policy_provenance_revocation_denies_report(client, session
         "source_id": source.id,
         "title": "Finance",
         "passage": '{"columns":["revenue"],"rows":[[325]],"row_count":1}',
+        "metadata": {"tables": ["finance"], "sql": "SELECT revenue FROM finance"},
         "provenance": {
             "grounded_parameter": {
                 "source_id": document.id,
@@ -331,3 +424,50 @@ async def test_oversized_answer_rejected(client, session):
     await session.commit()
     response = await client.post("/api/reports", json={"message_id": message.id})
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_snapshot_is_immutable_when_source_message_changes(client, session):
+    message, document, source = await seed(session)
+    created = await client.post("/api/reports", json={"message_id": message.id})
+    assert created.status_code == 201
+    original = created.json()
+
+    message.content = "A later edited answer"
+    message.evidence_json = json.dumps([{
+        "source_type": "document",
+        "source_id": document.id,
+        "title": "Later evidence",
+        "passage": "A later edited passage",
+    }])
+    await session.commit()
+
+    reopened = await client.get("/api/reports/" + original["id"])
+    assert reopened.status_code == 200
+    assert reopened.json()["answer"] == original["answer"]
+    assert reopened.json()["evidence"] == original["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_another_users_report_id_is_not_readable_or_deletable(client, session):
+    message, document, source = await seed(session, owner="other-user")
+    report = SavedReport(
+        user_id="other-user",
+        conversation_id=message.conversation_id,
+        message_id=message.id,
+        title="Other user's report",
+        answer_text=message.content,
+        evidence_json=message.evidence_json,
+        execution_class="knowledge",
+        requested_mode="knowledge",
+        source_count=1,
+        snapshot_as_of=message.created_at,
+    )
+    session.add(report)
+    await session.commit()
+
+    assert (await client.get("/api/reports/" + report.id)).status_code == 404
+    assert (await client.delete("/api/reports/" + report.id)).status_code == 204
+    assert (
+        await session.execute(select(SavedReport).where(SavedReport.id == report.id))
+    ).scalar_one()

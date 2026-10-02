@@ -83,8 +83,40 @@ def _source_ids(evidence: list[Evidence]) -> tuple[set[str], set[str]]:
     return documents, sources
 
 
+def _structured_tables(evidence: list[Evidence]) -> dict[str, set[str]]:
+    """Return bounded table provenance for every structured source."""
+    by_source: dict[str, set[str]] = {}
+    for item in evidence:
+        if item.source_type != "structured_query":
+            continue
+        tables = item.metadata.get("tables")
+        if (
+            not isinstance(tables, list)
+            or not (1 <= len(tables) <= MAX_EVIDENCE)
+            or any(not isinstance(table, str) or not table.strip() for table in tables)
+        ):
+            raise HTTPException(status_code=422, detail="Invalid structured provenance")
+        normalized = {table.strip().lower() for table in tables}
+        by_source.setdefault(item.source_id, set()).update(normalized)
+    return by_source
+
+
+def _authorized_tables(source: DataSource) -> set[str]:
+    """Read the current explicit structured-object authorization fail closed."""
+    if not source.authorized_objects_json:
+        return set()
+    try:
+        payload = json.loads(source.authorized_objects_json)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(payload, list) or any(not isinstance(item, str) for item in payload):
+        return set()
+    return {item.strip().lower() for item in payload if item.strip()}
+
+
 async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool:
     document_ids, source_ids = _source_ids(evidence)
+    structured_tables = _structured_tables(evidence)
     user_id = settings.dev_user_id  # Replace only via VS5 trusted identity context.
     if document_ids:
         documents = (
@@ -102,7 +134,7 @@ async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool
     if source_ids:
         sources = (
             await db.execute(
-                select(DataSource.id).where(
+                select(DataSource).where(
                     DataSource.id.in_(source_ids),
                     DataSource.user_id == user_id,
                     DataSource.status == "connected",
@@ -111,8 +143,11 @@ async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool
                 )
             )
         ).scalars().all()
-        if set(sources) != source_ids:
+        if {source.id for source in sources} != source_ids:
             return False
+        for source in sources:
+            if not structured_tables.get(source.id, set()).issubset(_authorized_tables(source)):
+                return False
     return True
 
 
