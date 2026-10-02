@@ -10,6 +10,7 @@ from app.db import get_db
 from app.models import DataSource
 from app.schemas import (
     DataSourceCreate,
+    DataSourceCurrencyUpdate,
     DataSourceEnabledUpdate,
     DataSourceOut,
     DataSourceSchemaRefreshResult,
@@ -36,6 +37,7 @@ def _source_out(source: DataSource) -> DataSourceOut:
         id=source.id,
         name=source.name,
         engine=source.engine,
+        revenue_currency=source.revenue_currency,
         status=source.status,
         enabled=source.enabled,
         tables=decode_schema(source.schema_json),
@@ -57,10 +59,8 @@ async def _owned_source(db: AsyncSession, source_id: str) -> DataSource | None:
 
 
 def _safe_error(exc: Exception, secret: str | None = None) -> str:
-    message = str(exc)
-    if secret:
-        message = message.replace(secret, "[redacted]")
-    return message[:1000]
+    """Return a fixed public error message, never driver/credential text."""
+    return "Data source configuration or connection failed"
 
 
 @router.get("", response_model=list[DataSourceOut])
@@ -82,13 +82,14 @@ async def create_source(
         normalized_uri = normalize_connection_uri(request.engine, request.connection_uri)
         encrypted = credential_vault.encrypt(normalized_uri)
     except (DataSourceError, CredentialVaultError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_safe_error(exc)) from exc
 
     source = DataSource(
         user_id=settings.dev_user_id,
         name=request.name.strip(),
         engine=request.engine,
         connection_secret=encrypted,
+        revenue_currency=request.revenue_currency,
         status="untested",
         enabled=request.enabled,
     )
@@ -185,6 +186,23 @@ async def update_source(
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     source.enabled = request.enabled
+    source.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(source)
+    return _source_out(source)
+
+
+@router.patch("/{source_id}/currency", response_model=DataSourceOut)
+async def update_source_currency(
+    source_id: str,
+    request: DataSourceCurrencyUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Operator-declared transaction currency, never inferred from amounts."""
+    source = await _owned_source(db, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    source.revenue_currency = request.revenue_currency
     source.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(source)

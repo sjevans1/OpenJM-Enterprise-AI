@@ -4,7 +4,15 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-ExecutionClass = Literal["general", "knowledge", "structured"]
+ExecutionMode = Literal["chat", "knowledge", "data", "hybrid"]
+
+# Internal execution classes. The user-facing mode (chat/knowledge/data/hybrid)
+# maps onto these authoritative execution classes:
+#   chat      -> general
+#   knowledge -> knowledge
+#   data      -> structured
+#   hybrid    -> hybrid
+ExecutionClass = Literal["general", "knowledge", "structured", "hybrid"]
 
 
 class Evidence(BaseModel):
@@ -24,6 +32,7 @@ class Evidence(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     conversation_id: str | None = None
+    mode: ExecutionMode = "chat"
 
 
 class ChatResponse(BaseModel):
@@ -31,6 +40,7 @@ class ChatResponse(BaseModel):
     message_id: str
     answer: str
     execution_class: ExecutionClass
+    mode: ExecutionMode = "chat"
     evidence: list[Evidence] = Field(default_factory=list)
 
 
@@ -39,6 +49,7 @@ class MessageOut(BaseModel):
     role: str
     content: str
     execution_class: str | None = None
+    requested_mode: ExecutionMode | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     created_at: datetime
 
@@ -76,11 +87,16 @@ class DataSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     engine: DataEngine
     connection_uri: str = Field(min_length=1, max_length=4000)
+    revenue_currency: Literal["USD", "JMD"] | None = None
     enabled: bool = True
 
 
 class DataSourceEnabledUpdate(BaseModel):
     enabled: bool
+
+
+class DataSourceCurrencyUpdate(BaseModel):
+    revenue_currency: Literal["USD", "JMD"] | None
 
 
 class DataColumnSchema(BaseModel):
@@ -110,6 +126,7 @@ class DataSourceOut(BaseModel):
     id: str
     name: str
     engine: DataEngine
+    revenue_currency: Literal["USD", "JMD"] | None = None
     status: str
     enabled: bool
     tables: list[DataTableSchema] = Field(default_factory=list)

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   BrainCircuit,
+  ChevronDown,
   ChevronRight,
   Database,
   FileText,
@@ -23,10 +24,18 @@ import {
   type DataSourceRecord,
   type DocumentRecord,
   type Evidence,
+  type ExecutionMode,
   type Message,
 } from './api'
 
 type View = 'chat' | 'knowledge' | 'data'
+
+const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
+  { value: 'chat', label: 'Chat' },
+  { value: 'knowledge', label: 'Knowledge' },
+  { value: 'data', label: 'Data' },
+  { value: 'hybrid', label: 'Hybrid' },
+]
 
 const futureNav = [
   { label: 'Reports', icon: Gauge },
@@ -99,8 +108,12 @@ function StructuredEvidenceBody({ item }: { item: Evidence }) {
   )
 }
 
-function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
+export function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
   if (!evidence.length) return null
+
+  // Count documents and data evidence separately for independent numbering
+  let docCount = 0
+  let dataCount = 0
 
   return (
     <div className="evidence-stack">
@@ -108,22 +121,35 @@ function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
         <ShieldCheck size={14} />
         Evidence used
       </div>
-      {evidence.map((item, index) => (
-        <details className="evidence-card" key={`${item.source_id}-${index}`}>
-          <summary>
-            <span className="citation-index">{index + 1}</span>
-            <span className="evidence-title">{item.title}</span>
-            <ChevronRight size={14} className="summary-chevron" />
-          </summary>
-          {item.source_type === 'structured_query' ? (
-            <StructuredEvidenceBody item={item} />
-          ) : (
-            <div className="evidence-passage">{item.passage}</div>
-          )}
-        </details>
-      ))}
+      {evidence.map((item, index) => {
+        let citationPrefix: string
+        if (item.source_type === 'document') {
+          docCount++
+          citationPrefix = `[DOC ${docCount}]`
+        } else if (item.source_type === 'structured_query') {
+          dataCount++
+          citationPrefix = `[DATA ${dataCount}]`
+        } else {
+          // Fallback for any other source types
+          citationPrefix = `[EVIDENCE ${index + 1}]`
+        }
+        return (
+          <details className="evidence-card" key={`${item.source_id}-${index}`}>
+            <summary>
+              <span className="citation-index">{citationPrefix}</span>
+              <span className="evidence-title">{item.title}</span>
+              <ChevronRight size={14} className="summary-chevron" />
+            </summary>
+            {item.source_type === 'structured_query' ? (
+              <StructuredEvidenceBody item={item} />
+            ) : (
+              <div className="evidence-passage">{item.passage}</div>
+            )}
+          </details>
+        );
+      })}
     </div>
-  )
+  );
 }
 
 export default function App() {
@@ -144,8 +170,22 @@ export default function App() {
   const [sourceName, setSourceName] = useState('')
   const [sourceEngine, setSourceEngine] = useState<'sqlite' | 'postgresql'>('sqlite')
   const [sourceUri, setSourceUri] = useState('')
+  const [selectedMode, setSelectedMode] = useState<ExecutionMode>('chat')
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Persist selected mode across sessions via localStorage.
+  useEffect(() => {
+    const stored = localStorage.getItem('openjm_chat_mode') as ExecutionMode | null
+    if (stored && MODE_OPTIONS.some((option) => option.value === stored)) {
+      setSelectedMode(stored)
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem('openjm_chat_mode', selectedMode)
+  }, [selectedMode])
 
   const loadConversations = async () => {
     try {
@@ -184,6 +224,13 @@ export default function App() {
     try {
       const conversation = await api.conversation(id)
       setMessages(conversation.messages)
+      // Restore sticky mode from the last assistant turn's requested_mode.
+      const lastAssistant = [...conversation.messages]
+        .reverse()
+        .find((message) => message.role === 'assistant')
+      if (lastAssistant?.requested_mode) {
+        setSelectedMode(lastAssistant.requested_mode)
+      }
     } catch (error) {
       setChatError(error instanceof Error ? error.message : 'Unable to load conversation')
     }
@@ -211,18 +258,20 @@ export default function App() {
       id: `temp-${Date.now()}`,
       role: 'user',
       content: message,
+      requested_mode: selectedMode,
       evidence: [],
       created_at: new Date().toISOString(),
     }
     setMessages((current) => [...current, optimisticUser])
 
     try {
-      const response = await api.chat(message, activeConversationId)
+      const response = await api.chat(message, activeConversationId, selectedMode)
       const assistant: Message = {
         id: response.message_id,
         role: 'assistant',
         content: response.answer,
         execution_class: response.execution_class,
+        requested_mode: response.mode,
         evidence: response.evidence,
         created_at: new Date().toISOString(),
       }
@@ -483,6 +532,11 @@ export default function App() {
                       <div className="message-body">
                         <div className="message-role">
                           {message.role === 'user' ? 'You' : 'OpenJM'}
+                          {message.requested_mode && message.requested_mode !== 'chat' && (
+                            <span className={`mode-badge ${message.requested_mode}`}>
+                              {MODE_OPTIONS.find((option) => option.value === message.requested_mode)?.label || message.requested_mode}
+                            </span>
+                          )}
                           {message.execution_class && (
                             <span className={`inline-route ${message.execution_class}`}>
                               {message.execution_class}
@@ -517,6 +571,29 @@ export default function App() {
             <div className="composer-wrap">
               {chatError && <div className="error-banner">{chatError}</div>}
               <form className="composer" onSubmit={submitMessage}>
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector" onClick={() => setModeMenuOpen(!modeMenuOpen)}>
+                    <span className="mode-label">{MODE_OPTIONS.find((option) => option.value === selectedMode)?.label || 'Chat'}</span>
+                    <ChevronDown size={14} className="mode-chevron" />
+                    {modeMenuOpen && (
+                      <div className="mode-dropdown">
+                        {MODE_OPTIONS.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={selectedMode === option.value ? 'mode-option selected' : 'mode-option'}
+                            onClick={() => {
+                              setSelectedMode(option.value)
+                              setModeMenuOpen(false)
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <textarea
                   ref={inputRef}
                   value={input}

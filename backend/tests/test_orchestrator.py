@@ -43,6 +43,7 @@ async def test_catalog_question_is_deterministic_knowledge(session):
         "What documents do you have loaded?",
         session,
         "local-admin",
+        mode="knowledge",
     )
 
     assert plan.execution_class == "knowledge"
@@ -52,20 +53,30 @@ async def test_catalog_question_is_deterministic_knowledge(session):
 
 
 @pytest.mark.asyncio
-async def test_no_evidence_routes_to_general(session, monkeypatch):
-    async def no_results(name, context, payload):
-        return ToolResult(evidence=[])
-
-    monkeypatch.setattr(orchestrator_module.tool_registry, "execute", no_results)
+async def test_chat_mode_routes_to_general_without_tool_calls(session, monkeypatch):
+    """mode=chat must never invoke Knowledge or Structured tools."""
+    def assert_no_tool_call(name, context, payload):
+        raise AssertionError(
+            f"Chat mode must not invoke tools; called {name}"
+        )
+    monkeypatch.setattr(
+        orchestrator_module.tool_registry, "execute", assert_no_tool_call
+    )
 
     plan = await OpenJMOrchestrator().plan(
-        "What is my name?",
+        "What is the total revenue for Blue Mountain Cafe?",
         session,
         "local-admin",
+        mode="chat",
     )
 
     assert plan.execution_class == "general"
     assert plan.evidence == []
+    assert plan.system_prompt is not None
+    assert plan.direct_answer is None
+    assert plan.requested_mode == "chat"
+    # Verify revenue/metrics words cannot trigger Structured under chat mode.
+    assert plan.execution_class != "structured"
 
 
 @pytest.mark.asyncio
@@ -90,6 +101,7 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
         captured["name"] = name
         captured["permissions"] = context.permissions
         captured["route"] = context.route
+        captured["requested_mode"] = context.requested_mode
         captured["conversation_id"] = context.conversation_id
         captured["payload"] = payload
         return ToolResult(
@@ -114,6 +126,7 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
         session,
         "local-admin",
         conversation_id="conversation-knowledge",
+        mode="knowledge",
     )
 
     assert plan.execution_class == "knowledge"
@@ -123,6 +136,7 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
         "name": "knowledge.search",
         "permissions": frozenset({"knowledge.read"}),
         "route": "knowledge",
+        "requested_mode": "knowledge",
         "conversation_id": "conversation-knowledge",
         "payload": {"query": "When does the loading bay open?"},
     }
@@ -147,6 +161,7 @@ async def test_structured_plan_routes_through_governed_tool(session, monkeypatch
         captured["name"] = name
         captured["permissions"] = context.permissions
         captured["route"] = context.route
+        captured["requested_mode"] = context.requested_mode
         captured["payload"] = payload
         return ToolResult(
             evidence=[
@@ -177,6 +192,7 @@ async def test_structured_plan_routes_through_governed_tool(session, monkeypatch
         session,
         "local-admin",
         conversation_id="conversation-1",
+        mode="data",
     )
 
     assert plan.execution_class == "structured"
@@ -185,6 +201,7 @@ async def test_structured_plan_routes_through_governed_tool(session, monkeypatch
     assert captured["name"] == "structured.query"
     assert "structured.read" in captured["permissions"]
     assert captured["route"] == "structured"
+    assert captured["requested_mode"] == "data"
     assert captured["payload"]["source_id"] == "source-1"
 
 
@@ -206,6 +223,7 @@ async def test_structured_planner_failure_returns_safe_no_execution_answer(
         "Show total customer revenue",
         session,
         "local-admin",
+        mode="data",
     )
 
     assert plan.execution_class == "structured"
@@ -234,6 +252,7 @@ async def test_structured_schema_decline_fails_closed(session, monkeypatch):
         "What is the total payroll bonus this month?",
         session,
         "local-admin",
+        mode="data",
     )
 
     assert plan.execution_class == "structured"

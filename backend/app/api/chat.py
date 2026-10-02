@@ -44,6 +44,7 @@ def _message_out(message: Message) -> MessageOut:
         role=message.role,
         content=message.content,
         execution_class=message.execution_class,
+        requested_mode=message.requested_mode,
         evidence=_decode_evidence(message.evidence_json),
         created_at=message.created_at,
     )
@@ -128,6 +129,7 @@ async def chat(
         db=db,
         user_id=settings.dev_user_id,
         conversation_id=conversation.id,
+        mode=request.mode,
     )
 
     if conversation.title == "New conversation":
@@ -144,6 +146,7 @@ async def chat(
         conversation_id=conversation.id,
         role="user",
         content=request.message,
+        requested_mode=request.mode,
     )
     db.add(user_message)
     conversation.updated_at = datetime.now(timezone.utc)
@@ -167,6 +170,7 @@ async def chat(
         role="assistant",
         content=answer,
         execution_class=plan.execution_class,
+        requested_mode=plan.requested_mode,
         evidence_json=json.dumps(
             [item.model_dump(mode="json") for item in plan.evidence]
         ),
@@ -181,5 +185,6 @@ async def chat(
         message_id=assistant_message.id,
         answer=answer,
         execution_class=plan.execution_class,
+        mode=plan.requested_mode,
         evidence=plan.evidence,
     )

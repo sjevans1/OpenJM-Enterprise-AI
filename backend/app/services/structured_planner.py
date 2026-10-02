@@ -1,7 +1,10 @@
 import json
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
+import sqlglot
+from sqlglot import exp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,6 +226,119 @@ class StructuredPlanner:
         if not isinstance(payload, dict):
             raise StructuredPlannerError("Structured planner JSON must be an object")
         return payload
+
+    @staticmethod
+    def validates_grounded_parameter(
+        plan: StructuredPlan,
+        parameter: dict,
+    ) -> bool:
+        """Require the complete SQL filter to equal the grounded predicate."""
+        field = parameter.get("field")
+        period = parameter.get("period")
+        fiscal_year = parameter.get("fiscal_year")
+        expected_operator = parameter.get("operator")
+        expected_value = parameter.get("value")
+        if (
+            field != "revenue"
+            or period not in {"annual", "monthly", "quarterly"}
+            or expected_operator not in {">", ">="}
+            or not isinstance(expected_value, str)
+            or re.fullmatch(r"\d+(?:\.\d{1,2})?", expected_value) is None
+            or parameter.get("unit") is not None
+            or parameter.get("currency") not in {"USD", "JMD"}
+        ):
+            return False
+
+        if fiscal_year is not None:
+            if not isinstance(fiscal_year, int) or not 2000 <= fiscal_year < 2100:
+                return False
+            expected_column = f"fy{fiscal_year}_{period}_revenue"
+            expected_name = f"fy{fiscal_year}_{period}_revenue_threshold"
+        else:
+            expected_column = f"{period}_revenue"
+            expected_name = f"{period}_revenue_threshold"
+        if parameter.get("name") != expected_name:
+            return False
+
+        try:
+            query = sqlglot.parse_one(plan.sql)
+        except Exception:
+            return False
+        if not isinstance(query, exp.Select):
+            return False
+        if any(
+            isinstance(node, (exp.Or, exp.Not, exp.Between, exp.Subquery, exp.Union))
+            for node in query.walk()
+        ):
+            return False
+        if query.args.get("having") is not None:
+            return False
+        tables_in_query = list(query.find_all(exp.Table))
+        if len(tables_in_query) != 1 or query.args.get("joins"):
+            return False
+
+        where = query.args.get("where")
+        if not isinstance(where, exp.Where):
+            return False
+        comparison_types = {">": exp.GT, ">=": exp.GTE}
+        comparison_type = comparison_types[expected_operator]
+        comparison = where.this
+        if not isinstance(comparison, comparison_type):
+            return False
+
+        all_comparisons = [
+            node
+            for node in query.walk()
+            if isinstance(node, (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.EQ, exp.NEQ))
+        ]
+        if all_comparisons != [comparison]:
+            return False
+
+        column = comparison.this
+        literal = comparison.expression
+        if (
+            not isinstance(column, exp.Column)
+            or column.name.casefold() != expected_column
+            or not isinstance(literal, exp.Literal)
+            or literal.is_string
+        ):
+            return False
+        tables = StructuredPlanner._from_tables(query)
+        if not tables:
+            return False
+        qualified = column.table
+        if qualified and qualified not in tables:
+            return False
+        try:
+            parsed_value = Decimal(str(literal.this))
+        except (InvalidOperation, ValueError):
+            return False
+        if not parsed_value.is_finite():
+            return False
+        try:
+            expected_decimal = Decimal(str(expected_value))
+        except (InvalidOperation, ValueError):
+            return False
+        if (
+            not expected_decimal.is_finite()
+            or expected_decimal <= 0
+            or expected_decimal > Decimal("1000000000000000")
+        ):
+            return False
+        return parsed_value == expected_decimal
+
+    @staticmethod
+    def _from_tables(query: exp.Expression) -> set[str]:
+        """Collect every table alias/name declared in the FROM/JOIN graph."""
+        found = set()
+        for table in query.find_all(exp.Table):
+            found.add(table.name.casefold())
+            alias = table.alias_or_name
+            if alias != table.name:
+                found.add(alias.casefold())
+        for alias in query.find_all(exp.TableAlias):
+            found.add(alias.alias_or_name.casefold())
+        return found
 
     async def plan(
         self,
