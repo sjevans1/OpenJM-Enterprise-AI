@@ -18,6 +18,7 @@ from app.models import (
     ExecutionTrace,
     Message,
     ReportDefinitionVersion,
+    SavedReport,
 )
 
 
@@ -217,10 +218,41 @@ async def test_cross_user_definitions_are_hidden(client, session, valid_schema):
     user, assistant, doc, source = await seed(
         session, owner="another-user", valid_schema=valid_schema
     )
-    # Cross-user report cannot be saved; a made-up identifier is indistinguishable.
-    report_id = "other-users-private-report"
-    assert (await client.get(f"/api/reports/{report_id}/definitions")).status_code == 404
-    assert (await client.post(f"/api/reports/{report_id}/definitions", json={})).status_code == 404
+    foreign_report = SavedReport(
+        user_id="another-user",
+        conversation_id=assistant.conversation_id,
+        message_id=assistant.id,
+        title="Private historical report",
+        answer_text=assistant.content,
+        evidence_json=assistant.evidence_json,
+        execution_class=assistant.execution_class,
+        requested_mode=assistant.requested_mode,
+        source_count=2,
+        snapshot_as_of=assistant.created_at,
+    )
+    session.add(foreign_report)
+    await session.commit()
+    foreign_definition = ReportDefinitionVersion(
+        user_id="another-user",
+        report_id=foreign_report.id,
+        version=1,
+        question_text=user.content,
+        requested_mode="hybrid",
+        pinned_document_ids_json=json.dumps([doc.id]),
+        pinned_source_tables_json=json.dumps({source.id: ["finance"]}),
+    )
+    session.add(foreign_definition)
+    await session.commit()
+    for route in (
+        f"/api/reports/{foreign_report.id}/definitions",
+        f"/api/reports/{foreign_report.id}/definitions/1",
+    ):
+        assert (await client.get(route)).status_code == 404
+    assert (
+        await client.post(
+            f"/api/reports/{foreign_report.id}/definitions", json={}
+        )
+    ).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -250,3 +282,82 @@ async def test_missing_definition_version_not_found(client, session, valid_schem
     user, assistant, doc, source = await seed(session, valid_schema=valid_schema)
     report_id = await create(client, assistant)
     assert (await client.get(f"/api/reports/{report_id}/definitions/2")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_existing_sqlite_schema_upgrade_adds_only_definition_table():
+    """Exercise new schema creation against a legacy VS4-A database layout.
+
+    This is an isolated in-memory copy-equivalent, not the real user's DB.
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    event.listen(engine.sync_engine, "connect", enable_sqlite_foreign_keys)
+    try:
+        legacy = [
+            table for table in Base.metadata.sorted_tables
+            if table.name != "report_definition_versions"
+        ]
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                lambda sync: Base.metadata.create_all(sync, tables=legacy)
+            )
+            names = (
+                await connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            ).scalars().all()
+            assert "saved_reports" in names
+            assert "report_definition_versions" not in names
+
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as db:
+            conversation = Conversation(user_id="local-admin", title="Preserved")
+            db.add(conversation)
+            await db.flush()
+            message = Message(
+                conversation_id=conversation.id, role="assistant",
+                content="Existing immutable answer", execution_class="knowledge",
+                requested_mode="knowledge",
+                evidence_json='[]',
+            )
+            db.add(message)
+            await db.flush()
+            historical = SavedReport(
+                user_id="local-admin",
+                conversation_id=conversation.id,
+                message_id=message.id,
+                title="Existing report",
+                answer_text=message.content,
+                evidence_json=message.evidence_json,
+                execution_class="knowledge",
+                requested_mode="knowledge",
+                source_count=0,
+                snapshot_as_of=message.created_at,
+            )
+            db.add(historical)
+            await db.commit()
+            old_ids = (conversation.id, message.id, historical.id)
+            old_contents = (conversation.title, message.content, historical.answer_text)
+
+        for _ in range(2):
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+
+        async with engine.connect() as connection:
+            tables = (
+                await connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            ).scalars().all()
+            assert "report_definition_versions" in tables
+            assert (
+                await connection.exec_driver_sql("PRAGMA integrity_check")
+            ).scalar_one() == "ok"
+
+        async with maker() as db:
+            assert (await db.get(Conversation, old_ids[0])).title == old_contents[0]
+            assert (await db.get(Message, old_ids[1])).content == old_contents[1]
+            assert (await db.get(SavedReport, old_ids[2])).answer_text == old_contents[2]
+            assert (await db.execute(select(ReportDefinitionVersion))).scalars().all() == []
+    finally:
+        await engine.dispose()
