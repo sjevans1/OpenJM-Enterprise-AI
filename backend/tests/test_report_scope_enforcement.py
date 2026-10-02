@@ -381,3 +381,31 @@ async def test_scoped_executor_rejects_other_schema_before_credential_decrypt(mo
             "SELECT revenue FROM private.finance",
             scoped_tables=frozenset({"public.finance"}),
         )
+
+
+def test_cte_name_cannot_hide_qualified_unpinned_real_table():
+    """CTE 'finance' must not erase the AST reference to private.finance."""
+    from app.services.sql_policy import SQLPolicyError, validate_and_rewrite_sql
+    with pytest.raises(SQLPolicyError, match="unauthorized"):
+        validate_and_rewrite_sql(
+            "WITH finance AS (SELECT revenue FROM public.finance) "
+            "SELECT x.revenue FROM private.finance AS x "
+            "JOIN finance ON finance.revenue = x.revenue",
+            dialect="postgres",
+            allowed_tables={"public.finance"},
+            allowed_columns={"public.finance": {"revenue"}},
+            max_rows=20,
+            require_exact_table_match=True,
+        )
+
+    # Real CTE references remain allowed; only base tables need pin grants.
+    result = validate_and_rewrite_sql(
+        "WITH approved AS (SELECT revenue FROM public.finance) "
+        "SELECT revenue FROM approved",
+        dialect="postgres",
+        allowed_tables={"public.finance"},
+        allowed_columns={"public.finance": {"revenue"}},
+        max_rows=20,
+        require_exact_table_match=True,
+    )
+    assert result.tables == ("public.finance",)
