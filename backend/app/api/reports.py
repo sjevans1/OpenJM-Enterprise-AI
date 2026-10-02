@@ -19,6 +19,7 @@ from app.schemas import (
     SaveReportRequest,
     SavedReportDetail,
     SavedReportSummary,
+    ReportRerunPreview,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -321,6 +322,89 @@ async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Saved report not found")
     return await _detail(db, report)
 
+
+
+
+
+@router.get("/{report_id}/rerun-preview", response_model=ReportRerunPreview)
+async def preview_report_rerun(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Prepare a **user-reviewed** Chat question; never execute anything.
+
+    This is deliberately a GET read-only preflight and not a replay endpoint.
+    Re-validates every referenced source and authorized table at request time.
+    The caller receives only the original server-side question and mode.
+    Actual user submission still runs the existing current governed Chat path.
+    """
+    report = await _owned_report(db, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Saved report not found")
+    if not await _available(db, report):
+        raise HTTPException(
+            status_code=409,
+            detail="Report source is unavailable or no longer authorized",
+        )
+
+    # Guard against transcript edits: an immutable historical answer is not
+    # proof that the mutable original conversation still contains its prompt.
+    pair = (
+        await db.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == report.conversation_id,
+                Message.created_at <= report.snapshot_as_of,
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(2)
+        )
+    ).scalars().all()
+    if len(pair) != 2 or pair[0].id != report.message_id:
+        raise HTTPException(status_code=409, detail="Original question is unavailable")
+    assistant, original_user = pair
+    if assistant.role != "assistant" or original_user.role != "user":
+        raise HTTPException(status_code=409, detail="Original question is unavailable")
+    if assistant.content != report.answer_text or (
+        json.dumps(
+            [item.model_dump(mode="json") for item in _parse_evidence(assistant.evidence_json)],
+            sort_keys=True,
+        )
+        != json.dumps(
+            [item.model_dump(mode="json") for item in _parse_evidence(report.evidence_json)],
+            sort_keys=True,
+        )
+    ):
+        raise HTTPException(status_code=409, detail="Original report transcript has changed")
+
+    # Do not guess an execution mode or infer a replacement route. Refuse
+    # legacy/mismatched rows instead of silently switching to general Chat.
+    mode_for_class = {"knowledge": "knowledge", "structured": "data", "hybrid": "hybrid"}
+    expected = mode_for_class.get(report.execution_class)
+    if expected is None or (
+        report.requested_mode != expected
+        or assistant.requested_mode != expected
+        or assistant.execution_class != report.execution_class
+        or original_user.requested_mode != expected
+    ):
+        raise HTTPException(status_code=409, detail="Original execution mode is unavailable")
+
+    question = original_user.content
+    if not isinstance(question, str) or not question.strip() or len(question) > 12000:
+        raise HTTPException(status_code=409, detail="Original question is unavailable")
+    if len(question.encode("utf-8")) > 48000:
+        raise HTTPException(status_code=409, detail="Original question is unavailable")
+
+    return ReportRerunPreview(
+        report_id=report.id,
+        source_message_id=report.message_id,
+        original_question=question,
+        mode=expected,
+        snapshot_as_of=report.snapshot_as_of,
+        original_source_count=report.source_count,
+        requires_explicit_send=True,
+        executes_queries=False,
+    )
 
 @router.delete("/{report_id}", status_code=204)
 async def delete_report(report_id: str, db: AsyncSession = Depends(get_db)):
