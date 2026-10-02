@@ -112,7 +112,14 @@ def validate_and_rewrite_sql(
             {
                 _table_name(table)
                 for table in query.find_all(exp.Table)
-                if table.name.lower() not in cte_names
+                # An unqualified CTE name can shadow a base table, but a
+                # schema-qualified table such as private.finance is NEVER
+                # the CTE "finance" and must remain subject to authorization.
+                if not (
+                    table.name.lower() in cte_names
+                    and not table.db
+                    and not table.catalog
+                )
             }
         )
     )
