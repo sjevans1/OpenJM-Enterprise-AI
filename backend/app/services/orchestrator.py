@@ -407,12 +407,22 @@ class OpenJMOrchestrator:
         user_id: str,
         conversation_id: str | None = None,
         mode: ExecutionMode = "chat",
+        scope: ReportSourceScope | None = None,
     ) -> ExecutionPlan:
-        """Route the message to the explicitly-selected execution mode.
-
-        No automatic source inference. The mode parameter is authoritative.
-        """
+        """Route with optional server-validated report scope, never from Chat input."""
         execution_class = MODE_TO_EXECUTION_CLASS.get(mode, "general")
+        if scope is not None:
+            if execution_class == "general":
+                raise ReportScopeError("A pinned report cannot route to general Chat")
+            if execution_class in {"knowledge", "hybrid"}:
+                scope.require_documents()
+            if execution_class in {"structured", "hybrid"}:
+                scope.require_sources()
+            # Preflight ALL pins before any retrieval, model planner, or SQL.
+            if scope.document_ids:
+                await self._ready_documents(db, user_id, scope)
+            if scope.source_ids:
+                await self._structured_sources(db, user_id, scope)
 
         if execution_class == "general":
             return ExecutionPlan(
@@ -423,7 +433,8 @@ class OpenJMOrchestrator:
 
         if execution_class == "knowledge":
             evidence, direct_answer = await self._execute_knowledge_search(
-                message, db, user_id, conversation_id, "knowledge"
+                message, db, user_id, conversation_id, "knowledge",
+                **({"scope": scope} if scope is not None else {}),
             )
             return ExecutionPlan(
                 execution_class="knowledge",
@@ -435,7 +446,8 @@ class OpenJMOrchestrator:
 
         if execution_class == "structured":
             return await self._execute_structured_plan(
-                message, db, user_id, conversation_id, "data"
+                message, db, user_id, conversation_id, "data",
+                **({"scope": scope} if scope is not None else {}),
             )
 
         if execution_class == "hybrid":
@@ -443,7 +455,8 @@ class OpenJMOrchestrator:
             # the fail-closed dependent path. Independent multi-part Hybrid
             # questions keep using the proven independent dual-source path.
             return await self._plan_hybrid(
-                message, db, user_id, conversation_id, "hybrid"
+                message, db, user_id, conversation_id, "hybrid",
+                **({"scope": scope} if scope is not None else {}),
             )
 
         # Fallback: conservative general.
@@ -462,6 +475,7 @@ class OpenJMOrchestrator:
         requested_mode: ExecutionMode,
         prefetched_knowledge_evidence: list[Evidence] | None = None,
         prefetched_knowledge_error: str | None = None,
+        scope: ReportSourceScope | None = None,
     ) -> ExecutionPlan:
         """Independent dual-source execution for Hybrid mode.
 
@@ -478,10 +492,13 @@ class OpenJMOrchestrator:
         # dependent gate; independent questions keep the proven path below.
         if is_dependent_revenue_request(message):
             return await self._plan_dependent_hybrid(
-                message, db, user_id, conversation_id, requested_mode, request_id
+                message, db, user_id, conversation_id, requested_mode, request_id,
+                **({"scope": scope} if scope is not None else {}),
             )
 
-        sources = await self._structured_sources(db, user_id)
+        sources = await self._structured_sources(
+            db, user_id, **({"scope": scope} if scope is not None else {})
+        )
         decomposition = self._decompose_hybrid(message, sources)
 
         # --- Knowledge execution ---
@@ -499,6 +516,7 @@ class OpenJMOrchestrator:
                     requested_mode,
                     request_id,
                     "hybrid",
+                    **({"scope": scope} if scope is not None else {}),
                 )
             except ToolError as exc:
                 knowledge_error = str(exc)
@@ -521,6 +539,7 @@ class OpenJMOrchestrator:
             requested_mode,
             request_id,
             "hybrid",
+            **({"scope": scope} if scope is not None else {}),
         )
         if structured_plan.evidence:
             structured_evidence = structured_plan.evidence
@@ -750,6 +769,7 @@ class OpenJMOrchestrator:
         conversation_id: str | None,
         requested_mode: ExecutionMode,
         request_id: str,
+        scope: ReportSourceScope | None = None,
     ) -> ExecutionPlan:
         """Fail-closed dependent hybrid: Knowledge -> Grounded Parameter -> Structured.
 
@@ -774,6 +794,7 @@ class OpenJMOrchestrator:
                 requested_mode,
                 request_id,
                 "hybrid",
+                **({"scope": scope} if scope is not None else {}),
             )
         except ToolError:
             knowledge_error = "Knowledge retrieval could not be completed safely."
@@ -818,6 +839,7 @@ class OpenJMOrchestrator:
                 enhanced_message,
                 db,
                 user_id,
+                **({"scope": scope} if scope is not None else {}),
             )
         except StructuredPlannerError:
             return ExecutionPlan(
@@ -897,7 +919,9 @@ class OpenJMOrchestrator:
         # Revenue thresholds only compare against sources whose currency is
         # explicitly declared and matches the policy. Unknown or mismatched
         # currencies cannot be safely compared; do not execute.
-        sources = await self._structured_sources(db, user_id)
+        sources = await self._structured_sources(
+            db, user_id, **({"scope": scope} if scope is not None else {})
+        )
         matching = [
             source for source in sources if source.id == proposal.source_id
         ]
@@ -965,6 +989,7 @@ class OpenJMOrchestrator:
             requested_mode=requested_mode,
             model_name=settings.model_name,
             db=db,
+            report_scope=scope,
         )
         try:
             result = await tool_registry.execute(
