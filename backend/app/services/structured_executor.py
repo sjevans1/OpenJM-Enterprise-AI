@@ -67,6 +67,8 @@ def _dialect_for(source: DataSource) -> str:
 async def execute_structured_query(
     source: DataSource,
     proposed_sql: str,
+    *,
+    scoped_tables: frozenset[str] | None = None,
 ) -> StructuredQueryResult:
     """Validate and execute one bounded read-only query against an authorized source."""
     settings = get_settings()
@@ -79,6 +81,16 @@ async def execute_structured_query(
 
     allowed_tables = _authorized_tables(source)
     allowed_columns = _allowed_columns(source)
+    if scoped_tables is not None:
+        # This is a strict intersection, never an expansion. The caller must
+        # separately validate the explicit current grants and discovered schema.
+        if not scoped_tables or not scoped_tables.issubset(allowed_tables):
+            raise StructuredExecutionError("Pinned table permission is unavailable")
+        allowed_tables = allowed_tables & scoped_tables
+        allowed_columns = {
+            table: cols for table, cols in allowed_columns.items()
+            if table in allowed_tables
+        }
     if not allowed_tables:
         raise StructuredExecutionError("Data source has no authorized tables")
 
