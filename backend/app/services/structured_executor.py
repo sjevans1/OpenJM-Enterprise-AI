@@ -14,6 +14,7 @@ from app.services.data_sources import (
     create_source_engine,
     decode_schema,
 )
+from app.services.report_scope import source_scope_still_authorized
 from app.services.sql_policy import (
     SQLPolicyDecision,
     SQLPolicyError,
@@ -82,9 +83,12 @@ async def execute_structured_query(
     allowed_tables = _authorized_tables(source)
     allowed_columns = _allowed_columns(source)
     if scoped_tables is not None:
-        # This is a strict intersection, never an expansion. The caller must
-        # separately validate the explicit current grants and discovered schema.
-        if not scoped_tables or not scoped_tables.issubset(allowed_tables):
+        # Defense in depth: do not trust the caller's prior authorization check.
+        # This guard runs before parsing SQL, decrypting credentials or opening
+        # an external connection.
+        if not source_scope_still_authorized(source, scoped_tables):
+            raise StructuredExecutionError("Pinned table permission is unavailable")
+        if not scoped_tables.issubset(allowed_tables):
             raise StructuredExecutionError("Pinned table permission is unavailable")
         allowed_tables = allowed_tables & scoped_tables
         allowed_columns = {
