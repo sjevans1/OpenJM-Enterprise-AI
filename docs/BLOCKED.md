@@ -3,6 +3,32 @@
 No unresolved product blocker recorded at setup. Human review of the setup PR is
 a normal workflow boundary. Hermes has not been launched on the workstation.
 
+## Active blocker
+
+2026-10-02T08:24:56Z / VS4-B2C1 / `milestone/vs4-b2c1-run-history` /
+no PR / `208d329735348ac4cee7b7adfe9a62037bc5b7c2`
+
+Category: missing-access.
+
+Observed failure: `python scripts/pilot_ci_gate.py --main` returned `GitHub
+returned invalid JSON`. Read-only diagnosis found `/home/sjeva/.local/bin/gh`
+is an npm package whose `gh api` command prints a Node `TypeError` to stdout
+while exiting zero. It is not the official GitHub CLI required by the gate.
+
+Attempts: one gate invocation and one read-only direct command diagnosis. No
+product repair was attempted. Direct GitHub REST inspection independently shows
+main run 36983493324 and both required jobs succeeded, but the normative gate
+itself has not passed.
+
+Exact access needed: provide or authorize installation of the official
+authenticated GitHub CLI, with `gh api` support, without changing provider or
+product configuration. Then rerun the main gate.
+
+Work preserved: branch created from verified main; protected `.env`, `data/`,
+`scripts/serve_frontend.py`, and `test-documents/` untouched. Exact next action:
+rerun `python scripts/pilot_ci_gate.py --main`; only after it succeeds, begin
+B2C1 tests and implementation.
+
 ## Verified constraints
 
 - Main's branch API reported `protected: false` on 2026-10-02. CI evidence and
