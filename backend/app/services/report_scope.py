@@ -4,7 +4,11 @@ A scope is always server-owned and must originate from a validated immutable
 ReportDefinitionVersion. It narrows, never enlarges, current authorization.
 No endpoint in B2B invokes scoped execution.
 """
+import json
 from dataclasses import dataclass
+
+from app.models import DataSource
+from app.services.data_sources import decode_schema
 from typing import Mapping
 
 
@@ -30,6 +34,8 @@ class ReportSourceScope:
             or len(source_tables) > 8
         ):
             raise ReportScopeError("Invalid pinned document/source identifiers")
+        if any(not isinstance(identifier, str) for identifier in source_tables):
+            raise ReportScopeError("Invalid structured source identifiers")
         normalized: list[tuple[str, frozenset[str]]] = []
         count = 0
         for identifier, tables in sorted(source_tables.items()):
@@ -70,3 +76,33 @@ class ReportSourceScope:
         if not self.source_tables:
             raise ReportScopeError("No pinned structured sources for Data path")
         return self.source_ids
+
+
+def source_scope_still_authorized(
+    source: DataSource, pinned_tables: frozenset[str]
+) -> bool:
+    """Fail closed on stale schema, disabled sources, or missing explicit grants."""
+    if (
+        not pinned_tables
+        or not source.enabled
+        or source.status != "connected"
+        or not source.schema_json
+        or not source.authorized_objects_json
+    ):
+        return False
+    try:
+        authorized = json.loads(source.authorized_objects_json)
+    except (ValueError, TypeError):
+        return False
+    if (
+        not isinstance(authorized, list)
+        or any(not isinstance(item, str) for item in authorized)
+    ):
+        return False
+    granted = {item.strip().casefold() for item in authorized if item.strip()}
+    discovered = {
+        name.casefold()
+        for table in decode_schema(source.schema_json)
+        for name in (table.name, table.qualified_name)
+    }
+    return pinned_tables.issubset(granted & discovered)
