@@ -185,3 +185,22 @@ class ReportRerunPreview(BaseModel):
     original_source_count: int
     requires_explicit_send: Literal[True] = True
     executes_queries: Literal[False] = False
+
+
+# VS4-B2A: identity and read-only definition of a bounded, source-pinned report.
+# This is deliberately not a report execution request or a SQL template.
+class CreateReportDefinitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReportDefinitionVersionOut(BaseModel):
+    id: str
+    report_id: str
+    version: int
+    question: str
+    mode: Literal["knowledge", "data", "hybrid"]
+    pinned_document_ids: list[str]
+    pinned_source_tables: dict[str, list[str]]
+    created_at: datetime
+    executes_queries: Literal[False] = False
+    runnable: Literal[False] = False
