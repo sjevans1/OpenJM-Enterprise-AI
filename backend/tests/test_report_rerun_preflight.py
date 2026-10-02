@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.api.reports import settings as report_settings
 from app.db import Base, enable_sqlite_foreign_keys, get_db
 from app.main import app
-from app.models import Conversation, DataSource, Document, ExecutionTrace, Message
+from app.models import Conversation, DataSource, Document, ExecutionTrace, Message, SavedReport
 
 
 @pytest.fixture
@@ -167,7 +167,21 @@ async def test_revoked_hybrid_side_fails_closed(client, session):
 @pytest.mark.asyncio
 async def test_unauthorized_report_not_found(client, session):
     assistant, user, document, source, prompt = await seed(session, owner="different-user")
-    assert (await client.get("/api/reports/" + assistant.id + "/rerun-preview")).status_code == 404
+    report = SavedReport(
+        user_id="different-user",
+        conversation_id=assistant.conversation_id,
+        message_id=assistant.id,
+        title="Other account historical report",
+        answer_text=assistant.content,
+        evidence_json=assistant.evidence_json,
+        execution_class="knowledge",
+        requested_mode="knowledge",
+        source_count=1,
+        snapshot_as_of=assistant.created_at,
+    )
+    session.add(report)
+    await session.commit()
+    assert (await client.get(f"/api/reports/{report.id}/rerun-preview")).status_code == 404
 
 
 @pytest.mark.asyncio
