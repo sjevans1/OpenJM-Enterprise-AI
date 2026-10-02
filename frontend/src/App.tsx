@@ -175,6 +175,7 @@ export default function App() {
   const [activeReport, setActiveReport] = useState<SavedReportDetail | null>(null)
   const [reportError, setReportError] = useState<string | null>(null)
   const [reportBusyId, setReportBusyId] = useState<string | null>(null)
+  const [rerunNotice, setRerunNotice] = useState(false)
   const [selectedMode, setSelectedMode] = useState<ExecutionMode>('chat')
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -249,6 +250,7 @@ export default function App() {
   }, [])
 
   const openConversation = async (id: string) => {
+    setRerunNotice(false)
     setView('chat')
     setChatError(null)
     setActiveConversationId(id)
@@ -268,6 +270,7 @@ export default function App() {
   }
 
   const newConversation = () => {
+    setRerunNotice(false)
     setView('chat')
     setActiveConversationId(null)
     setMessages([])
@@ -283,6 +286,7 @@ export default function App() {
 
     setInput('')
     setSending(true)
+    setRerunNotice(false)
     setChatError(null)
 
     const optimisticUser: Message = {
@@ -457,6 +461,38 @@ export default function App() {
       setReportError(error instanceof Error ? error.message : 'Unable to delete report')
     } finally {
       setReportBusyId((current) => current === id ? null : current)
+    }
+  }
+
+  const prepareReportRerun = async (reportId: string) => {
+    if (reportBusyId || sending) return
+    setReportBusyId(reportId)
+    setReportError(null)
+    try {
+      // This GET only checks sources and recovers a persisted question. It must
+      // never execute a query or submit Chat on the user's behalf.
+      const preview = await api.reportRerunPreview(reportId)
+      if (!preview.requires_explicit_send || preview.executes_queries) {
+        throw new Error('Rerun requires an explicit reviewed Chat request')
+      }
+      reportOpenSequence.current += 1
+      pendingReportId.current = null
+      setActiveReport(null)
+      setActiveConversationId(null)
+      setMessages([])
+      setChatError(null)
+      setSelectedMode(preview.mode)
+      setInput(preview.original_question)
+      setRerunNotice(true)
+      setView('chat')
+      requestAnimationFrame(() => inputRef.current?.focus())
+    } catch (error) {
+      // A revoked report must never leave a cached answer visible after 409.
+      setActiveReport(null)
+      setReportError(error instanceof Error ? error.message : 'Rerun preparation unavailable')
+      await loadReports()
+    } finally {
+      setReportBusyId((current) => current === reportId ? null : current)
     }
   }
 
@@ -691,6 +727,13 @@ export default function App() {
 
             <div className="composer-wrap">
               {chatError && <div className="error-banner">{chatError}</div>}
+              {rerunNotice && (
+                <div className="rerun-notice" role="status">
+                  Review this historical report question and its original mode before pressing Send.
+                  Sending starts a NEW governed conversation with current sources and policies;
+                  it will not update the saved snapshot.
+                </div>
+              )}
               <form className="composer" onSubmit={submitMessage}>
                 <div className="mode-selector-wrap">
                   <div className="mode-selector" onClick={() => setModeMenuOpen(!modeMenuOpen)}>
@@ -872,6 +915,19 @@ export default function App() {
                         <br />Not live · No queries executed when viewing
                       </div>
                       <h2>{activeReport.title}</h2>
+                      <button
+                        className="primary-action"
+                        type="button"
+                        disabled={Boolean(reportBusyId) || sending}
+                        onClick={() => prepareReportRerun(activeReport.id)}
+                      >
+                        <ShieldCheck size={15} />
+                        {reportBusyId === activeReport.id ? 'Checking sources…' : 'Prepare rerun in Chat'}
+                      </button>
+                      <p className="report-rerun-explainer">
+                        Nothing executes until you review the question and press Send in Chat.
+                        The saved report remains an unchanged historical snapshot.
+                      </p>
                       <div className="message-content">{activeReport.answer}</div>
                       <EvidencePanel evidence={activeReport.evidence} />
                     </>
