@@ -145,3 +145,24 @@ class SavedReport(Base):
     source_count: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ReportDefinitionVersion(Base):
+    """Immutable scoped definition. No SQL, model output or execution authority."""
+
+    __tablename__ = "report_definition_versions"
+    __table_args__ = (
+        UniqueConstraint("report_id", "version", name="uq_report_definition_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    report_id: Mapped[str] = mapped_column(
+        ForeignKey("saved_reports.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    pinned_document_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    pinned_source_tables_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
