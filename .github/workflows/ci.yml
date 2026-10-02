@@ -114,4 +114,5 @@ jobs:
 
       - name: Record frontend validation
         if: success()
-        run: echo "Frontend: Vitest and TypeScript/Vite production build passed." >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "Frontend: Vitest and TypeScript/Vite production build passed." >> "$GITHUB_STEP_SUMMARY"
