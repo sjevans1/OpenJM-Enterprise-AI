@@ -702,3 +702,24 @@ button { cursor: pointer; }
   .reports-layout { grid-template-columns: 1fr; }
   .reports-stage { padding: 18px; }
 }
+
+
+/* VS4-B1: preflight is informational, never an automatic rerun. */
+.rerun-notice {
+  background: #e7f5f5;
+  border: 1px solid #81c6c9;
+  color: #17565c;
+  border-radius: 9px;
+  padding: 9px 12px;
+  margin: 0 auto 9px;
+  max-width: 860px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.report-rerun-explainer {
+  color: #63767d;
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 640px;
+  margin: 12px 0 19px;
+}
