@@ -70,6 +70,7 @@ def validate_and_rewrite_sql(
     allowed_tables: set[str],
     allowed_columns: dict[str, set[str]] | None = None,
     max_rows: int,
+    require_exact_table_match: bool = False,
 ) -> SQLPolicyDecision:
     """Validate model-proposed SQL and apply the OpenJM read-only row bound."""
     if not sql.strip():
@@ -122,7 +123,10 @@ def validate_and_rewrite_sql(
         table
         for table in referenced_tables
         if table not in normalized_allowed
-        and table.split(".")[-1] not in normalized_allowed
+        and (
+            require_exact_table_match
+            or table.split(".")[-1] not in normalized_allowed
+        )
     ]
     if unauthorized:
         raise SQLPolicyError(
