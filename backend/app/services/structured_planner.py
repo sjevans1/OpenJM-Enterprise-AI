@@ -9,6 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DataSource
+from app.services.report_scope import (
+    ReportSourceScope,
+    ReportScopeError,
+    source_scope_still_authorized,
+)
 from app.services.data_sources import decode_schema
 from app.services.model_gateway import (
     ModelGatewayError,
@@ -103,21 +108,39 @@ class StructuredPlanner:
         self,
         db: AsyncSession,
         user_id: str,
+        scope: ReportSourceScope | None = None,
     ) -> list[DataSource]:
-        result = await db.execute(
-            select(DataSource)
-            .where(
-                DataSource.user_id == user_id,
-                DataSource.enabled.is_(True),
-                DataSource.status == "connected",
-                DataSource.schema_json.is_not(None),
-            )
-            .order_by(DataSource.created_at.asc())
+        if scope is not None:
+            try:
+                allowed_ids = scope.require_sources()
+            except ReportScopeError as exc:
+                raise StructuredPlannerError("No pinned structured sources") from exc
+        else:
+            allowed_ids = None
+        statement = select(DataSource).where(
+            DataSource.user_id == user_id,
+            DataSource.enabled.is_(True),
+            DataSource.status == "connected",
+            DataSource.schema_json.is_not(None),
         )
-        return list(result.scalars().all())
+        if allowed_ids is not None:
+            statement = statement.where(DataSource.id.in_(allowed_ids))
+        result = await db.execute(statement.order_by(DataSource.created_at.asc()))
+        sources = list(result.scalars().all())
+        if scope is not None:
+            if {source.id for source in sources} != allowed_ids:
+                raise StructuredPlannerError("Pinned data source is unavailable")
+            if any(
+                not source_scope_still_authorized(source, scope.tables_for(source.id))
+                for source in sources
+            ):
+                raise StructuredPlannerError("Pinned table authorization or schema changed")
+        return sources
 
     @staticmethod
-    def _schema_terms(sources: list[DataSource]) -> set[str]:
+    def _schema_terms(
+        sources: list[DataSource], scope: ReportSourceScope | None = None
+    ) -> set[str]:
         terms: set[str] = set()
         for source in sources:
             terms.update(
@@ -126,6 +149,11 @@ class StructuredPlanner:
                 if len(token) > 2
             )
             for table in decode_schema(source.schema_json):
+                if scope is not None and (
+                    table.name.casefold() not in scope.tables_for(source.id)
+                    and table.qualified_name.casefold() not in scope.tables_for(source.id)
+                ):
+                    continue
                 terms.update(
                     token
                     for token in re.findall(
@@ -156,7 +184,10 @@ class StructuredPlanner:
             return False
         return cue_hits > 0
 
-    def is_candidate(self, message: str, sources: list[DataSource]) -> bool:
+    def is_candidate(
+        self, message: str, sources: list[DataSource],
+        scope: ReportSourceScope | None = None,
+    ) -> bool:
         if self.looks_structured(message):
             return True
         if not sources:
@@ -170,10 +201,12 @@ class StructuredPlanner:
         # prevents general conversation such as "Hello, my name is Sam" from
         # being misrouted to STRUCTURED while retaining explicit business-cue
         # routing through looks_structured().
-        return len(message_terms & self._schema_terms(sources)) >= 2
+        return len(message_terms & self._schema_terms(sources, scope)) >= 2
 
     @staticmethod
-    def _schema_context(sources: list[DataSource]) -> str:
+    def _schema_context(
+        sources: list[DataSource], scope: ReportSourceScope | None = None
+    ) -> str:
         blocks: list[str] = []
         for source in sources[:8]:
             lines = [
@@ -182,12 +215,23 @@ class StructuredPlanner:
                 f"ENGINE: {source.engine}",
                 "TABLES:",
             ]
+            pinned_tables = scope.tables_for(source.id) if scope is not None else None
             for table in decode_schema(source.schema_json)[:60]:
+                if pinned_tables is not None and (
+                    table.name.casefold() not in pinned_tables
+                    and table.qualified_name.casefold() not in pinned_tables
+                ):
+                    continue
                 column_text = ", ".join(
                     f"{column.name} {column.type}" for column in table.columns[:40]
                 )
                 lines.append(f"- {table.qualified_name}({column_text})")
                 for fk in table.foreign_keys:
+                    if pinned_tables is not None and (
+                        fk.referred_table.casefold() not in pinned_tables
+                        and (fk.referred_schema or "").casefold() + "." + fk.referred_table.casefold() not in pinned_tables
+                    ):
+                        continue
                     lines.append(
                         "  FK "
                         + ",".join(fk.constrained_columns)
@@ -345,9 +389,13 @@ class StructuredPlanner:
         message: str,
         db: AsyncSession,
         user_id: str,
+        scope: ReportSourceScope | None = None,
     ) -> StructuredPlanningResult:
-        sources = await self._sources(db, user_id)
-        if not self.is_candidate(message, sources):
+        sources = (
+            await self._sources(db, user_id)
+            if scope is None else await self._sources(db, user_id, scope)
+        )
+        if not self.is_candidate(message, sources, scope):
             return StructuredPlanningResult(candidate=False)
         if not sources:
             return StructuredPlanningResult(
@@ -370,7 +418,7 @@ class StructuredPlanner:
             "Return ONLY JSON with exactly these keys: "
             '{"use_structured":true|false,"source_id":"...","sql":"...","rationale":"..."}. '
             "When use_structured=false, source_id and sql must be empty strings.\n\n"
-            f"AUTHORIZED SCHEMAS\n{self._schema_context(sources)}\n\n"
+            f"AUTHORIZED SCHEMAS\n{self._schema_context(sources, scope)}\n\n"
             f"USER QUESTION\n{message}"
         )
 

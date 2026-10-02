@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.scope import traverse_scope
 
 
 class SQLPolicyError(RuntimeError):
@@ -38,7 +39,8 @@ class SQLPolicyDecision:
 def _table_name(table: exp.Table) -> str:
     name = table.name.lower()
     db = (table.db or "").lower()
-    return f"{db}.{name}" if db else name
+    catalog = (table.catalog or "").lower()
+    return ".".join(part for part in (catalog, db, name) if part)
 
 
 def _function_name(node: exp.Func) -> str:
@@ -70,6 +72,7 @@ def validate_and_rewrite_sql(
     allowed_tables: set[str],
     allowed_columns: dict[str, set[str]] | None = None,
     max_rows: int,
+    require_exact_table_match: bool = False,
 ) -> SQLPolicyDecision:
     """Validate model-proposed SQL and apply the OpenJM read-only row bound."""
     if not sql.strip():
@@ -88,6 +91,11 @@ def validate_and_rewrite_sql(
     query = statements[0]
     if not isinstance(query, exp.Query):
         raise SQLPolicyError("Only SELECT/CTE read queries are allowed")
+    if require_exact_table_match and any(
+        with_clause.args.get("recursive")
+        for with_clause in query.find_all(exp.With)
+    ):
+        raise SQLPolicyError("Recursive CTEs are not supported in pinned reports")
 
     for node_type in FORBIDDEN_NODES:
         if query.find(node_type):
@@ -101,20 +109,21 @@ def validate_and_rewrite_sql(
             raise SQLPolicyError(f"Function {name} is not allowed")
 
     normalized_allowed = {item.lower() for item in allowed_tables}
-    cte_names = {
-        str(cte.alias_or_name).lower()
-        for cte in query.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
-    referenced_tables = tuple(
-        sorted(
-            {
-                _table_name(table)
-                for table in query.find_all(exp.Table)
-                if table.name.lower() not in cte_names
-            }
-        )
-    )
+    # Resolve physical tables with SQLGlot's lexical source scopes.
+    # A CTE/subquery is a Scope, not a physical exp.Table. A globally
+    # collected CTE-name set can accidentally hide a real table in an outer
+    # or unrelated nested scope when aliases collide.
+    try:
+        query_scopes = traverse_scope(query)
+        referenced_tables = tuple(sorted({
+            _table_name(source)
+            for query_scope in query_scopes
+            for _, source in query_scope.selected_sources.values()
+            if isinstance(source, exp.Table)
+        }))
+    except Exception as exc:
+        raise SQLPolicyError("SQL source scopes could not be validated") from exc
+
     if not referenced_tables:
         raise SQLPolicyError("Structured queries must reference an authorized table")
 
@@ -122,7 +131,10 @@ def validate_and_rewrite_sql(
         table
         for table in referenced_tables
         if table not in normalized_allowed
-        and table.split(".")[-1] not in normalized_allowed
+        and (
+            require_exact_table_match
+            or table.split(".")[-1] not in normalized_allowed
+        )
     ]
     if unauthorized:
         raise SQLPolicyError(
@@ -155,8 +167,6 @@ def validate_and_rewrite_sql(
                 continue
             qualifier = (column.table or "").lower()
             if qualifier:
-                if qualifier in cte_names:
-                    continue
                 canonical = aliases.get(qualifier, qualifier)
                 candidates = (
                     normalized_columns.get(canonical)

@@ -28,6 +28,7 @@ from app.schemas import (
     ReportDefinitionVersionOut,
 )
 from app.services.data_sources import decode_schema
+from app.services.report_scope import ReportSourceScope, ReportScopeError
 
 settings = get_settings()
 router = APIRouter(tags=["report-definitions"])
@@ -280,3 +281,36 @@ async def get_definition(
     if result is None:
         raise HTTPException(status_code=404, detail="Report definition not found")
     return await _definition_out(db, report, result)
+
+
+async def load_validated_definition_scope(
+    db: AsyncSession, report_id: str, version: int, user_id: str
+) -> tuple[str, str, ReportSourceScope]:
+    """Internal future-B2C gateway: never trust pins from browser/old Evidence.
+
+    Re-checks actual owner, current source/table availability, stored immutable
+    scope, historical question and requested mode on every load. Does not run
+    SQL, retrieval or model calls. Not a public execution endpoint.
+    """
+    if user_id != settings.dev_user_id:
+        raise HTTPException(status_code=404, detail="Report definition not found")
+    report = await _owned_available_report(db, report_id)
+    definition = (
+        await db.execute(
+            select(ReportDefinitionVersion).where(
+                ReportDefinitionVersion.report_id == report_id,
+                ReportDefinitionVersion.user_id == user_id,
+                ReportDefinitionVersion.version == version,
+            )
+        )
+    ).scalars().first()
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Report definition not found")
+    verified = await _definition_out(db, report, definition)
+    try:
+        scope = ReportSourceScope.from_pins(
+            verified.pinned_document_ids, verified.pinned_source_tables
+        )
+    except ReportScopeError:
+        raise HTTPException(status_code=409, detail="Saved definition scope is invalid") from None
+    return verified.question, verified.mode, scope

@@ -14,6 +14,7 @@ from app.services.data_sources import (
     create_source_engine,
     decode_schema,
 )
+from app.services.report_scope import source_scope_still_authorized
 from app.services.sql_policy import (
     SQLPolicyDecision,
     SQLPolicyError,
@@ -67,6 +68,8 @@ def _dialect_for(source: DataSource) -> str:
 async def execute_structured_query(
     source: DataSource,
     proposed_sql: str,
+    *,
+    scoped_tables: frozenset[str] | None = None,
 ) -> StructuredQueryResult:
     """Validate and execute one bounded read-only query against an authorized source."""
     settings = get_settings()
@@ -79,6 +82,19 @@ async def execute_structured_query(
 
     allowed_tables = _authorized_tables(source)
     allowed_columns = _allowed_columns(source)
+    if scoped_tables is not None:
+        # Defense in depth: do not trust the caller's prior authorization check.
+        # This guard runs before parsing SQL, decrypting credentials or opening
+        # an external connection.
+        if not source_scope_still_authorized(source, scoped_tables):
+            raise StructuredExecutionError("Pinned table permission is unavailable")
+        if not scoped_tables.issubset(allowed_tables):
+            raise StructuredExecutionError("Pinned table permission is unavailable")
+        allowed_tables = allowed_tables & scoped_tables
+        allowed_columns = {
+            table: cols for table, cols in allowed_columns.items()
+            if table in allowed_tables
+        }
     if not allowed_tables:
         raise StructuredExecutionError("Data source has no authorized tables")
 
@@ -89,6 +105,7 @@ async def execute_structured_query(
             allowed_tables=allowed_tables,
             allowed_columns=allowed_columns,
             max_rows=settings.structured_max_rows,
+            require_exact_table_match=(scoped_tables is not None),
         )
         connection_uri = credential_vault.decrypt(source.connection_secret)
     except (SQLPolicyError, CredentialVaultError) as exc:
