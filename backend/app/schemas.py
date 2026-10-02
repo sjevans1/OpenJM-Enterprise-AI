@@ -146,3 +146,27 @@ class DataSourceTestResult(BaseModel):
 class DataSourceSchemaRefreshResult(BaseModel):
     source: DataSourceOut
     table_count: int
+
+
+# VS4-A: snapshots contain persisted Evidence only, never executable query templates.
+class SaveReportRequest(BaseModel):
+    message_id: str = Field(min_length=1, max_length=36)
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class SavedReportSummary(BaseModel):
+    id: str
+    title: str
+    conversation_id: str
+    message_id: str
+    execution_class: str
+    snapshot_as_of: datetime
+    created_at: datetime
+    source_count: int
+    available: bool
+
+
+class SavedReportDetail(SavedReportSummary):
+    answer: str
+    evidence: list[Evidence]
+    is_live: Literal[False] = False
