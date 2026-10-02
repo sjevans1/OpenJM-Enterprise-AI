@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import DataSource, Document
+from app.services.report_scope import ReportSourceScope, ReportScopeError
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
 from app.services.dependent_hybrid import (
     PolicyThresholdError,
@@ -124,24 +125,32 @@ class OpenJMOrchestrator:
         self,
         db: AsyncSession,
         user_id: str,
+        scope: ReportSourceScope | None = None,
     ) -> list[Document]:
-        result = await db.execute(
-            select(Document)
-            .where(
-                Document.user_id == user_id,
-                Document.status == "ready",
-                Document.indexed.is_(True),
-            )
-            .order_by(Document.created_at.desc())
+        stmt = select(Document).where(
+            Document.user_id == user_id,
+            Document.status == "ready",
+            Document.indexed.is_(True),
         )
-        return list(result.scalars().all())
+        if scope is not None:
+            stmt = stmt.where(Document.id.in_(scope.require_documents()))
+        result = await db.execute(stmt.order_by(Document.created_at.desc()))
+        documents = list(result.scalars().all())
+        if scope is not None and {
+            item.id for item in documents
+        } != scope.document_ids:
+            raise ReportScopeError("Pinned Knowledge document is no longer available")
+        return documents
 
     async def _structured_sources(
         self,
         db: AsyncSession,
         user_id: str,
+        scope: ReportSourceScope | None = None,
     ) -> list[DataSource]:
-        return await structured_planner._sources(db, user_id)
+        if scope is None:
+            return await structured_planner._sources(db, user_id)
+        return await structured_planner._sources(db, user_id, scope)
 
     # ------------------------------------------------------------------
     # Structured path (Data mode + Hybrid structured side)
@@ -156,6 +165,7 @@ class OpenJMOrchestrator:
         requested_mode: ExecutionMode,
         request_id: str | None = None,
         trace_route: str = "structured",
+        scope: ReportSourceScope | None = None,
     ) -> ExecutionPlan:
         """Run the governed Structured planner + query for one message.
 
@@ -165,7 +175,8 @@ class OpenJMOrchestrator:
         """
         try:
             decision: StructuredPlanningResult = await structured_planner.plan(
-                message, db, user_id
+                message, db, user_id,
+                **({"scope": scope} if scope is not None else {}),
             )
         except StructuredPlannerError:
             return ExecutionPlan(
@@ -215,6 +226,7 @@ class OpenJMOrchestrator:
             requested_mode=requested_mode,
             model_name=settings.model_name,
             db=db,
+            report_scope=scope,
         )
         try:
             result = await tool_registry.execute(
@@ -268,6 +280,7 @@ class OpenJMOrchestrator:
         requested_mode: ExecutionMode,
         request_id: str | None = None,
         trace_route: str = "knowledge",
+        scope: ReportSourceScope | None = None,
     ) -> tuple[list[Evidence], str | None]:
         """Run knowledge.search. Returns (evidence, direct_answer).
 
@@ -275,7 +288,9 @@ class OpenJMOrchestrator:
         direct_answer (no vector search). Otherwise runs the governed
         knowledge.search tool.
         """
-        documents = await self._ready_documents(db, user_id)
+        documents = await self._ready_documents(
+            db, user_id, **({"scope": scope} if scope is not None else {})
+        )
         lowered = message.lower().strip()
 
         if any(pattern in lowered for pattern in CATALOG_PATTERNS):
@@ -316,6 +331,7 @@ class OpenJMOrchestrator:
                 requested_mode=requested_mode,
                 model_name=settings.model_name,
                 db=db,
+                report_scope=scope,
             ),
             {"query": message},
         )
