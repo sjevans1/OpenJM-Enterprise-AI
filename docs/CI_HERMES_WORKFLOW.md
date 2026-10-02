@@ -1,5 +1,19 @@
 # Deterministic CI and Hermes handoff — OpenJM Enterprise AI
 
+## Remaining VS4 lifecycle pilot
+
+The approved pilot is indexed in [PLAN.md](PLAN.md), with a compact checkpoint in
+[STATUS.md](STATUS.md), [batch contracts](plan/), and the
+[Hermes execution prompt](../HERMES_VS4_PILOT_PROMPT.md). Those contracts specify
+the required full/local gates for each remaining VS4 PR. CI trigger behavior and
+the independent local Gemma acceptance boundary below remain in force.
+
+The read-only `scripts/pilot_ci_gate.py` checks the current PR revision, workflow,
+named jobs and selected fast/full steps, rather than trusting an overall green
+badge. Its regression tests run inside the existing backend CI suite; there is
+no new recurring workflow or duplicate feature-push trigger. The WSL launcher
+`scripts/pilot_session.sh` supplies a host lock and a bounded session lifetime.
+
 ## Purpose and scope
 
 GitHub Actions owns repeatable checks for `sjevans1/OpenJM-Enterprise-AI`.
