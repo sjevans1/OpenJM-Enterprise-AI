@@ -117,13 +117,11 @@ class StructuredPlanner:
                 raise StructuredPlannerError("No pinned structured sources") from exc
         else:
             allowed_ids = None
-        statement = select(DataSource)
-            .where(
-                DataSource.user_id == user_id,
-                DataSource.enabled.is_(True),
-                DataSource.status == "connected",
-                DataSource.schema_json.is_not(None),
-            )
+        statement = select(DataSource).where(
+            DataSource.user_id == user_id,
+            DataSource.enabled.is_(True),
+            DataSource.status == "connected",
+            DataSource.schema_json.is_not(None),
         )
         if allowed_ids is not None:
             statement = statement.where(DataSource.id.in_(allowed_ids))
