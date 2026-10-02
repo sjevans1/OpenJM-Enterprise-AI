@@ -105,6 +105,7 @@ async def execute_structured_query(
             allowed_tables=allowed_tables,
             allowed_columns=allowed_columns,
             max_rows=settings.structured_max_rows,
+            require_exact_table_match=(scoped_tables is not None),
         )
         connection_uri = credential_vault.decrypt(source.connection_secret)
     except (SQLPolicyError, CredentialVaultError) as exc:
