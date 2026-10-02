@@ -303,3 +303,81 @@ def test_grants_must_be_current_and_explicit():
     assert source_scope_still_authorized(source, frozenset({"finance"}))
     source.authorized_objects_json = None
     assert not source_scope_still_authorized(source, frozenset({"finance"}))
+
+
+def test_scoped_sql_policy_requires_exact_schema_table_identity():
+    """Qualified private.finance must not match an unqualified finance pin."""
+    from app.services.sql_policy import SQLPolicyError, validate_and_rewrite_sql
+    with pytest.raises(SQLPolicyError, match="unauthorized"):
+        validate_and_rewrite_sql(
+            "SELECT revenue FROM private.finance",
+            dialect="postgres",
+            allowed_tables={"finance"},
+            allowed_columns={"finance": {"revenue"}},
+            max_rows=20,
+            require_exact_table_match=True,
+        )
+    authorized = validate_and_rewrite_sql(
+        "SELECT revenue FROM public.finance",
+        dialect="postgres",
+        allowed_tables={"public.finance"},
+        allowed_columns={"public.finance": {"revenue"}},
+        max_rows=20,
+        require_exact_table_match=True,
+    )
+    assert authorized.tables == ("public.finance",)
+
+
+def test_unqualified_ambiguous_and_postgres_scope_pins_are_denied():
+    """Duplicate base-table names cannot become a capability for either schema."""
+    tables = [
+        DataTableSchema(
+            schema_name=prefix, name="finance",
+            qualified_name=f"{prefix}.finance",
+            columns=[
+                DataColumnSchema(name="revenue", type="NUMERIC", nullable=False),
+            ],
+        )
+        for prefix in ("public", "private")
+    ]
+    source = DataSource(
+        id="source", user_id="local-admin", name="Finance",
+        engine="postgresql", connection_secret="not-actual-credentials",
+        status="connected", enabled=True, schema_json=encode_schema(tables),
+        authorized_objects_json=json.dumps(["finance", "public.finance"]),
+    )
+    assert not source_scope_still_authorized(source, frozenset({"finance"}))
+    assert source_scope_still_authorized(source, frozenset({"public.finance"}))
+    assert not source_scope_still_authorized(source, frozenset({"private.finance"}))
+
+
+@pytest.mark.asyncio
+async def test_scoped_executor_rejects_other_schema_before_credential_decrypt(monkeypatch):
+    """Block qualified-name policy bypass even for equal final table names."""
+    from app.services import structured_executor as executor_module
+    tables = [
+        DataTableSchema(
+            schema_name=prefix, name="finance",
+            qualified_name=f"{prefix}.finance",
+            columns=[
+                DataColumnSchema(name="revenue", type="NUMERIC", nullable=False),
+            ],
+        ) for prefix in ("public", "private")
+    ]
+    source = DataSource(
+        id="source", user_id="local-admin", name="Finance",
+        engine="postgresql", connection_secret="not-a-secret",
+        status="connected", enabled=True,
+        schema_json=encode_schema(tables),
+        authorized_objects_json=json.dumps(["public.finance"]),
+    )
+    class ForbiddenVault:
+        def decrypt(self, *_args, **_kwargs):
+            pytest.fail("Credentials must not be decrypted for an unpinned table")
+    monkeypatch.setattr(executor_module, "credential_vault", ForbiddenVault())
+    with pytest.raises(StructuredExecutionError, match="unauthorized"):
+        await execute_structured_query(
+            source,
+            "SELECT revenue FROM private.finance",
+            scoped_tables=frozenset({"public.finance"}),
+        )
