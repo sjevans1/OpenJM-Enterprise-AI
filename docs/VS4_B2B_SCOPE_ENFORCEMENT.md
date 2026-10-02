@@ -99,3 +99,15 @@ These guards operate before source credential decryption and before executing
 any query. Their deterministic security regressions are in
 `backend/tests/test_report_scope_enforcement.py`. None of the changes expose
 a public report execution path.
+
+
+### Scoped CTE limitation
+
+Until SQLGlot lexical CTE-scope resolution is incorporated with separate
+negative security tests, **source-pinned report SQL rejects all CTEs**. This is
+intentional fail-closed behavior: a nested CTE named like a real table could
+otherwise conceal an out-of-scope base table from global-name matching.
+Direct single-statement SELECT/aggregate queries against exactly pinned
+tables remain permitted. Existing unscoped Chat's CTE support is unchanged.
+B2C cannot remove this restriction without replacing the global CTE-name
+check with validated per-query-scope source resolution.
