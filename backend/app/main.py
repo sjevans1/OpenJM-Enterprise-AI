@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, data, knowledge
+from app.api import chat, data, knowledge, reports
 from app.core.config import get_settings
 from app.db import init_db
 
@@ -48,3 +48,5 @@ async def health():
 app.include_router(chat.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
+
+app.include_router(reports.router, prefix="/api")
