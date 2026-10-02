@@ -46,6 +46,7 @@ ALLOWED_FAILURE_CATEGORIES = frozenset(
         "result_too_large",
         "internal",
         "deadline_expired",
+        "revoked",
     }
 )
 
@@ -316,6 +317,98 @@ async def interrupt_expired_runs(*, db: AsyncSession, now: datetime | Callable[[
             status="interrupted",
             finished_at=now,
             failure_category="deadline_expired",
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    return result.rowcount
+
+
+# ---------------------------------------------------------------------------
+# B2C1 history (owner-scoped, read-only) and revocation controls
+# ---------------------------------------------------------------------------
+
+MAX_LIST_LIMIT = 50
+MAX_LIST_OFFSET = 100_000
+
+
+def _parse_trace_ids(raw: str | None) -> list[str]:
+    """Decode the stored trace_ids_json envelope; fail closed on bad data."""
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, list) or any(not isinstance(item, str) for item in payload):
+        return []
+    return payload
+
+
+async def list_report_runs(
+    db: AsyncSession,
+    user_id: str,
+    report_id: str,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[ReportRun]:
+    """Owner-scoped, read-only list of runs for one report.
+
+    Filters on user_id and report_id at the SQL level so a caller can never
+    observe another owner's history.
+    """
+    if not (1 <= limit <= MAX_LIST_LIMIT):
+        raise ValueError("limit out of bounds")
+    if not (0 <= offset <= MAX_LIST_OFFSET):
+        raise ValueError("offset out of bounds")
+    rows = (
+        await db.execute(
+            select(ReportRun)
+            .where(
+                ReportRun.user_id == user_id,
+                ReportRun.report_id == report_id,
+            )
+            .order_by(ReportRun.started_at.desc(), ReportRun.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def get_report_run(db: AsyncSession, user_id: str, run_id: str) -> ReportRun | None:
+    """Owner-scoped single-row fetch; None when the row is absent or not owned."""
+    return (
+        await db.execute(
+            select(ReportRun).where(
+                ReportRun.id == run_id,
+                ReportRun.user_id == user_id,
+            )
+        )
+    ).scalars().first()
+
+
+async def revoke_report_run(db: AsyncSession, run_id: str, user_id: str) -> int:
+    """Owner-initiated cancellation of a *running* run (running -> interrupted).
+
+    Only transitions status='running'; terminal rows are immutable and return 0.
+    Owner-scoping in the WHERE clause prevents cross-tenant revocation. The
+    failure_category 'revoked' signals an owner cancellation rather than an
+    operational failure.
+    """
+    result = await db.execute(
+        update(ReportRun)
+        .where(
+            ReportRun.id == run_id,
+            ReportRun.user_id == user_id,
+            ReportRun.status == "running",
+            ReportRun.finished_at.is_(None),
+        )
+        .values(
+            status="interrupted",
+            finished_at=datetime.now(timezone.utc),
+            failure_category="revoked",
         )
         .execution_options(synchronize_session=False)
     )
