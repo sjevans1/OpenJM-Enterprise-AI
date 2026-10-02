@@ -89,6 +89,12 @@ def validate_and_rewrite_sql(
     query = statements[0]
     if not isinstance(query, exp.Query):
         raise SQLPolicyError("Only SELECT/CTE read queries are allowed")
+    if require_exact_table_match and query.find(exp.CTE):
+        # CTE aliases require lexical scope resolution. The generic validator
+        # has a global alias list; an inner CTE could otherwise conceal an
+        # outer physical table with the same name. Refuse scoped CTEs until
+        # proper scope-aware provenance is implemented and tested.
+        raise SQLPolicyError("CTEs require scope-aware validation for pinned reports")
 
     for node_type in FORBIDDEN_NODES:
         if query.find(node_type):
