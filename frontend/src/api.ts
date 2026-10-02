@@ -115,6 +115,17 @@ export type SavedReportDetail = SavedReportSummary & {
   is_live: false
 }
 
+export type ReportRerunPreview = {
+  report_id: string
+  source_message_id: string
+  original_question: string
+  mode: 'knowledge' | 'data' | 'hybrid'
+  snapshot_as_of: string
+  original_source_count: number
+  requires_explicit_send: true
+  executes_queries: false
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
@@ -133,6 +144,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   reports: () => request<SavedReportSummary[]>('/api/reports'),
   report: (id: string) => request<SavedReportDetail>(`/api/reports/${encodeURIComponent(id)}`),
+  reportRerunPreview: (id: string) => request<ReportRerunPreview>(`/api/reports/${encodeURIComponent(id)}/rerun-preview`),
   saveReport: (messageId: string) =>
     request<SavedReportDetail>('/api/reports', {
       method: 'POST',
