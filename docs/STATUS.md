@@ -4,21 +4,21 @@
 | --- | --- |
 | Repository | sjevans1/OpenJM-Enterprise-AI |
 | Plan revision | vs4-pilot-1 |
-| State | blocked (B2C1 startup prerequisite) |
-| Current batch / phase | VS4-B2C1 / startup and ownership claim |
-| Active writer | Hermes — blocked before product edits |
+| State | correction pass in progress (review findings on cc9ebdc); regression tests + root-cause fixes staged; final CI + evidence pending |
+| Current batch / phase | VS4-B2C1 / PR #28 correction pass: 5 reviewed defects + contract gap + missing acceptance evidence |
+| Active writer | Hermes |
 | Branch | milestone/vs4-b2c1-run-history |
-| PR | None; no product commit or useful draft PR yet |
+| PR | #28 draft (open, mergeable); first TDD commit a30636c; history API cc9ebdc under review |
 | Starting main SHA | 208d329735348ac4cee7b7adfe9a62037bc5b7c2 |
 | Last verified product SHA | 208d329735348ac4cee7b7adfe9a62037bc5b7c2 |
-| Last verified product CI | 36983493324 — full main-push success |
-| Setup CI | PR #27 merged; main run 36983493324 passed both required jobs |
+| Last verified product CI | 36983493324 — full main-push success; `python scripts/pilot_ci_gate.py --main` accepted |
+| Setup CI | PR #27 merged; main gate passed |
 | Setup local check | 23 CI-gate + 3 real-process launcher tests passed; shell syntax and documentation links valid |
-| Current failure fingerprint / repair count | pilot_ci_gate: installed `gh` returns a Node TypeError as stdout with exit 0, causing invalid JSON / 0 |
+| Current failure fingerprint / repair count | none / 0 |
 | Total repair attempts in active batch | 0 |
-| Local product-runtime verification | Not required for setup; B2C2 is not yet verified |
+| Local product-runtime verification | Not required for B2C1 (non-executing batch); read sentinels + upgrade fixtures in pytest |
 | Next batch | VS4-B2C1; docs/plan/VS4_B2C1.md; issue #23 |
-| Next action | Install or provide the official authenticated GitHub CLI, then rerun `python scripts/pilot_ci_gate.py --main`; do not begin product edits before it passes |
+| Next action | Finish correction pass: commit scoped fixes + regressions, run final-head fast PR CI, dispatch ci.yml suite=full, verify with pilot_ci_gate.py, update PR evidence, STOP for review |
 | Hermes models | GPT-5.6 Sol → native free Laguna; preserve current configuration |
 | Product acceptance model | Local Gemma, separate from coding provider |
 
@@ -39,18 +39,18 @@ single retry after recovery and is not a code-repair attempt.
 
 ## Attempt history
 
-2026-10-02T08:24:56Z | VS4-B2C1 startup | `pilot_ci_gate.py --main`
-reported `GitHub returned invalid JSON` | service/access prerequisite, not a code
-repair | the installed `/home/sjeva/.local/bin/gh` is an npm package that prints
-a Node `TypeError` on `gh api` while exiting zero | blocked before product edits;
-direct read-only GitHub API evidence confirms main run 36983493324 passed.
+2026-10-02T08:24:56Z | VS4-B2C1 startup | `pilot_ci_gate.py --main` reported
+`GitHub returned invalid JSON` | service/access prerequisite, not a code repair |
+the `/home/sjeva/.local/bin/gh` path was an npm package shadowing the official CLI |
+replaced with official gh 2.102.0 and authenticated with the existing git-stored token |
+gate now accepted (main run 36983493324, both jobs green).
 
 ## Batch ledger
 
 | Batch | State | PR / evidence |
 | --- | --- | --- |
-| VS4-B2C1 | blocked | Branch claimed from verified main; official GitHub CLI prerequisite missing |
-| VS4-B2C2 | planned | Not started |
+| VS4-B2C1 | correction pass in progress after review of cc9ebdc: 5 defects + revoke-route scope issue; fixes + regressions staged locally; awaiting final CI + PR evidence update (STOP after) |
+| VS4-B2C2 | planned | Not started; intentionally blocked until B2C1 acceptance |
 | VS4-C1 | planned | Not started |
 | VS4-C2 | planned | Not started |
 | VS4-D | planned | Not started |

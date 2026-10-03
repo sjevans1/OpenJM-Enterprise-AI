@@ -206,4 +206,8 @@ async def seed_definition(maker) -> dict:
             "definition_id": definition.id,
             "definition_version": 1,
             "assistant_id": assistant.id,
+            "question": user.content,
+            "requested_mode": "hybrid",
+            "pinned_document_ids": [doc.id],
+            "pinned_source_tables": {src.id: ["finance"]},
         }

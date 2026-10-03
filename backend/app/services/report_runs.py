@@ -12,16 +12,16 @@ Security invariants:
 """
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
-from uuid import UUID
 
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models import ReportDefinitionVersion, ReportRun
+from app.models import ReportDefinitionVersion, ReportRun, SavedReport
 
 settings = get_settings()
 
@@ -55,13 +55,19 @@ class ReportRunConflict(RuntimeError):
     """A reservation token collides with a different intent."""
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
 def _canonical_key(value: str) -> str:
     """Return the canonical UUID string or raise ValueError.
 
-    Rejects uppercase, braces, compact form, whitespace, and any non-UUID input
-    so the key is deterministic across callers and databases.
+    Accepts ONLY the canonical lowercase hyphenated form: rejects braces,
+    urn: prefix, compact form, uppercase, surrounding whitespace and any
+    non-UUID input so the key is deterministic across callers and databases.
     """
-    return str(UUID(value))
+    if not isinstance(value, str) or not _UUID_RE.fullmatch(value):
+        raise ValueError("idempotency key must be a canonical lowercase UUID")
+    return value
 
 
 def _fingerprint(
@@ -158,17 +164,49 @@ async def reserve_report_run(
     canonical_key = _canonical_key(idempotency_key)
 
     # Resolve the trusted definition identity from the source of truth; never
-    # trust caller-supplied pins for identity binding.
+    # trust caller-supplied pins for identity binding. The definition AND its
+    # parent report must belong to the current user, and caller-supplied
+    # intent must exactly match the immutable stored definition.
     scoped = (
         await db.execute(
             select(ReportDefinitionVersion).where(
                 ReportDefinitionVersion.report_id == report_id,
                 ReportDefinitionVersion.version == definition_version,
+                ReportDefinitionVersion.user_id == settings.dev_user_id,
             )
         )
     ).scalar_one_or_none()
     if scoped is None:
         raise ReportRunConflict("Definition not found")
+    owner_report = (
+        await db.execute(
+            select(SavedReport.id).where(
+                SavedReport.id == report_id,
+                SavedReport.user_id == settings.dev_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if owner_report is None:
+        raise ReportRunConflict("Report not found")
+    try:
+        stored_docs = json.loads(scoped.pinned_document_ids_json)
+        stored_tables = json.loads(scoped.pinned_source_tables_json)
+    except (TypeError, ValueError):
+        raise ReportRunConflict("Stored definition scope is unreadable") from None
+    if (
+        requested_mode != scoped.requested_mode
+        or (question or "") != scoped.question_text
+        or sorted(pinned_document_ids or []) != sorted(stored_docs or [])
+        or {
+            key: sorted(value)
+            for key, value in (pinned_source_tables or {}).items()
+        }
+        != {
+            key: sorted(value)
+            for key, value in (stored_tables or {}).items()
+        }
+    ):
+        raise ReportRunConflict("Caller intent does not match the stored definition")
 
     fingerprint = _fingerprint(
         settings.dev_user_id,

@@ -3,31 +3,18 @@
 No unresolved product blocker recorded at setup. Human review of the setup PR is
 a normal workflow boundary. Hermes has not been launched on the workstation.
 
-## Active blocker
+## Previously active blocker (resolved)
 
-2026-10-02T08:24:56Z / VS4-B2C1 / `milestone/vs4-b2c1-run-history` /
-no PR / `208d329735348ac4cee7b7adfe9a62037bc5b7c2`
+2026-10-02T08:24:56Z / VS4-B2C1 startup / `pilot_ci_gate.py --main` returned
+`GitHub returned invalid JSON`. Read-only diagnosis showed `/home/sjeva/.local/bin/gh`
+was an npm package whose `gh api` command prints a Node TypeError to stdout while
+exiting zero, rather than the official GitHub CLI required by the gate.
 
-Category: missing-access.
-
-Observed failure: `python scripts/pilot_ci_gate.py --main` returned `GitHub
-returned invalid JSON`. Read-only diagnosis found `/home/sjeva/.local/bin/gh`
-is an npm package whose `gh api` command prints a Node `TypeError` to stdout
-while exiting zero. It is not the official GitHub CLI required by the gate.
-
-Attempts: one gate invocation and one read-only direct command diagnosis. No
-product repair was attempted. Direct GitHub REST inspection independently shows
-main run 36983493324 and both required jobs succeeded, but the normative gate
-itself has not passed.
-
-Exact access needed: provide or authorize installation of the official
-authenticated GitHub CLI, with `gh api` support, without changing provider or
-product configuration. Then rerun the main gate.
-
-Work preserved: branch created from verified main; protected `.env`, `data/`,
-`scripts/serve_frontend.py`, and `test-documents/` untouched. Exact next action:
-rerun `python scripts/pilot_ci_gate.py --main`; only after it succeeds, begin
-B2C1 tests and implementation.
+Resolved by replacing it with the official GitHub CLI 2.102.0 (checksum verified)
+authenticated with the existing git-stored token, reusing the user's credential
+without exposing it. The maintainer authorized installation of the official CLI.
+The main gate now accepts: `python scripts/pilot_ci_gate.py --main` returned
+accepted=true against main `208d329735348ac4cee7b7adfe9a62037bc5b7c2`, run 36983493324.
 
 ## Verified constraints
 

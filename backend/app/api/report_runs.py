@@ -1,43 +1,43 @@
-"""VS4-B2C1: owner-scoped, read-only report-run history + revocation API.
+"""VS4-B2C1: owner-scoped, read-only report-run history.
 
-Runs are immutable execution-history rows. This router only exposes:
-  * a bounded, owner-scoped list of a report's runs (read-only),
-  * the bounded persisted result envelope of a completed run (read-only),
-  * owner-initiated cancellation of a *running* run (running -> interrupted).
-No route here ever executes a report or writes a terminal result.
+Runs are immutable execution-history rows. This router only exposes bounded,
+owner-scoped READS:
+  * a bounded, owner-scoped list of a report's runs,
+  * the bounded persisted result envelope of a completed run.
+Source availability/authorization is re-checked on every read and fails
+closed with 409, consistently with saved reports and B2A definitions.
+No route here executes a report, cancels a run, or writes a terminal result.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.reports import _available, _owned_report
 from app.core.config import get_settings
 from app.db import get_db
 from app.models import ReportRun, SavedReport
 from app.schemas import ReportRunDetail, ReportRunResult, ReportRunSummary
 from app.services.report_runs import (
+    MAX_RESULT_BYTES,
     _parse_trace_ids,
     get_report_run,
     list_report_runs,
-    revoke_report_run,
 )
 
 router = APIRouter(prefix="/reports", tags=["report-runs"])
 settings = get_settings()
 
-MAX_RESULT_BYTES = 65536
 
-
-async def _owned_report_or_404(db: AsyncSession, report_id: str) -> SavedReport:
-    report = (
-        await db.execute(
-            select(SavedReport).where(
-                SavedReport.id == report_id,
-                SavedReport.user_id == settings.dev_user_id,
-            )
-        )
-    ).scalars().first()
+async def _owned_available_report(db: AsyncSession, report_id: str) -> SavedReport:
+    """Owner check plus current source authorization; 404 then 409 fail closed."""
+    report = await _owned_report(db, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="Saved report not found")
+    if not await _available(db, report):
+        raise HTTPException(
+            status_code=409,
+            detail="Report source is no longer available or authorized",
+        )
     return report
 
 
@@ -60,6 +60,8 @@ async def _detail(db: AsyncSession, run: ReportRun) -> ReportRunDetail:
     summary = _summary(run)
     result = None
     if run.status == "succeeded" and run.result_json is not None:
+        # The read bound is the SAME bound the writer enforced at persistence
+        # time; anything larger in storage is corrupt/injected and refused.
         if len(run.result_json.encode("utf-8")) > MAX_RESULT_BYTES:
             raise HTTPException(status_code=422, detail="Persisted result envelope is oversized")
         try:
@@ -77,7 +79,7 @@ async def list_runs(
     db: AsyncSession = Depends(get_db),
 ):
     """Read-only, owner-scoped history of a saved report's execution runs."""
-    await _owned_report_or_404(db, report_id)
+    await _owned_available_report(db, report_id)
     runs = await list_report_runs(
         db, settings.dev_user_id, report_id, limit=limit, offset=offset
     )
@@ -90,20 +92,7 @@ async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
     run = await get_report_run(db, settings.dev_user_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Report run not found")
+    # Authorization is enforced for the run's own parent report, not the
+    # caller's guess; revoked sources mask the result exactly like saved reports.
+    await _owned_available_report(db, run.report_id)
     return await _detail(db, run)
-
-
-@router.post("/runs/{run_id}/revoke", response_model=ReportRunSummary)
-async def revoke_run(run_id: str, db: AsyncSession = Depends(get_db)):
-    """Owner-initiated cancellation of a running run; terminal runs are immutable."""
-    revoked = await revoke_report_run(db, run_id, settings.dev_user_id)
-    if revoked == 0:
-        run = await get_report_run(db, settings.dev_user_id, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Report run not found")
-        raise HTTPException(
-            status_code=409,
-            detail=f"Report run is {run.status} and cannot be revoked",
-        )
-    refreshed = await get_report_run(db, settings.dev_user_id, run_id)
-    return _summary(refreshed)

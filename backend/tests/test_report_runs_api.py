@@ -36,8 +36,9 @@ async def test_list_report_runs_owner_scoped(file_db):
         await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000100",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -57,8 +58,9 @@ async def test_list_report_runs_excludes_other_reports(file_db):
         await reserve_report_run(
             db=db, report_id=other["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000101",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=other["requested_mode"], question=other["question"],
+            pinned_document_ids=other["pinned_document_ids"],
+            pinned_source_tables=other["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -76,8 +78,9 @@ async def test_list_report_runs_pagination(file_db):
             run, _ = await reserve_report_run(
                 db=db, report_id=fixture["report_id"], definition_version=1,
                 idempotency_key=f"00000000-0000-4000-8000-{i:012d}",
-                requested_mode="hybrid", question="Q", pinned_document_ids=[],
-                pinned_source_tables={}, now=clock,
+                requested_mode=fixture["requested_mode"], question=fixture["question"],
+                pinned_document_ids=fixture["pinned_document_ids"],
+                pinned_source_tables=fixture["pinned_source_tables"], now=clock,
             )
             ids.append(run.id)
         await db.commit()
@@ -98,8 +101,9 @@ async def test_get_report_run_owner_scoped(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000102",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -117,8 +121,9 @@ async def test_get_report_run_rejects_unknown_owner(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000103",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -134,8 +139,9 @@ async def test_revoke_transitions_running_to_interrupted(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000104",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -157,8 +163,9 @@ async def test_revoke_rejects_terminal_run(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000105",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
         await finalize_success(
@@ -185,8 +192,9 @@ async def test_revoke_rejects_foreign_owner(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000106",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -207,8 +215,9 @@ async def test_api_list_runs_for_owner(file_db, client):
         await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000110",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     resp = await client.get(f"/api/reports/{fixture['report_id']}/runs")
@@ -233,8 +242,9 @@ async def test_api_get_run_detail(file_db, client):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000111",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await finalize_success(
             db=db, run_id=run.id, user_id=settings.dev_user_id,
@@ -260,43 +270,23 @@ async def test_api_get_unknown_run_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_api_revoke_running_run(file_db, client):
+async def test_public_revoke_route_absent_in_b2c1(client, file_db):
+    """The public POST /runs/{run_id}/revoke endpoint was an unrecorded
+    addition to the read-only B2C1 scope; it is deferred to B2C2/C1 with a
+    linked plan-change decision. No route may exist in this batch."""
     fixture = await seed_definition(file_db)
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000112",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     resp = await client.post(f"/api/reports/runs/{run.id}/revoke")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "interrupted"
-    assert body["failure_category"] == "revoked"
-
-
-@pytest.mark.asyncio
-async def test_api_revoke_terminal_returns_409(file_db, client):
-    fixture = await seed_definition(file_db)
-    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    assert resp.status_code == 405 or resp.status_code == 404
     async with file_db() as db:
-        run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
-            idempotency_key="00000000-0000-4000-8000-000000000113",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
-        )
-        await db.commit()
-        await finalize_success(
-            db=db, run_id=run.id, user_id=settings.dev_user_id,
-            fingerprint=run.request_fingerprint,
-            answer="A",
-            evidence=[{"source_type": "document", "source_id": "x", "title": "t", "passage": "p"}],
-            structured_result=None, trace_ids=[],
-        )
-        await db.commit()
-    resp = await client.post(f"/api/reports/runs/{run.id}/revoke")
-    assert resp.status_code == 409
+        row = await db.get(ReportRun, run.id)
+    assert row.status == "running", "no public route may mutate run state in B2C1"

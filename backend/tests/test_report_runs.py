@@ -184,6 +184,10 @@ async def seed_definition(maker):
             "definition_id": definition.id,
             "definition_version": 1,
             "assistant_id": assistant.id,
+            "question": user.content,
+            "requested_mode": "hybrid",
+            "pinned_document_ids": [doc.id],
+            "pinned_source_tables": {src.id: ["finance"]},
         }
 
 
@@ -246,10 +250,10 @@ async def test_reservation_returns_canonical_uuid_token(file_db):
             report_id=fixture["report_id"],
             definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000006",
-            requested_mode="hybrid",
-            question="Which customers exceed the FY2025 USD 300 threshold?",
-            pinned_document_ids=[],
-            pinned_source_tables={},
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"],
             now=clock,
         )
     assert owns is True
@@ -286,10 +290,10 @@ async def test_same_key_same_intent_returns_existing_run_without_ownership(file_
             report_id=fixture["report_id"],
             definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000001",
-            requested_mode="hybrid",
-            question="Which customers exceed the FY2025 USD 300 threshold?",
-            pinned_document_ids=[],
-            pinned_source_tables={},
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"],
             now=clock,
         )
         await db.commit()
@@ -299,10 +303,10 @@ async def test_same_key_same_intent_returns_existing_run_without_ownership(file_
             report_id=fixture["report_id"],
             definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000001",
-            requested_mode="hybrid",
-            question="Which customers exceed the FY2025 USD 300 threshold?",
-            pinned_document_ids=[],
-            pinned_source_tables={},
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"],
             now=clock,
         )
         await db.commit()
@@ -321,10 +325,10 @@ async def test_same_key_different_intent_returns_conflict(file_db):
             report_id=fixture["report_id"],
             definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000002",
-            requested_mode="hybrid",
-            question="Which customers exceed the FY2025 USD 300 threshold?",
-            pinned_document_ids=[],
-            pinned_source_tables={},
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"],
             now=clock,
         )
         await db.commit()
@@ -352,13 +356,15 @@ async def test_concurrent_reservation_one_winner(file_db, sessions):
     results = await asyncio.gather(
         reserve_report_run(
             db=a, report_id=fixture["report_id"], definition_version=1,
-            idempotency_key=key, requested_mode="hybrid",
-            question="Q", pinned_document_ids=[], pinned_source_tables={}, now=clock,
+            idempotency_key=key, requested_mode=fixture["requested_mode"],
+            question=fixture["question"], pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         ),
         reserve_report_run(
             db=b, report_id=fixture["report_id"], definition_version=1,
-            idempotency_key=key, requested_mode="hybrid",
-            question="Q", pinned_document_ids=[], pinned_source_tables={}, now=clock,
+            idempotency_key=key, requested_mode=fixture["requested_mode"],
+            question=fixture["question"], pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         ),
     )
     owners = sorted(r.id for r, owns in results if owns)
@@ -380,8 +386,9 @@ async def test_expired_running_becomes_interrupted(file_db):
         run, owns = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000004",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     recovery_clock = datetime(2026, 10, 2, 10, 30, 1, tzinfo=timezone.utc)
@@ -405,8 +412,9 @@ async def test_interrupted_run_rejects_same_token(file_db):
         run, owns = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000005",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
         await interrupt_expired_runs(
@@ -417,8 +425,9 @@ async def test_interrupted_run_rejects_same_token(file_db):
         result, owns = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000005",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     assert result.id == run.id
@@ -438,8 +447,9 @@ async def test_finalize_success_then_rejects_again(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000010",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
         count = await finalize_success(
@@ -470,8 +480,9 @@ async def test_finalize_failure_records_category(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000011",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
         count = await finalize_failure(
@@ -495,8 +506,9 @@ async def test_oversized_result_fails_finalization(file_db):
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000012",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
         oversized_answer = "X" * 24001
@@ -663,8 +675,9 @@ async def test_recover_stale_report_runs_marks_expired(file_db):
         run, owns = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000030",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -687,8 +700,9 @@ async def test_recover_preserves_non_expired_running(file_db):
         run, owns = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000031",
-            requested_mode="hybrid", question="Q", pinned_document_ids=[],
-            pinned_source_tables={}, now=clock,
+            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
         )
         await db.commit()
     # recovery "now" is BEFORE the deadline -> nothing should change
