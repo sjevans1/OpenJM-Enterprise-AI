@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
@@ -25,7 +26,6 @@ def enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
 if settings.database_url.startswith("sqlite"):
     event.listen(engine.sync_engine, "connect", enable_sqlite_foreign_keys)
 
-
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -33,14 +33,68 @@ class Base(DeclarativeBase):
     pass
 
 
+_REPORT_RUN_IMMUTABILITY_TRIGGERS_SQL = [
+    """CREATE TRIGGER trg_report_runs_protect_identity
+BEFORE UPDATE OF user_id, report_id, definition_id, definition_version,
+requested_mode, idempotency_key, request_fingerprint, started_at, deadline_at
+ON report_runs FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'report run identity fields are immutable')
+    WHERE NEW.user_id IS NOT OLD.user_id
+       OR NEW.report_id IS NOT OLD.report_id
+       OR NEW.definition_id IS NOT OLD.definition_id
+       OR NEW.definition_version IS NOT OLD.definition_version
+       OR NEW.requested_mode IS NOT OLD.requested_mode
+       OR NEW.idempotency_key IS NOT OLD.idempotency_key
+       OR NEW.request_fingerprint IS NOT OLD.request_fingerprint
+       OR NEW.started_at IS NOT OLD.started_at
+       OR NEW.deadline_at IS NOT OLD.deadline_at;
+END;""",
+    """CREATE TRIGGER trg_report_runs_terminal_immutable
+BEFORE UPDATE ON report_runs FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'terminal report runs are immutable')
+    WHERE OLD.status IN ('succeeded','failed','interrupted')
+       OR (NEW.status != 'running' AND OLD.status != 'running');
+    SELECT RAISE(ABORT, 'status regression is not permitted')
+    WHERE OLD.status = 'succeeded' AND NEW.status IN ('running','failed','interrupted')
+       OR OLD.status = 'failed' AND NEW.status IN ('running','succeeded','interrupted')
+       OR OLD.status = 'interrupted' AND NEW.status IN ('running','succeeded','failed');
+END;""",
+]
+
+_REPORT_RUN_TRIGGER_NAMES = ("trg_report_runs_protect_identity", "trg_report_runs_terminal_immutable")
+
+
+def _production_engine():
+    """Return the module-level production engine (indirection for tests)."""
+    return engine
+
+
+async def install_report_run_triggers(conn) -> None:
+    """Drop and recreate the immutability triggers.
+
+    DROP + CREATE (not IF NOT EXISTS) so a corrected trigger body replaces
+    the defective trigger already deployed in an upgraded database.
+    """
+    for name in _REPORT_RUN_TRIGGER_NAMES:
+        await conn.exec_driver_sql(f"DROP TRIGGER IF EXISTS {name}")
+    for statement in _REPORT_RUN_IMMUTABILITY_TRIGGERS_SQL:
+        await conn.exec_driver_sql(statement)
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # aiosqlite executes one statement at a time; install_report_run_triggers
+        # drop-and-recreates each trigger so upgrades replace old bodies.
+        await install_report_run_triggers(conn)
     # Additive, idempotent upgrades preserve all rows from older deployments.
     await _migrate_add_requested_mode(conn=None)
     await _migrate_add_revenue_currency()
+    await _recover_stale_report_runs()
 
 
 async def _migrate_add_requested_mode(conn=None) -> None:
@@ -85,6 +139,41 @@ async def _migrate_add_revenue_currency() -> None:
             await conn.exec_driver_sql(
                 "ALTER TABLE data_sources ADD COLUMN revenue_currency VARCHAR(3) NULL"
             )
+
+
+async def _recover_stale_report_runs(*, engine=None) -> int:
+    """Mark expired ``running`` runs as ``interrupted`` at startup.
+
+    Single conditional update; never calls the model, retrieval, SQL engine or
+    resumes work. Runs inside ``engine.begin()`` so the interruption is
+    transactionally COMMITTED, not left pending on a rolled-back connection.
+    Safe to run repeatedly. Skipped for non-SQLite targets or when the
+    report_runs table does not exist yet. Returns the affected row count.
+    """
+    target_engine = engine if engine is not None else _production_engine()
+    if not settings.database_url.startswith("sqlite") and engine is None:
+        return 0
+    if not target_engine.url.database or target_engine.url.database == ":memory:":
+        # file-backed (or temporary file) SQLite only; shared in-memory is
+        # per-engine and cannot carry stale state across restarts anyway.
+        return 0
+    async with target_engine.connect() as conn:
+        tables = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='report_runs'"
+        )
+        if tables.first() is None:
+            return 0
+    # The ORM persists datetimes as 'YYYY-MM-DD HH:MM:SS.ffffff' text; compare
+    # using the exact same lexical format the writer used.
+    now = datetime.now(timezone.utc).isoformat(sep=" ", timespec="microseconds")
+    async with target_engine.begin() as conn:
+        result = await conn.exec_driver_sql(
+            "UPDATE report_runs SET status='interrupted',"
+            " failure_category='deadline_expired',"
+            " finished_at=? WHERE status='running' AND deadline_at <= ?",
+            (now, now),
+        )
+        return result.rowcount
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
