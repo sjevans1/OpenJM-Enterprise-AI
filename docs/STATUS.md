@@ -1,26 +1,24 @@
 # VS4 pilot checkpoint
 
-| Field | Current value |
-| --- | --- |
-| Repository | sjevans1/OpenJM-Enterprise-AI |
-| Plan revision | vs4-pilot-1 |
-| State | correction pass in progress (review findings on cc9ebdc); regression tests + root-cause fixes staged; final CI + evidence pending |
-| Current batch / phase | VS4-B2C1 / PR #28 correction pass: 5 reviewed defects + contract gap + missing acceptance evidence |
-| Active writer | Hermes |
-| Branch | milestone/vs4-b2c1-run-history |
-| PR | #28 draft (open, mergeable); first TDD commit a30636c; history API cc9ebdc under review |
-| Starting main SHA | 208d329735348ac4cee7b7adfe9a62037bc5b7c2 |
-| Last verified product SHA | 208d329735348ac4cee7b7adfe9a62037bc5b7c2 |
-| Last verified product CI | 36983493324 — full main-push success; `python scripts/pilot_ci_gate.py --main` accepted |
-| Setup CI | PR #27 merged; main gate passed |
-| Setup local check | 23 CI-gate + 3 real-process launcher tests passed; shell syntax and documentation links valid |
-| Current failure fingerprint / repair count | none / 0 |
-| Total repair attempts in active batch | 0 |
-| Local product-runtime verification | Not required for B2C1 (non-executing batch); read sentinels + upgrade fixtures in pytest |
-| Next batch | VS4-B2C1; docs/plan/VS4_B2C1.md; issue #23 |
-| Next action | Finish correction pass: commit scoped fixes + regressions, run final-head fast PR CI, dispatch ci.yml suite=full, verify with pilot_ci_gate.py, update PR evidence, STOP for review |
-| Hermes models | GPT-5.6 Sol → native free Laguna; preserve current configuration |
-| Product acceptance model | Local Gemma, separate from coding provider |
+|| Field | Current value |
+| --- | --- | --- |
+|| Repository | sjevans1/OpenJM-Enterprise-AI |
+|| Plan revision | vs4-pilot-1 |
+|| State | correction pass committed and pushed; fast PR CI green, full dispatch green, pilot_ci_gate accepted; STOP for review |
+|| Current batch / phase | VS4-B2C1 / PR #28 correction pass: 5 reviewed defects + contract gap + acceptance evidence |
+|| Active writer | Hermes |
+|| Branch | milestone/vs4-b2c1-run-history |
+|| PR | #28 (open, mergeable); final commit 9d5482c (evidence) on 982dc01 (corrections + regressions) |
+|| Starting main SHA | 208d329735348ac4cee7b7adfe9a62037bc5b7c2 |
+|| Last verified product SHA | 9d5482cd065cad5e1ae62218b1c2fb97584fc65b |
+|| Last verified product CI | Fast PR run 37080887812 (success); full dispatch 37081272016 (success, Full backend step ran) |
+|| Setup CI | PR #27 merged; main gate passed |
+|| Setup local check | 23 CI-gate + 3 real-process launcher tests passed; shell syntax and documentation links valid |
+|| Current failure fingerprint / repair count | none / 0 |
+|| Total repair attempts in active batch | 0 |
+|| Local product-runtime verification | Not required for B2C1 (non-executing batch); 412 full + 410 fast pytest + 28 regressions + ruff clean + frontend 6/6 |
+|| Next batch | VS4-B2C1 awaiting review; VS4-B2C2 planned |
+|| Next action | Awaiting review of PR #28 (STOP at review boundary). Do NOT begin B2C2 or merge |
 
 ## Checkpoint protocol
 
@@ -45,11 +43,19 @@ the `/home/sjeva/.local/bin/gh` path was an npm package shadowing the official C
 replaced with official gh 2.102.0 and authenticated with the existing git-stored token |
 gate now accepted (main run 36983493324, both jobs green).
 
+2026-10-02 | VS4-B2C1 correction pass | 5 defects reproduced from review of cc9ebdc |
+0 in-batch repairs | fixes applied to api/report_runs.py, app/db.py,
+app/services/report_runs.py, docs/pilot/REVIEW.md; regressions added in
+tests/test_report_run_regressions.py | committed 982dc01 + 9d5482c (evidence);
+fast PR CI 37080887812 success, full dispatch 37081272016 success,
+pilot_ci_gate accepted=true; existing 59 report-run tests updated to the
+trusted-intent contract.
+
 ## Batch ledger
 
 | Batch | State | PR / evidence |
 | --- | --- | --- |
-| VS4-B2C1 | correction pass in progress after review of cc9ebdc: 5 defects + revoke-route scope issue; fixes + regressions staged locally; awaiting final CI + PR evidence update (STOP after) |
+| VS4-B2C1 | committed (982dc01 + 9d5482c); fast+full CI green; pilot_ci_gate accepted; awaiting review (STOP at review boundary) | PR #28 |
 | VS4-B2C2 | planned | Not started; intentionally blocked until B2C1 acceptance |
 | VS4-C1 | planned | Not started |
 | VS4-C2 | planned | Not started |
