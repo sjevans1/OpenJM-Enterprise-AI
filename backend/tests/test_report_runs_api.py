@@ -250,7 +250,12 @@ async def test_api_get_run_detail(file_db, client):
             db=db, run_id=run.id, user_id=settings.dev_user_id,
             fingerprint=run.request_fingerprint,
             answer="Delta exceeded",
-            evidence=[{"source_type": "document", "source_id": "d1", "title": "Policy", "passage": "300"}],
+            evidence=[{
+                "source_type": "document",
+                "source_id": fixture["pinned_document_ids"][0],
+                "title": "Policy",
+                "passage": "300",
+            }],
             structured_result={"rows": [[325]]}, trace_ids=["t-1"],
         )
         await db.commit()

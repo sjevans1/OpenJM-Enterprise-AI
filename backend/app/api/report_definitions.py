@@ -284,7 +284,12 @@ async def get_definition(
 
 
 async def load_validated_definition_scope(
-    db: AsyncSession, report_id: str, version: int, user_id: str
+    db: AsyncSession,
+    report_id: str,
+    version: int,
+    user_id: str,
+    *,
+    definition_id: str,
 ) -> tuple[str, str, ReportSourceScope]:
     """Internal future-B2C gateway: never trust pins from browser/old Evidence.
 
@@ -298,6 +303,7 @@ async def load_validated_definition_scope(
     definition = (
         await db.execute(
             select(ReportDefinitionVersion).where(
+                ReportDefinitionVersion.id == definition_id,
                 ReportDefinitionVersion.report_id == report_id,
                 ReportDefinitionVersion.user_id == user_id,
                 ReportDefinitionVersion.version == version,

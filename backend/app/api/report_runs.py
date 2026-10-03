@@ -12,7 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.reports import _available, _owned_report
+from app.api.report_definitions import load_validated_definition_scope
+from app.api.reports import (
+    _available,
+    _owned_report,
+    _source_ids,
+    _sources_available,
+    _structured_tables,
+)
 from app.core.config import get_settings
 from app.db import get_db
 from app.models import ReportRun, SavedReport
@@ -56,8 +63,7 @@ def _summary(run: ReportRun) -> ReportRunSummary:
     )
 
 
-async def _detail(db: AsyncSession, run: ReportRun) -> ReportRunDetail:
-    summary = _summary(run)
+def _persisted_result(run: ReportRun) -> ReportRunResult | None:
     result = None
     if run.status == "succeeded" and run.result_json is not None:
         # The read bound is the SAME bound the writer enforced at persistence
@@ -68,6 +74,62 @@ async def _detail(db: AsyncSession, run: ReportRun) -> ReportRunDetail:
             result = ReportRunResult.model_validate_json(run.result_json)
         except ValueError:
             raise HTTPException(status_code=422, detail="Persisted result envelope is malformed") from None
+    return result
+
+
+async def _authorize_run_read(
+    db: AsyncSession,
+    run: ReportRun,
+) -> ReportRunResult | None:
+    """Revalidate the run's exact definition and its own persisted evidence."""
+    try:
+        _question, mode, scope = await load_validated_definition_scope(
+            db,
+            run.report_id,
+            run.definition_version,
+            run.user_id,
+            definition_id=run.definition_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=409,
+                detail="Report run definition is no longer valid",
+            ) from None
+        raise
+    if mode != run.requested_mode:
+        raise HTTPException(status_code=409, detail="Report run definition no longer matches")
+
+    result = _persisted_result(run)
+    if result is None:
+        return None
+    if not (1 <= len(result.evidence) <= 24):
+        raise HTTPException(status_code=422, detail="Persisted result envelope has invalid evidence")
+    for item in result.evidence:
+        if item.source_type not in {"document", "structured_query"} or not item.source_id:
+            raise HTTPException(status_code=422, detail="Persisted result envelope has invalid evidence")
+    document_ids, source_ids = _source_ids(result.evidence)
+    structured_tables = _structured_tables(result.evidence)
+    if (
+        not document_ids.issubset(scope.document_ids)
+        or not source_ids.issubset(scope.source_ids)
+        or any(
+            not tables.issubset(scope.tables_for(source_id))
+            for source_id, tables in structured_tables.items()
+        )
+    ):
+        raise HTTPException(status_code=409, detail="Report run evidence is outside its definition")
+    if not await _sources_available(db, result.evidence):
+        raise HTTPException(
+            status_code=409,
+            detail="Report run evidence is no longer available or authorized",
+        )
+    return result
+
+
+async def _detail(db: AsyncSession, run: ReportRun) -> ReportRunDetail:
+    summary = _summary(run)
+    result = await _authorize_run_read(db, run)
     return ReportRunDetail(**summary.model_dump(), result=result)
 
 
@@ -83,6 +145,8 @@ async def list_runs(
     runs = await list_report_runs(
         db, settings.dev_user_id, report_id, limit=limit, offset=offset
     )
+    for run in runs:
+        await _authorize_run_read(db, run)
     return [_summary(run) for run in runs]
 
 

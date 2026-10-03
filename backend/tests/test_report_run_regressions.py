@@ -19,6 +19,7 @@ Acceptance evidence added per the batch contract: synthetic pre-B2C1
 upgrade with repeated startup preservation, deletion/no-resurrection, and
 zero model/retrieval/source-SQL/trace-write read sentinels.
 """
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -33,7 +34,7 @@ from app.db import (
     enable_sqlite_foreign_keys,
 )
 from app.main import app
-from app.models import Base, ReportRun
+from app.models import Base, DataSource, Document, ExecutionTrace, ReportRun
 from app.services.report_runs import (
     MAX_RESULT_BYTES,
     ReportRunConflict,
@@ -69,7 +70,7 @@ def _make_engine(path):
     return create_async_engine(f"sqlite+aiosqlite:///{path}", future=True)
 
 
-async def _succeeded_run(maker, fixture, key: str) -> str:
+async def _succeeded_run(maker, fixture, key: str, *, evidence=None) -> str:
     """Reserve + finalize a run against the seeded (authorized) fixture."""
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with maker() as db:
@@ -83,10 +84,51 @@ async def _succeeded_run(maker, fixture, key: str) -> str:
         count = await finalize_success(
             db=db, run_id=run.id, user_id=settings.dev_user_id,
             fingerprint=run.request_fingerprint, answer="Answer",
-            evidence=[{"source_type": "document", "source_id": "d1", "title": "t", "passage": "p"}],
+            evidence=evidence or [{
+                "source_type": "document",
+                "source_id": fixture["pinned_document_ids"][0],
+                "title": "t",
+                "passage": "p",
+            }],
             structured_result=None, trace_ids=["t-1"],
         )
         assert count == 1
+        return run.id
+
+
+async def _inject_succeeded_result(maker, fixture, key: str, evidence: list[dict]) -> str:
+    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    async with maker() as db:
+        run, _ = await reserve_report_run(
+            db=db, report_id=fixture["report_id"], definition_version=1,
+            idempotency_key=key, requested_mode=fixture["requested_mode"],
+            question=fixture["question"], pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+        )
+        await db.commit()
+        payload = json.dumps(
+            {
+                "answer": "Injected answer",
+                "evidence": evidence,
+                "structured_result": {},
+                "trace_ids": [],
+            },
+            separators=(",", ":"),
+        )
+        await db.execute(
+            text(
+                "UPDATE report_runs SET status='succeeded',"
+                "finished_at='2026-10-02 09:05:00.000000',result_json=:r,"
+                "result_size_bytes=:s,result_sha256=:h WHERE id=:i"
+            ),
+            {
+                "r": payload,
+                "s": len(payload.encode("utf-8")),
+                "h": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                "i": run.id,
+            },
+        )
+        await db.commit()
         return run.id
 
 
@@ -162,6 +204,275 @@ async def test_run_reads_ok_when_sources_authorized(client, file_db):
     resp = await client.get(f"/api/reports/runs/{run_id}")
     assert resp.status_code == 200
     assert resp.json()["result"]["answer"] == "Answer"
+
+
+async def _assert_run_reads_409(client, fixture, run_id: str) -> None:
+    detail = await client.get(f"/api/reports/runs/{run_id}")
+    assert detail.status_code == 409, detail.text
+    listing = await client.get(f"/api/reports/{fixture['report_id']}/runs")
+    assert listing.status_code == 409, listing.text
+
+
+@pytest.mark.asyncio
+async def test_run_reads_409_when_pinned_table_disappears_from_schema(client, file_db):
+    fixture = await seed_definition(file_db)
+    run_id = await _succeeded_run(
+        file_db, fixture, "00000000-0000-4000-8000-000000000260"
+    )
+    source_id = next(iter(fixture["pinned_source_tables"]))
+    async with file_db() as db:
+        await db.execute(
+            text("UPDATE data_sources SET schema_json = '[]' WHERE id = :i"),
+            {"i": source_id},
+        )
+        await db.commit()
+    # The old grant deliberately remains. Parent-snapshot availability alone
+    # still passes, while the exact definition's current discovered scope does not.
+    assert (await client.get(f"/api/reports/{fixture['report_id']}")).status_code == 200
+    assert (
+        await client.get(f"/api/reports/{fixture['report_id']}/definitions/1")
+    ).status_code == 409
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.asyncio
+async def test_run_reads_409_when_exact_definition_pins_missing_document(client, file_db):
+    fixture = await seed_definition(file_db)
+    run_id = await _succeeded_run(
+        file_db, fixture, "00000000-0000-4000-8000-000000000261"
+    )
+    async with file_db() as db:
+        await db.execute(
+            text(
+                "UPDATE report_definition_versions "
+                "SET pinned_document_ids_json = :pins WHERE id = :i"
+            ),
+            {"pins": json.dumps(["missing-document"]), "i": fixture["definition_id"]},
+        )
+        await db.commit()
+    assert (await client.get(f"/api/reports/{fixture['report_id']}")).status_code == 200
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.asyncio
+async def test_run_reads_409_when_definition_identity_does_not_match_parent(client, file_db):
+    fixture = await seed_definition(file_db)
+    other = await seed_definition(file_db)
+    now = datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+    corrupt = ReportRun(
+        user_id=settings.dev_user_id,
+        report_id=fixture["report_id"],
+        definition_id=other["definition_id"],
+        definition_version=other["definition_version"],
+        requested_mode=fixture["requested_mode"],
+        idempotency_key="00000000-0000-4000-8000-000000000272",
+        request_fingerprint="a" * 64,
+        status="running",
+        started_at=now,
+        deadline_at=now + timedelta(minutes=10),
+    )
+    async with file_db() as db:
+        db.add(corrupt)
+        await db.commit()
+        await db.refresh(corrupt)
+        run_id = corrupt.id
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.parametrize(
+    ("definition_version", "requested_mode", "key"),
+    [
+        (2, "hybrid", "00000000-0000-4000-8000-000000000273"),
+        (1, "knowledge", "00000000-0000-4000-8000-000000000274"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_reads_409_when_definition_version_or_mode_is_corrupt(
+    client, file_db, definition_version, requested_mode, key
+):
+    fixture = await seed_definition(file_db)
+    now = datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+    corrupt = ReportRun(
+        user_id=settings.dev_user_id,
+        report_id=fixture["report_id"],
+        definition_id=fixture["definition_id"],
+        definition_version=definition_version,
+        requested_mode=requested_mode,
+        idempotency_key=key,
+        request_fingerprint="c" * 64,
+        status="running",
+        started_at=now,
+        deadline_at=now + timedelta(minutes=10),
+    )
+    async with file_db() as db:
+        db.add(corrupt)
+        await db.commit()
+        await db.refresh(corrupt)
+        run_id = corrupt.id
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.asyncio
+async def test_run_reads_409_when_exact_definition_owner_is_foreign(client, file_db):
+    fixture = await seed_definition(file_db)
+    run_id = await _succeeded_run(
+        file_db, fixture, "00000000-0000-4000-8000-000000000275"
+    )
+    async with file_db() as db:
+        await db.execute(
+            text("UPDATE report_definition_versions SET user_id='foreign' WHERE id=:i"),
+            {"i": fixture["definition_id"]},
+        )
+        await db.commit()
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.asyncio
+async def test_run_reads_409_for_real_foreign_owned_evidence_document(client, file_db):
+    fixture = await seed_definition(file_db)
+    async with file_db() as db:
+        foreign = Document(
+            user_id="foreign-owner",
+            original_name="foreign.txt",
+            stored_path="/tmp/foreign-test-only",
+            size_bytes=7,
+            status="ready",
+            indexed=True,
+        )
+        db.add(foreign)
+        await db.commit()
+        await db.refresh(foreign)
+        foreign_id = foreign.id
+    run_id = await _succeeded_run(
+        file_db,
+        fixture,
+        "00000000-0000-4000-8000-000000000262",
+        evidence=[{
+            "source_type": "document",
+            "source_id": foreign_id,
+            "title": "Foreign",
+            "passage": "must not leak",
+        }],
+    )
+    assert (await client.get(f"/api/reports/{fixture['report_id']}")).status_code == 200
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_document",
+        "owned_out_of_scope_document",
+        "missing_equivalent_document",
+        "missing_structured_source",
+        "owned_out_of_scope_structured_source",
+        "out_of_scope_table",
+        "missing_grounded_parameter_document",
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_reads_409_for_missing_or_out_of_scope_result_evidence(
+    client, file_db, case
+):
+    fixture = await seed_definition(file_db)
+    pinned_doc = fixture["pinned_document_ids"][0]
+    pinned_source = next(iter(fixture["pinned_source_tables"]))
+    async with file_db() as db:
+        extra_doc = Document(
+            user_id=settings.dev_user_id,
+            original_name="extra.txt",
+            stored_path="/tmp/extra-test-only",
+            size_bytes=5,
+            status="ready",
+            indexed=True,
+        )
+        extra_source = DataSource(
+            user_id=settings.dev_user_id,
+            name="Extra",
+            engine="sqlite",
+            connection_secret="fixture-only-not-real",
+            status="connected",
+            enabled=True,
+            schema_json=json.dumps([{
+                "schema_name": "main",
+                "name": "extra_table",
+                "qualified_name": "extra_table",
+                "columns": [],
+                "primary_key": [],
+                "foreign_keys": [],
+            }]),
+            authorized_objects_json=json.dumps(["extra_table"]),
+        )
+        db.add_all([extra_doc, extra_source])
+        await db.commit()
+        await db.refresh(extra_doc)
+        await db.refresh(extra_source)
+
+    evidence_by_case = {
+        "missing_document": [{
+            "source_type": "document", "source_id": "missing-document",
+            "title": "Missing", "passage": "x",
+        }],
+        "owned_out_of_scope_document": [{
+            "source_type": "document", "source_id": extra_doc.id,
+            "title": "Extra", "passage": "x",
+        }],
+        "missing_equivalent_document": [{
+            "source_type": "document", "source_id": pinned_doc,
+            "title": "Pinned", "passage": "x",
+            "provenance": {"equivalent_sources": [{"source_id": "missing-equivalent"}]},
+        }],
+        "missing_structured_source": [{
+            "source_type": "structured_query", "source_id": "missing-source",
+            "title": "Missing", "passage": "x", "metadata": {"tables": ["finance"]},
+        }],
+        "owned_out_of_scope_structured_source": [{
+            "source_type": "structured_query", "source_id": extra_source.id,
+            "title": "Extra", "passage": "x", "metadata": {"tables": ["extra_table"]},
+        }],
+        "out_of_scope_table": [{
+            "source_type": "structured_query", "source_id": pinned_source,
+            "title": "Finance", "passage": "x", "metadata": {"tables": ["other_table"]},
+        }],
+        "missing_grounded_parameter_document": [{
+            "source_type": "structured_query", "source_id": pinned_source,
+            "title": "Finance", "passage": "x", "metadata": {"tables": ["finance"]},
+            "provenance": {"grounded_parameter": {"source_id": "missing-policy"}},
+        }],
+    }
+    run_id = await _succeeded_run(
+        file_db,
+        fixture,
+        f"00000000-0000-4000-8000-{263 + list(evidence_by_case).index(case):012d}",
+        evidence=evidence_by_case[case],
+    )
+    await _assert_run_reads_409(client, fixture, run_id)
+
+
+@pytest.mark.parametrize("case", ["empty", "unsupported_type"])
+@pytest.mark.asyncio
+async def test_run_reads_reject_semantically_invalid_persisted_evidence(
+    client, file_db, case
+):
+    fixture = await seed_definition(file_db)
+    evidence = [] if case == "empty" else [{
+        "source_type": "internal_secret",
+        "source_id": fixture["pinned_document_ids"][0],
+        "title": "Invalid",
+        "passage": "must not be returned",
+    }]
+    run_id = await _inject_succeeded_result(
+        file_db,
+        fixture,
+        "00000000-0000-4000-8000-000000000276"
+        if case == "empty"
+        else "00000000-0000-4000-8000-000000000277",
+        evidence,
+    )
+    detail = await client.get(f"/api/reports/runs/{run_id}")
+    assert detail.status_code == 422, detail.text
+    listing = await client.get(f"/api/reports/{fixture['report_id']}/runs")
+    assert listing.status_code == 422, listing.text
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +631,14 @@ async def test_reservation_rejects_altered_pins(file_db):
 async def trigger_engine(tmp_path):
     engine = _make_engine(tmp_path / "trigger-regr.db")
     event.listen(engine.sync_engine, "connect", _pragmas)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        for statement in _REPORT_RUN_IMMUTABILITY_TRIGGERS_SQL:
-            await conn.exec_driver_sql(statement)
-    yield engine
-    await engine.dispose()
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for statement in _REPORT_RUN_IMMUTABILITY_TRIGGERS_SQL:
+                await conn.exec_driver_sql(statement)
+        yield engine
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -363,36 +676,38 @@ async def test_corrected_triggers_replace_older_deployed_triggers(tmp_path):
     the startup trigger install drops and recreates each trigger."""
     engine = _make_engine(tmp_path / "upgrade.db")
     event.listen(engine.sync_engine, "connect", _pragmas)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # install the OLD defective identity trigger, as a pre-fix deployment has
-        await conn.exec_driver_sql(
-            "CREATE TRIGGER trg_report_runs_protect_identity "
-            "BEFORE UPDATE ON report_runs FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'no'); END;"
-        )
-    from app.db import install_report_run_triggers
-
-    async with engine.begin() as conn:
-        await install_report_run_triggers(conn)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    fixture = await seed_definition(maker)
-    async with maker() as db:
-        run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
-            idempotency_key="00000000-0000-4000-8000-000000000231",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
-            pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"],
-            now=_Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)),
-        )
-        await db.commit()
-        with pytest.raises(Exception):
-            await db.execute(
-                text("UPDATE report_runs SET user_id = 'attacker' WHERE id = :i"),
-                {"i": run.id},
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # install the OLD defective identity trigger, as a pre-fix deployment has
+            await conn.exec_driver_sql(
+                "CREATE TRIGGER trg_report_runs_protect_identity "
+                "BEFORE UPDATE ON report_runs FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'no'); END;"
             )
-        await db.rollback()
-    await engine.dispose()
+        from app.db import install_report_run_triggers
+
+        async with engine.begin() as conn:
+            await install_report_run_triggers(conn)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        fixture = await seed_definition(maker)
+        async with maker() as db:
+            run, _ = await reserve_report_run(
+                db=db, report_id=fixture["report_id"], definition_version=1,
+                idempotency_key="00000000-0000-4000-8000-000000000231",
+                requested_mode=fixture["requested_mode"], question=fixture["question"],
+                pinned_document_ids=fixture["pinned_document_ids"],
+                pinned_source_tables=fixture["pinned_source_tables"],
+                now=_Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)),
+            )
+            await db.commit()
+            with pytest.raises(Exception):
+                await db.execute(
+                    text("UPDATE report_runs SET user_id = 'attacker' WHERE id = :i"),
+                    {"i": run.id},
+                )
+            await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -417,9 +732,12 @@ async def test_large_valid_result_reads_back(client, file_db):
         # Build a valid result whose serialized size is exactly 69,172 bytes:
         # above the old 65,536 read cap, below the 131,072 write bound. The
         # bulk lives in structured_result (bounded only by the aggregate).
-        evidence = [
-            {"source_type": "document", "source_id": "d1", "title": "t", "passage": "x"}
-        ]
+        evidence = [{
+            "source_type": "document",
+            "source_id": fixture["pinned_document_ids"][0],
+            "title": "t",
+            "passage": "x",
+        }]
         answer = "Answer with a long body"
 
         def aggregate_bytes(pad_len: int) -> int:
@@ -584,53 +902,262 @@ async def test_history_reads_have_zero_execution_side_effects(client, file_db, m
 # Synthetic pre-B2C1 upgrade, preservation, and deletion/no-resurrection
 # ---------------------------------------------------------------------------
 
-async def _counts(maker) -> dict:
-    async with maker() as db:
-        out = {}
-        for table in ("conversations", "messages", "saved_reports", "report_definition_versions"):
-            out[table] = (
-                await db.execute(text(f"SELECT count(*) FROM {table}"))
+_LEGACY_SNAPSHOT_QUERIES = {
+    "conversations": (
+        "SELECT id,user_id,title,created_at,updated_at FROM conversations ORDER BY id"
+    ),
+    "messages": (
+        "SELECT id,conversation_id,role,content,execution_class,requested_mode,"
+        "evidence_json,created_at FROM messages ORDER BY id"
+    ),
+    "execution_traces": (
+        "SELECT id,request_id,tool_invocation_id,user_id,conversation_id,route,"
+        "requested_mode,tool_name,operation_class,risk_level,requires_approval,"
+        "source_id,model_name,input_hash,planned_sql,executed_sql,validation_decision,"
+        "policy_decision,row_limit,duration_ms,status,error_class,evidence_ids_json,"
+        "processing_location,metadata_json,created_at,completed_at "
+        "FROM execution_traces ORDER BY id"
+    ),
+    "saved_reports": (
+        "SELECT id,user_id,conversation_id,message_id,title,answer_text,evidence_json,"
+        "execution_class,requested_mode,source_count,snapshot_as_of,created_at "
+        "FROM saved_reports ORDER BY id"
+    ),
+    "report_definition_versions": (
+        "SELECT id,report_id,user_id,version,question_text,requested_mode,"
+        "pinned_document_ids_json,pinned_source_tables_json,created_at "
+        "FROM report_definition_versions ORDER BY id"
+    ),
+}
+
+
+async def _legacy_snapshot(path) -> dict[str, list[tuple]]:
+    """Read preservation-critical rows through a new independent engine."""
+    engine = _make_engine(path)
+    event.listen(engine.sync_engine, "connect", _pragmas)
+    try:
+        async with engine.connect() as conn:
+            return {
+                table: [tuple(row) for row in (await conn.exec_driver_sql(query)).all()]
+                for table, query in _LEGACY_SNAPSHOT_QUERIES.items()
+            }
+    finally:
+        await engine.dispose()
+
+
+async def _assert_run_schema(path) -> None:
+    engine = _make_engine(path)
+    event.listen(engine.sync_engine, "connect", _pragmas)
+    try:
+        async with engine.connect() as conn:
+            columns = {
+                row[1] for row in (await conn.exec_driver_sql("PRAGMA table_info(report_runs)")).all()
+            }
+            assert columns == {
+                "id", "user_id", "report_id", "definition_id", "definition_version",
+                "requested_mode", "idempotency_key", "request_fingerprint", "status",
+                "started_at", "deadline_at", "finished_at", "failure_category",
+                "trace_ids_json", "result_json", "result_size_bytes", "result_sha256",
+                "created_at",
+            }
+            foreign_keys = {
+                (row[3], row[2], row[4], row[6])
+                for row in (await conn.exec_driver_sql("PRAGMA foreign_key_list(report_runs)")).all()
+            }
+            assert ("report_id", "saved_reports", "id", "CASCADE") in foreign_keys
+            assert (
+                "definition_id", "report_definition_versions", "id", "CASCADE"
+            ) in foreign_keys
+
+            indexes = (await conn.exec_driver_sql("PRAGMA index_list(report_runs)")).all()
+            unique_columns = set()
+            for index in indexes:
+                if index[2]:
+                    info = await conn.exec_driver_sql(f'PRAGMA index_info("{index[1]}")')
+                    unique_columns.add(tuple(row[2] for row in info.all()))
+            assert ("user_id", "idempotency_key") in unique_columns
+
+            create_sql = (
+                await conn.exec_driver_sql(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='report_runs'"
+                )
             ).scalar_one()
-        return out
+            for constraint in (
+                "ck_report_run_status",
+                "ck_report_run_running_unfinished",
+                "ck_report_run_running_no_failure",
+                "ck_report_run_terminal_finished",
+                "ck_report_run_succeeded_has_result",
+                "ck_report_run_failed_has_category",
+            ):
+                assert constraint in create_sql
+
+            triggers = dict(
+                (await conn.exec_driver_sql(
+                    "SELECT name,sql FROM sqlite_master "
+                    "WHERE type='trigger' AND tbl_name='report_runs'"
+                )).all()
+            )
+            assert set(triggers) == {
+                "trg_report_runs_protect_identity",
+                "trg_report_runs_terminal_immutable",
+            }
+            assert "NEW.user_id IS NOT OLD.user_id" in triggers["trg_report_runs_protect_identity"]
+            assert "OLD.status IN ('succeeded','failed','interrupted')" in triggers[
+                "trg_report_runs_terminal_immutable"
+            ]
+            normalize_sql = lambda value: " ".join(value.split()).casefold().rstrip(";")
+            assert {normalize_sql(value) for value in triggers.values()} == {
+                normalize_sql(value) for value in _REPORT_RUN_IMMUTABILITY_TRIGGERS_SQL
+            }
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_synthetic_pre_b2c1_upgrade_preserves_data(tmp_path):
-    """A pre-B2C1 database (no report_runs table, old triggers) upgraded by
-    the production init sequence keeps every persisted row."""
+async def test_synthetic_pre_b2c1_upgrade_preserves_data(tmp_path, monkeypatch):
+    """Production init_db(), run twice, preserves a populated pre-B2C1 file."""
     path = tmp_path / "pre-b2c1.db"
     old_engine = _make_engine(path)
     event.listen(old_engine.sync_engine, "connect", _pragmas)
-    async with old_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.exec_driver_sql("DROP TABLE report_runs")
-    old_maker = async_sessionmaker(old_engine, expire_on_commit=False)
-    fixture = await seed_definition(old_maker)
-    before = await _counts(old_maker)
-    await old_engine.dispose()
+    try:
+        async with old_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.exec_driver_sql("DROP TABLE report_runs")
+        old_maker = async_sessionmaker(old_engine, expire_on_commit=False)
+        fixture = await seed_definition(old_maker)
+        async with old_maker() as db:
+            conversation_id = (
+                await db.execute(
+                    text("SELECT conversation_id FROM saved_reports WHERE id=:i"),
+                    {"i": fixture["report_id"]},
+                )
+            ).scalar_one()
+            db.add(ExecutionTrace(
+                id="00000000-0000-4000-8000-000000000280",
+                request_id="00000000-0000-4000-8000-000000000281",
+                tool_invocation_id="00000000-0000-4000-8000-000000000282",
+                user_id=settings.dev_user_id,
+                conversation_id=conversation_id,
+                route="hybrid",
+                requested_mode="hybrid",
+                tool_name="structured.query",
+                operation_class="read",
+                risk_level="low",
+                requires_approval=False,
+                source_id=next(iter(fixture["pinned_source_tables"])),
+                model_name="synthetic-pre-b2c1",
+                input_hash="b" * 64,
+                planned_sql="SELECT revenue FROM finance WHERE revenue > 300",
+                executed_sql="SELECT revenue FROM finance WHERE revenue > 300 LIMIT 200",
+                validation_decision="allowed",
+                policy_decision="allowed",
+                row_limit=200,
+                duration_ms=12,
+                status="completed",
+                evidence_ids_json=json.dumps(fixture["pinned_document_ids"]),
+                processing_location="local",
+                metadata_json=json.dumps({"tables": ["finance"], "rows": 1}),
+            ))
+            await db.commit()
+    finally:
+        await old_engine.dispose()
 
-    # production init sequence against the upgraded file
-    new_engine = _make_engine(path)
-    event.listen(new_engine.sync_engine, "connect", _pragmas)
-    from app.db import install_report_run_triggers
+    before = await _legacy_snapshot(path)
+    assert len(before["conversations"]) == 1
+    assert len(before["messages"]) == 2
+    assert len(before["execution_traces"]) == 1
+    assert len(before["saved_reports"]) == 1
+    assert len(before["report_definition_versions"]) == 1
+    conversation_id = before["conversations"][0][0]
+    messages_by_role = {row[2]: row for row in before["messages"]}
+    assistant_row = messages_by_role["assistant"]
+    trace_row = before["execution_traces"][0]
+    report_row = before["saved_reports"][0]
+    definition_row = before["report_definition_versions"][0]
+    assert all(row[1] == conversation_id for row in before["messages"])
+    assert trace_row[4] == conversation_id
+    assert report_row[2] == conversation_id
+    assert report_row[3] == assistant_row[0]
+    assert json.loads(report_row[6]) == json.loads(assistant_row[6])
+    assert definition_row[1] == report_row[0]
+    assert json.loads(definition_row[6]) == fixture["pinned_document_ids"]
+    assert json.loads(definition_row[7]) == fixture["pinned_source_tables"]
+    assert json.loads(trace_row[22]) == fixture["pinned_document_ids"]
+    assert json.loads(trace_row[24]) == {"tables": ["finance"], "rows": 1}
+    assert next(iter(fixture["pinned_source_tables"])) == trace_row[11]
 
-    async with new_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await install_report_run_triggers(conn)
-    await _recover_stale_report_runs(engine=new_engine)
-    new_maker = async_sessionmaker(new_engine, expire_on_commit=False)
-    after = await _counts(new_maker)
-    assert before == after, "upgrade changed pre-existing persisted rows"
-    assert (
-        await new_maker().__aenter__()
-    )  # placeholder guard; replaced below
-    async with new_maker() as db:
-        assert (
-            await db.execute(
-                text("SELECT count(*) FROM report_runs")
+    import app.db as db_module
+
+    startup_engine = _make_engine(path)
+    event.listen(startup_engine.sync_engine, "connect", _pragmas)
+    monkeypatch.setattr(db_module, "engine", startup_engine)
+    startup_maker = async_sessionmaker(startup_engine, expire_on_commit=False)
+    try:
+        await db_module.init_db()
+        assert await _legacy_snapshot(path) == before
+        await _assert_run_schema(path)
+
+        async with startup_maker() as db:
+            expired, _ = await reserve_report_run(
+                db=db, report_id=fixture["report_id"], definition_version=1,
+                idempotency_key="00000000-0000-4000-8000-000000000283",
+                requested_mode=fixture["requested_mode"], question=fixture["question"],
+                pinned_document_ids=fixture["pinned_document_ids"],
+                pinned_source_tables=fixture["pinned_source_tables"],
+                now=datetime(2026, 10, 2, 8, 0, 0, tzinfo=timezone.utc),
             )
-        ).scalar_one() == 0
-    await new_engine.dispose()
+            live, _ = await reserve_report_run(
+                db=db, report_id=fixture["report_id"], definition_version=1,
+                idempotency_key="00000000-0000-4000-8000-000000000284",
+                requested_mode=fixture["requested_mode"], question=fixture["question"],
+                pinned_document_ids=fixture["pinned_document_ids"],
+                pinned_source_tables=fixture["pinned_source_tables"], now=None,
+            )
+            await db.commit()
+            expired_id, live_id = expired.id, live.id
+
+        await db_module.init_db()
+        assert await _legacy_snapshot(path) == before
+        await _assert_run_schema(path)
+
+        verify_engine = _make_engine(path)
+        event.listen(verify_engine.sync_engine, "connect", _pragmas)
+        try:
+            async with verify_engine.connect() as conn:
+                expired_row = (
+                    await conn.exec_driver_sql(
+                        "SELECT status,failure_category,finished_at FROM report_runs WHERE id=?",
+                        (expired_id,),
+                    )
+                ).one()
+                live_row = (
+                    await conn.exec_driver_sql(
+                        "SELECT status,failure_category,finished_at FROM report_runs WHERE id=?",
+                        (live_id,),
+                    )
+                ).one()
+                assert expired_row[0] == "interrupted"
+                assert expired_row[1] == "deadline_expired"
+                assert expired_row[2] is not None
+                assert tuple(live_row) == ("running", None, None)
+
+                with pytest.raises(Exception):
+                    await conn.exec_driver_sql(
+                        "UPDATE report_runs SET user_id='attacker' WHERE id=?", (live_id,)
+                    )
+                await conn.rollback()
+                with pytest.raises(Exception):
+                    await conn.exec_driver_sql(
+                        "UPDATE report_runs SET status='running',failure_category=NULL,"
+                        "finished_at=NULL WHERE id=?",
+                        (expired_id,),
+                    )
+                await conn.rollback()
+        finally:
+            await verify_engine.dispose()
+    finally:
+        await startup_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -640,47 +1167,49 @@ async def test_report_deletion_cascades_runs_and_never_resurrects(tmp_path):
     path = tmp_path / "resurrection.db"
     engine = _make_engine(path)
     event.listen(engine.sync_engine, "connect", _pragmas)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        from app.db import install_report_run_triggers
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            from app.db import install_report_run_triggers
 
-        await install_report_run_triggers(conn)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    fixture = await seed_definition(maker)
-    async with maker() as db:
-        run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
-            idempotency_key="00000000-0000-4000-8000-000000000250",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
-            pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"],
-            now=datetime(2026, 10, 2, 8, 0, 0, tzinfo=timezone.utc),
-        )
-        await db.commit()
-        # delete the parent report; FK cascade must remove the run
-        await db.execute(
-            text("DELETE FROM saved_reports WHERE id = :i"), {"i": fixture["report_id"]}
-        )
-        await db.commit()
-        remaining = (
-            await db.execute(text("SELECT count(*) FROM report_runs"))
-        ).scalar_one()
-        assert remaining == 0, "run rows survived parent report deletion"
-    await _recover_stale_report_runs(engine=engine)
-    async with maker() as db:
-        remaining = (
-            await db.execute(text("SELECT count(*) FROM report_runs"))
-        ).scalar_one()
-    assert remaining == 0, "startup recovery resurrected deleted run history"
-    # reserving against the deleted definition must fail closed
-    async with maker() as db:
-        with pytest.raises((ReportRunConflict, ValueError)):
-            await reserve_report_run(
+            await install_report_run_triggers(conn)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        fixture = await seed_definition(maker)
+        async with maker() as db:
+            run, _ = await reserve_report_run(
                 db=db, report_id=fixture["report_id"], definition_version=1,
-                idempotency_key="00000000-0000-4000-8000-000000000251",
+                idempotency_key="00000000-0000-4000-8000-000000000250",
                 requested_mode=fixture["requested_mode"], question=fixture["question"],
                 pinned_document_ids=fixture["pinned_document_ids"],
                 pinned_source_tables=fixture["pinned_source_tables"],
-                now=_Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)),
+                now=datetime(2026, 10, 2, 8, 0, 0, tzinfo=timezone.utc),
             )
-    await engine.dispose()
+            await db.commit()
+            # delete the parent report; FK cascade must remove the run
+            await db.execute(
+                text("DELETE FROM saved_reports WHERE id = :i"), {"i": fixture["report_id"]}
+            )
+            await db.commit()
+            remaining = (
+                await db.execute(text("SELECT count(*) FROM report_runs"))
+            ).scalar_one()
+            assert remaining == 0, "run rows survived parent report deletion"
+        await _recover_stale_report_runs(engine=engine)
+        async with maker() as db:
+            remaining = (
+                await db.execute(text("SELECT count(*) FROM report_runs"))
+            ).scalar_one()
+        assert remaining == 0, "startup recovery resurrected deleted run history"
+        # reserving against the deleted definition must fail closed
+        async with maker() as db:
+            with pytest.raises((ReportRunConflict, ValueError)):
+                await reserve_report_run(
+                    db=db, report_id=fixture["report_id"], definition_version=1,
+                    idempotency_key="00000000-0000-4000-8000-000000000251",
+                    requested_mode=fixture["requested_mode"], question=fixture["question"],
+                    pinned_document_ids=fixture["pinned_document_ids"],
+                    pinned_source_tables=fixture["pinned_source_tables"],
+                    now=_Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)),
+                )
+    finally:
+        await engine.dispose()
