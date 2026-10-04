@@ -4,6 +4,7 @@ Tests for the service layer (list/get/revoke) and the HTTP API. Written first
 (TDD RED) — the service functions list/get/revoke and the report_runs router do
 not exist yet.
 """
+
 from datetime import datetime, timezone
 
 import pytest
@@ -28,22 +29,31 @@ settings = get_settings()
 # Service-layer: list, get, revoke
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_list_report_runs_owner_scoped(file_db):
     fixture = await seed_definition(file_db)
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000100",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     async with file_db() as db:
         runs = await list_report_runs(
-            db, settings.dev_user_id, fixture["report_id"], limit=20, offset=0,
+            db,
+            settings.dev_user_id,
+            fixture["report_id"],
+            limit=20,
+            offset=0,
         )
     assert len(runs) == 1
     assert all(r.user_id == settings.dev_user_id for r in runs)
@@ -56,15 +66,21 @@ async def test_list_report_runs_excludes_other_reports(file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         await reserve_report_run(
-            db=db, report_id=other["report_id"], definition_version=1,
+            db=db,
+            report_id=other["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000101",
-            requested_mode=other["requested_mode"], question=other["question"],
+            requested_mode=other["requested_mode"],
+            question=other["question"],
             pinned_document_ids=other["pinned_document_ids"],
-            pinned_source_tables=other["pinned_source_tables"], now=clock,
+            pinned_source_tables=other["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     async with file_db() as db:
-        runs = await list_report_runs(db, settings.dev_user_id, ours["report_id"], limit=20, offset=0)
+        runs = await list_report_runs(
+            db, settings.dev_user_id, ours["report_id"], limit=20, offset=0
+        )
     assert len(runs) == 0
 
 
@@ -76,17 +92,25 @@ async def test_list_report_runs_pagination(file_db):
     async with file_db() as db:
         for i in range(3):
             run, _ = await reserve_report_run(
-                db=db, report_id=fixture["report_id"], definition_version=1,
+                db=db,
+                report_id=fixture["report_id"],
+                definition_version=1,
                 idempotency_key=f"00000000-0000-4000-8000-{i:012d}",
-                requested_mode=fixture["requested_mode"], question=fixture["question"],
+                requested_mode=fixture["requested_mode"],
+                question=fixture["question"],
                 pinned_document_ids=fixture["pinned_document_ids"],
-                pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+                pinned_source_tables=fixture["pinned_source_tables"],
+                now=clock,
             )
             ids.append(run.id)
         await db.commit()
     async with file_db() as db:
-        first = await list_report_runs(db, settings.dev_user_id, fixture["report_id"], limit=2, offset=0)
-        second = await list_report_runs(db, settings.dev_user_id, fixture["report_id"], limit=2, offset=2)
+        first = await list_report_runs(
+            db, settings.dev_user_id, fixture["report_id"], limit=2, offset=0
+        )
+        second = await list_report_runs(
+            db, settings.dev_user_id, fixture["report_id"], limit=2, offset=2
+        )
     assert len(first) == 2
     assert len(second) == 1
     assert first[0].id != second[0].id
@@ -99,11 +123,15 @@ async def test_get_report_run_owner_scoped(file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000102",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -119,11 +147,15 @@ async def test_get_report_run_rejects_unknown_owner(file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000103",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -137,11 +169,15 @@ async def test_revoke_transitions_running_to_interrupted(file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000104",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -161,19 +197,33 @@ async def test_revoke_rejects_terminal_run(file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000105",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
         await finalize_success(
-            db=db, run_id=run.id, user_id=settings.dev_user_id,
+            db=db,
+            run_id=run.id,
+            user_id=settings.dev_user_id,
             fingerprint=run.request_fingerprint,
             answer="A",
-            evidence=[{"source_type": "document", "source_id": "x", "title": "t", "passage": "p"}],
-            structured_result=None, trace_ids=[],
+            evidence=[
+                {
+                    "source_type": "document",
+                    "source_id": "x",
+                    "title": "t",
+                    "passage": "p",
+                }
+            ],
+            structured_result=None,
+            trace_ids=[],
         )
         await db.commit()
         count = await revoke_report_run(db, run.id, settings.dev_user_id)
@@ -190,11 +240,15 @@ async def test_revoke_rejects_foreign_owner(file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000106",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     async with file_db() as db:
@@ -207,17 +261,22 @@ async def test_revoke_rejects_foreign_owner(file_db):
 # HTTP API: owner-scoped read-only history + revocation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_api_list_runs_for_owner(file_db, client):
     fixture = await seed_definition(file_db)
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000110",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     resp = await client.get(f"/api/reports/{fixture['report_id']}/runs")
@@ -240,23 +299,40 @@ async def test_api_get_run_detail(file_db, client):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000111",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await finalize_success(
-            db=db, run_id=run.id, user_id=settings.dev_user_id,
+            db=db,
+            run_id=run.id,
+            user_id=settings.dev_user_id,
             fingerprint=run.request_fingerprint,
             answer="Delta exceeded",
-            evidence=[{
-                "source_type": "document",
-                "source_id": fixture["pinned_document_ids"][0],
-                "title": "Policy",
-                "passage": "300",
-            }],
-            structured_result={"rows": [[325]]}, trace_ids=["t-1"],
+            evidence=[
+                {
+                    "source_type": "document",
+                    "source_id": fixture["pinned_document_ids"][0],
+                    "title": "Policy",
+                    "passage": "300",
+                }
+            ],
+            structured_result={
+                "source_id": next(iter(fixture["pinned_source_tables"])),
+                "evidence_id": "t-1",
+                "sql": "SELECT revenue FROM finance",
+                "columns": ["revenue"],
+                "rows": [[325]],
+                "row_count": 1,
+                "truncated": False,
+            },
+            trace_ids=["t-1"],
         )
         await db.commit()
     resp = await client.get(f"/api/reports/runs/{run.id}")
@@ -283,11 +359,15 @@ async def test_public_revoke_route_absent(client, file_db):
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000112",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
             pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"], now=clock,
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=clock,
         )
         await db.commit()
     resp = await client.post(f"/api/reports/runs/{run.id}/revoke")

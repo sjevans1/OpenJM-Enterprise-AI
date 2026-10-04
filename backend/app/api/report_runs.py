@@ -8,6 +8,12 @@ Source availability/authorization is re-checked on every read and fails
 closed with 409, consistently with saved reports and B2A definitions.
 Newly owned reservations execute inline through the existing governed orchestrator.
 """
+
+import json
+import math
+from datetime import date, datetime, time
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +28,7 @@ from app.api.reports import (
 )
 from app.core.config import get_settings
 from app.db import get_db
-from app.models import ReportDefinitionVersion, ReportRun, SavedReport
+from app.models import ExecutionTrace, ReportDefinitionVersion, ReportRun, SavedReport
 from app.schemas import (
     CreateReportRunRequest,
     ReportRunDetail,
@@ -33,6 +39,7 @@ from app.services.report_runs import (
     MAX_RESULT_BYTES,
     ReportRunConflict,
     _parse_trace_ids,
+    _validate_result,
     finalize_failure,
     finalize_success,
     get_report_run,
@@ -46,6 +53,292 @@ from app.services.report_scope import ReportScopeError, ReportSourceScope
 router = APIRouter(prefix="/reports", tags=["report-runs"])
 settings = get_settings()
 model_gateway = OpenAICompatibleModelGateway()
+
+MAX_STRUCTURED_COLUMNS = 64
+MAX_STRUCTURED_COLUMN_CHARS = 256
+MAX_STRUCTURED_SCALAR_CHARS = 12000
+
+
+class IncompleteReportResult(ValueError):
+    """A report plan is not a complete, provenance-bound result."""
+
+
+class OversizedReportResult(IncompleteReportResult):
+    """A typed structured value exceeds a report-result bound."""
+
+
+def _json_safe_scalar(value):
+    """Preserve scalar meaning without lossy ``default=str`` serialization."""
+    if value is None or isinstance(value, (bool, int, str)):
+        normalized = value
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise IncompleteReportResult("non-finite structured scalar")
+        normalized = value
+    elif isinstance(value, Decimal):
+        if not value.is_finite():
+            raise IncompleteReportResult("non-finite structured scalar")
+        normalized = str(value)
+    elif isinstance(value, (datetime, date, time)):
+        normalized = value.isoformat()
+    else:
+        raise IncompleteReportResult("unsupported structured scalar")
+    if isinstance(normalized, str) and len(normalized) > MAX_STRUCTURED_SCALAR_CHARS:
+        raise OversizedReportResult("structured scalar exceeds bound")
+    return normalized
+
+
+def _validated_structured_result(
+    plan, structured_evidence: list, scope: ReportSourceScope
+):
+    raw = plan.structured_result
+    required = {
+        "source_id",
+        "evidence_id",
+        "sql",
+        "columns",
+        "rows",
+        "row_count",
+        "truncated",
+    }
+    if not isinstance(raw, dict) or set(raw) != required:
+        raise IncompleteReportResult("structured output envelope is malformed")
+    source_id = raw["source_id"]
+    evidence_id = raw["evidence_id"]
+    sql = raw["sql"]
+    columns = raw["columns"]
+    rows = raw["rows"]
+    if (
+        not isinstance(source_id, str)
+        or source_id not in scope.source_ids
+        or not isinstance(evidence_id, str)
+        or not evidence_id
+        or not isinstance(sql, str)
+        or not sql.strip()
+        or not isinstance(columns, list)
+        or not (1 <= len(columns) <= MAX_STRUCTURED_COLUMNS)
+        or any(
+            not isinstance(column, str)
+            or not column
+            or len(column) > MAX_STRUCTURED_COLUMN_CHARS
+            for column in columns
+        )
+        or len(set(columns)) != len(columns)
+        or not isinstance(rows, list)
+        or not (1 <= len(rows) <= settings.structured_max_rows)
+        or isinstance(raw["row_count"], bool)
+        or not isinstance(raw["row_count"], int)
+        or raw["row_count"] != len(rows)
+        or not isinstance(raw["truncated"], bool)
+    ):
+        raise IncompleteReportResult("structured output envelope is inconsistent")
+    matches = [
+        item
+        for item in structured_evidence
+        if item.evidence_id == evidence_id and item.source_id == source_id
+    ]
+    if len(matches) != 1:
+        raise IncompleteReportResult("structured output does not match evidence")
+    evidence = matches[0]
+    evidence_sql = evidence.metadata.get("sql") or evidence.provenance.get(
+        "executed_sql"
+    )
+    if (
+        evidence_sql != sql
+        or evidence.metadata.get("columns") != columns
+        or evidence.metadata.get("row_count") != raw["row_count"]
+        or evidence.metadata.get("truncated", False) != raw["truncated"]
+    ):
+        raise IncompleteReportResult("structured output provenance is inconsistent")
+    normalized_rows = []
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) != len(columns):
+            raise IncompleteReportResult("structured row width is inconsistent")
+        normalized_rows.append([_json_safe_scalar(value) for value in row])
+    return {**raw, "rows": normalized_rows}
+
+
+def _validate_dependent_provenance(
+    document_evidence: list, structured_evidence: list
+) -> None:
+    """Check only cross-result provenance; AST/tool validation remains authoritative."""
+    for item in structured_evidence:
+        grounded = item.provenance.get("grounded_parameter")
+        if grounded is None:
+            continue
+        if not isinstance(grounded, dict):
+            raise IncompleteReportResult("grounded provenance is malformed")
+        required = ("evidence_id", "source_id", "operator", "fiscal_year", "currency")
+        if any(key not in grounded for key in required):
+            raise IncompleteReportResult("grounded provenance is incomplete")
+        matched = [
+            evidence
+            for evidence in document_evidence
+            if evidence.evidence_id == grounded["evidence_id"]
+            and evidence.source_id == grounded["source_id"]
+        ]
+        if (
+            len(matched) != 1
+            or grounded["operator"] not in {">", ">="}
+            or isinstance(grounded["fiscal_year"], bool)
+            or not isinstance(grounded["fiscal_year"], int)
+            or not 2000 <= grounded["fiscal_year"] < 2100
+            or grounded["currency"] not in {"USD", "JMD"}
+        ):
+            raise IncompleteReportResult(
+                "grounded provenance does not match document evidence"
+            )
+
+
+async def _validated_trace_ids(db, *, plan, run_id: str, mode: str, structured_result):
+    trace_ids = plan.trace_ids
+    expected_names = {
+        "knowledge": ["knowledge.search"],
+        "data": ["structured.query"],
+        "hybrid": ["knowledge.search", "structured.query"],
+    }[mode]
+    if (
+        not isinstance(trace_ids, list)
+        or len(trace_ids) != len(expected_names)
+        or len(set(trace_ids)) != len(trace_ids)
+        or any(not isinstance(item, str) or not item for item in trace_ids)
+    ):
+        raise IncompleteReportResult("report traces are incomplete")
+    traces = list(
+        (
+            await db.execute(
+                select(ExecutionTrace).where(ExecutionTrace.id.in_(trace_ids))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(traces) != len(trace_ids):
+        raise IncompleteReportResult("report trace is missing")
+    allowed_route = (
+        "hybrid"
+        if mode == "hybrid"
+        else ("structured" if mode == "data" else "knowledge")
+    )
+    if sorted(trace.tool_name for trace in traces) != sorted(expected_names):
+        raise IncompleteReportResult("report trace tools are invalid")
+    document_evidence_ids = sorted(
+        item.evidence_id for item in plan.evidence if item.source_type == "document"
+    )
+    structured_evidence = next(
+        (
+            item
+            for item in plan.evidence
+            if item.source_type == "structured_query"
+            and structured_result is not None
+            and item.evidence_id == structured_result["evidence_id"]
+        ),
+        None,
+    )
+    structured_evidence_id = (
+        structured_result["evidence_id"] if structured_result is not None else None
+    )
+    structured_source_id = (
+        structured_result["source_id"] if structured_result is not None else None
+    )
+    structured_sql = structured_result["sql"] if structured_result is not None else None
+    for trace in traces:
+        if (
+            trace.id not in trace_ids
+            or trace.request_id != run_id
+            or trace.user_id != settings.dev_user_id
+            or trace.conversation_id is not None
+            or trace.status != "succeeded"
+            or trace.route != allowed_route
+            or trace.requested_mode != mode
+        ):
+            raise IncompleteReportResult("report trace is outside this run")
+        try:
+            trace_evidence_ids = json.loads(trace.evidence_ids_json or "null")
+        except (TypeError, ValueError):
+            raise IncompleteReportResult("report trace evidence is malformed") from None
+        expected_evidence_ids = (
+            document_evidence_ids
+            if trace.tool_name == "knowledge.search"
+            else [structured_evidence_id]
+        )
+        if (
+            not isinstance(trace_evidence_ids, list)
+            or sorted(trace_evidence_ids) != expected_evidence_ids
+        ):
+            raise IncompleteReportResult("report trace evidence does not match output")
+        if trace.tool_name == "structured.query" and (
+            structured_evidence_id is None
+            or trace.source_id != structured_source_id
+            or trace.executed_sql != structured_sql
+        ):
+            raise IncompleteReportResult("structured trace does not match output")
+        if trace.tool_name == "structured.query":
+            try:
+                trace_metadata = (
+                    json.loads(trace.metadata_json) if trace.metadata_json else {}
+                )
+            except (TypeError, ValueError):
+                raise IncompleteReportResult(
+                    "structured trace metadata is malformed"
+                ) from None
+            evidence_grounded = (
+                structured_evidence.provenance.get("grounded_parameter")
+                if structured_evidence is not None
+                else None
+            )
+            if trace_metadata.get("grounded_parameter") != evidence_grounded:
+                raise IncompleteReportResult(
+                    "grounded trace provenance does not match evidence"
+                )
+    return trace_ids
+
+
+async def _complete_report_result(
+    db, *, plan, run_id: str, mode: str, scope: ReportSourceScope
+):
+    expected_class = {
+        "knowledge": "knowledge",
+        "data": "structured",
+        "hybrid": "hybrid",
+    }[mode]
+    if (
+        plan.execution_class != expected_class
+        or plan.requested_mode != mode
+        or plan.direct_answer is not None
+    ):
+        raise IncompleteReportResult(
+            "report plan is a refusal or wrong execution class"
+        )
+    documents = [item for item in plan.evidence if item.source_type == "document"]
+    structured = [
+        item for item in plan.evidence if item.source_type == "structured_query"
+    ]
+    if any(
+        item.source_type not in {"document", "structured_query"}
+        for item in plan.evidence
+    ):
+        raise IncompleteReportResult("report evidence type is invalid")
+    if any(not item.evidence_id or not item.source_id for item in plan.evidence):
+        raise IncompleteReportResult("report evidence identity is missing")
+    if mode in {"knowledge", "hybrid"} and (
+        not documents
+        or any(item.source_id not in scope.document_ids for item in documents)
+    ):
+        raise IncompleteReportResult("authorized document evidence is incomplete")
+    if mode in {"data", "hybrid"} and not structured:
+        raise IncompleteReportResult("structured evidence is incomplete")
+    structured_result = None
+    if mode in {"data", "hybrid"}:
+        structured_result = _validated_structured_result(plan, structured, scope)
+    elif plan.structured_result is not None:
+        raise IncompleteReportResult("knowledge report contains structured output")
+    if mode == "hybrid":
+        _validate_dependent_provenance(documents, structured)
+    trace_ids = await _validated_trace_ids(
+        db, plan=plan, run_id=run_id, mode=mode, structured_result=structured_result
+    )
+    return structured_result, trace_ids
 
 
 def _same_execution_intent(
@@ -153,25 +446,35 @@ async def _execute_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="planning"
         )
 
-    if plan.direct_answer is not None:
-        answer = plan.direct_answer
-    else:
-        try:
-            answer = await model_gateway.chat(
-                [
-                    {"role": "system", "content": plan.system_prompt},
-                    {"role": "user", "content": question},
-                ],
-                max_tokens=2048,
-            )
-        except ModelGatewayError:
-            return await _fail_owned_run(
-                db, run_id=run_id, fingerprint=fingerprint, category="model"
-            )
-        except Exception:
-            return await _fail_owned_run(
-                db, run_id=run_id, fingerprint=fingerprint, category="model"
-            )
+    try:
+        structured_result, trace_ids = await _complete_report_result(
+            db, plan=plan, run_id=run_id, mode=mode, scope=scope
+        )
+    except OversizedReportResult:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="result_too_large"
+        )
+    except (IncompleteReportResult, KeyError, TypeError, ValueError):
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="incomplete_result"
+        )
+
+    try:
+        answer = await model_gateway.chat(
+            [
+                {"role": "system", "content": plan.system_prompt},
+                {"role": "user", "content": question},
+            ],
+            max_tokens=2048,
+        )
+    except ModelGatewayError:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="model"
+        )
+    except Exception:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="model"
+        )
 
     try:
         refreshed = await _reload_execution_intent(
@@ -190,15 +493,23 @@ async def _execute_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="invalid_definition"
         )
 
+    evidence_payload = [item.model_dump(mode="json") for item in plan.evidence]
+    try:
+        _validate_result(answer, evidence_payload, structured_result, trace_ids)
+    except (TypeError, ValueError):
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="result_too_large"
+        )
+
     persisted = await finalize_success(
         db=db,
         run_id=run_id,
         user_id=settings.dev_user_id,
         fingerprint=fingerprint,
         answer=answer,
-        evidence=[item.model_dump(mode="json") for item in plan.evidence],
-        structured_result=None,
-        trace_ids=None,
+        evidence=evidence_payload,
+        structured_result=structured_result,
+        trace_ids=trace_ids,
     )
     if persisted != 1:
         # A concurrent revocation wins the lifecycle compare-and-set. Never
@@ -250,11 +561,15 @@ def _persisted_result(run: ReportRun) -> ReportRunResult | None:
         # The read bound is the SAME bound the writer enforced at persistence
         # time; anything larger in storage is corrupt/injected and refused.
         if len(run.result_json.encode("utf-8")) > MAX_RESULT_BYTES:
-            raise HTTPException(status_code=422, detail="Persisted result envelope is oversized")
+            raise HTTPException(
+                status_code=422, detail="Persisted result envelope is oversized"
+            )
         try:
             result = ReportRunResult.model_validate_json(run.result_json)
         except ValueError:
-            raise HTTPException(status_code=422, detail="Persisted result envelope is malformed") from None
+            raise HTTPException(
+                status_code=422, detail="Persisted result envelope is malformed"
+            ) from None
     return result
 
 
@@ -279,16 +594,25 @@ async def _authorize_run_read(
             ) from None
         raise
     if mode != run.requested_mode:
-        raise HTTPException(status_code=409, detail="Report run definition no longer matches")
+        raise HTTPException(
+            status_code=409, detail="Report run definition no longer matches"
+        )
 
     result = _persisted_result(run)
     if result is None:
         return None
     if not (1 <= len(result.evidence) <= 24):
-        raise HTTPException(status_code=422, detail="Persisted result envelope has invalid evidence")
+        raise HTTPException(
+            status_code=422, detail="Persisted result envelope has invalid evidence"
+        )
     for item in result.evidence:
-        if item.source_type not in {"document", "structured_query"} or not item.source_id:
-            raise HTTPException(status_code=422, detail="Persisted result envelope has invalid evidence")
+        if (
+            item.source_type not in {"document", "structured_query"}
+            or not item.source_id
+        ):
+            raise HTTPException(
+                status_code=422, detail="Persisted result envelope has invalid evidence"
+            )
     document_ids, source_ids = _source_ids(result.evidence)
     structured_tables = _structured_tables(result.evidence)
     if (
@@ -299,7 +623,9 @@ async def _authorize_run_read(
             for source_id, tables in structured_tables.items()
         )
     ):
-        raise HTTPException(status_code=409, detail="Report run evidence is outside its definition")
+        raise HTTPException(
+            status_code=409, detail="Report run evidence is outside its definition"
+        )
     if not await _sources_available(db, result.evidence):
         raise HTTPException(
             status_code=409,
@@ -364,7 +690,9 @@ async def submit_run(
             pinned_source_tables=pinned_tables,
         )
     except ReportRunConflict as exc:
-        raise HTTPException(status_code=409, detail="Report run reservation conflict") from exc
+        raise HTTPException(
+            status_code=409, detail="Report run reservation conflict"
+        ) from exc
     if owns_execution:
         return await _execute_owned_run(
             db,

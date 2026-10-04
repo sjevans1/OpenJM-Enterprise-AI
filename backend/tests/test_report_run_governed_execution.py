@@ -1,10 +1,12 @@
 """VS4-B2C2 Phase 2 governed report execution."""
 
+import json
+
 import pytest
 from sqlalchemy import func, select
 
 from app.api import report_runs as report_runs_api
-from app.models import Conversation, Document, Message, ReportRun
+from app.models import Conversation, Document, ExecutionTrace, Message, ReportRun
 from app.schemas import Evidence
 from app.services.orchestrator import ExecutionPlan
 from app.services.report_scope import ReportSourceScope
@@ -20,11 +22,50 @@ class _PlanRecorder:
 
     async def plan(self, **kwargs):
         self.calls.append(kwargs)
+        traces = []
+        for item in self.evidence:
+            tool_name = (
+                "knowledge.search"
+                if item.source_type == "document"
+                else "structured.query"
+            )
+            sql = item.metadata.get("sql")
+            trace = ExecutionTrace(
+                request_id=kwargs["request_id"],
+                tool_invocation_id=f"inv-{tool_name}",
+                user_id=kwargs["user_id"],
+                conversation_id=None,
+                route="hybrid",
+                requested_mode="hybrid",
+                tool_name=tool_name,
+                operation_class="READ",
+                risk_level="LOW",
+                requires_approval=False,
+                source_id=item.source_id if tool_name == "structured.query" else None,
+                input_hash="0" * 64,
+                planned_sql=sql,
+                executed_sql=sql,
+                status="succeeded",
+                evidence_ids_json=json.dumps([item.evidence_id]),
+            )
+            kwargs["db"].add(trace)
+            traces.append(trace)
+        await kwargs["db"].commit()
         return ExecutionPlan(
             execution_class="hybrid",
             system_prompt="Use only the governed report evidence.",
             evidence=self.evidence,
             requested_mode="hybrid",
+            structured_result={
+                "source_id": self.evidence[1].source_id,
+                "evidence_id": self.evidence[1].evidence_id,
+                "sql": self.evidence[1].metadata["sql"],
+                "columns": self.evidence[1].metadata["columns"],
+                "rows": [[325]],
+                "row_count": 1,
+                "truncated": False,
+            },
+            trace_ids=[trace.id for trace in traces],
         )
 
 
@@ -43,17 +84,25 @@ def _authorized_evidence(fixture):
     source_id = next(iter(fixture["pinned_source_tables"]))
     return [
         Evidence(
+            evidence_id="document-evidence",
             source_type="document",
             source_id=document_id,
             title="Policy",
             passage="Authorized policy evidence.",
         ),
         Evidence(
+            evidence_id="structured-evidence",
             source_type="structured_query",
             source_id=source_id,
             title="Finance",
             passage="Authorized structured evidence.",
-            metadata={"tables": ["finance"], "sql": "SELECT revenue FROM finance"},
+            metadata={
+                "tables": ["finance"],
+                "sql": "SELECT revenue FROM finance",
+                "columns": ["revenue"],
+                "row_count": 1,
+                "truncated": False,
+            },
         ),
     ]
 
@@ -75,12 +124,16 @@ async def test_new_reservation_executes_exact_validated_intent_without_chat_rows
         loads.append((kwargs["definition_id"], value))
         return value
 
-    monkeypatch.setattr(report_runs_api, "load_validated_definition_scope", tracked_load)
+    monkeypatch.setattr(
+        report_runs_api, "load_validated_definition_scope", tracked_load
+    )
     monkeypatch.setattr(report_runs_api, "orchestrator", planner, raising=False)
     monkeypatch.setattr(report_runs_api, "model_gateway", gateway, raising=False)
 
     async with file_db() as db:
-        conversations_before = await db.scalar(select(func.count()).select_from(Conversation))
+        conversations_before = await db.scalar(
+            select(func.count()).select_from(Conversation)
+        )
         messages_before = await db.scalar(select(func.count()).select_from(Message))
 
     response = await client.post(
@@ -92,7 +145,9 @@ async def test_new_reservation_executes_exact_validated_intent_without_chat_rows
     body = response.json()
     assert body["status"] == "succeeded"
     assert body["result"]["answer"] == "Governed report answer."
-    assert len(loads) >= 3  # reservation, immediately pre-work, immediately pre-persist/read
+    assert (
+        len(loads) >= 3
+    )  # reservation, immediately pre-work, immediately pre-persist/read
     assert all(item[0] == fixture["definition_id"] for item in loads)
     assert len(planner.calls) == 1
     call = planner.calls[0]
@@ -102,9 +157,7 @@ async def test_new_reservation_executes_exact_validated_intent_without_chat_rows
     assert call["request_id"] == body["id"]
     assert isinstance(call["scope"], ReportSourceScope)
     assert call["scope"].document_ids == frozenset(fixture["pinned_document_ids"])
-    assert dict(call["scope"].source_tables) == {
-        source_id: frozenset({"finance"})
-    }
+    assert dict(call["scope"].source_tables) == {source_id: frozenset({"finance"})}
     assert gateway.calls == [
         (
             [
@@ -115,8 +168,14 @@ async def test_new_reservation_executes_exact_validated_intent_without_chat_rows
         )
     ]
     async with file_db() as db:
-        assert await db.scalar(select(func.count()).select_from(Conversation)) == conversations_before
-        assert await db.scalar(select(func.count()).select_from(Message)) == messages_before
+        assert (
+            await db.scalar(select(func.count()).select_from(Conversation))
+            == conversations_before
+        )
+        assert (
+            await db.scalar(select(func.count()).select_from(Message))
+            == messages_before
+        )
         run = await db.get(ReportRun, body["id"])
         assert run.status == "succeeded"
 
@@ -321,7 +380,9 @@ async def test_changed_intent_at_pre_execution_boundary_fails_invalid_definition
         async def plan(self, **_kwargs):
             raise AssertionError("changed immutable intent must not orchestrate")
 
-    monkeypatch.setattr(report_runs_api, "load_validated_definition_scope", changed_second_load)
+    monkeypatch.setattr(
+        report_runs_api, "load_validated_definition_scope", changed_second_load
+    )
     monkeypatch.setattr(report_runs_api, "orchestrator", Forbidden())
 
     response = await client.post(
@@ -353,7 +414,9 @@ async def test_changed_intent_at_pre_persistence_boundary_discards_answer(
             question += " altered in flight"
         return question, mode, scope
 
-    monkeypatch.setattr(report_runs_api, "load_validated_definition_scope", changed_third_load)
+    monkeypatch.setattr(
+        report_runs_api, "load_validated_definition_scope", changed_third_load
+    )
     monkeypatch.setattr(report_runs_api, "orchestrator", planner)
     monkeypatch.setattr(report_runs_api, "model_gateway", gateway)
 
@@ -381,15 +444,10 @@ async def test_execution_failures_are_bounded_without_raw_exception_leakage(
     raw = "secret-uri://credential@internal/raw-stack-marker"
 
     class Planner:
-        async def plan(self, **_kwargs):
+        async def plan(self, **kwargs):
             if failure_site == "planning":
                 raise RuntimeError(raw)
-            return ExecutionPlan(
-                execution_class="hybrid",
-                system_prompt="bounded",
-                evidence=_authorized_evidence(fixture),
-                requested_mode="hybrid",
-            )
+            return await _PlanRecorder(_authorized_evidence(fixture)).plan(**kwargs)
 
     class Gateway:
         async def chat(self, *_args, **_kwargs):
