@@ -235,3 +235,13 @@ class ReportRunSummary(BaseModel):
 
 class ReportRunDetail(ReportRunSummary):
     result: ReportRunResult | None = None
+
+
+# VS4-B2C2 Phase 1: the client supplies only a canonical reservation token.
+class CreateReportRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(
+        strict=True,
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )

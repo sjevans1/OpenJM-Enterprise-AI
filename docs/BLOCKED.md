@@ -1,7 +1,9 @@
 # VS4 pilot blockers
 
-No unresolved product blocker recorded at setup. Human review of the setup PR is
-a normal workflow boundary. Hermes has not been launched on the workstation.
+No unresolved product blocker is active for VS4-B2C2 Phase 1. PR #28 is merged
+and accepted; main `de391e92b510fb38e445e382fab33ee1517a2c12` passed CI run
+37176830805 and `pilot_ci_gate.py --main`. The B2C2 claim is recorded at
+https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/23#issuecomment-5982046257.
 
 ## Previously active blocker (resolved)
 
@@ -21,8 +23,8 @@ accepted=true against main `208d329735348ac4cee7b7adfe9a62037bc5b7c2`, run 36983
 - Main's branch API reported `protected: false` on 2026-10-02. CI evidence and
   the no-merge rule are not a claim that server-side merge restrictions exist.
   Repository administration is outside Hermes's authority; do not change it.
-- This environment cannot establish the user's WSL Gemma runtime acceptance.
-  That is a planned local gate in B2C2/C1/D, not a simulated pass.
+- Real Gemma runtime acceptance remains a later B2C2 release-gate requirement;
+  it is not part of Phase 1 and has not been simulated or claimed.
 - PR #5 and PR #13 remain historical open work. Preserve them. If their files
   overlap the current batch, report that conflict rather than replacing work.
 

@@ -1,12 +1,12 @@
-"""VS4-B2C1: owner-scoped, read-only report-run history.
+"""Owner-scoped report-run reservation and read-only history.
 
-Runs are immutable execution-history rows. This router only exposes bounded,
-owner-scoped READS:
+Runs are immutable execution-history rows. This router exposes one bounded
+reservation POST plus owner-scoped history reads:
   * a bounded, owner-scoped list of a report's runs,
   * the bounded persisted result envelope of a completed run.
 Source availability/authorization is re-checked on every read and fails
 closed with 409, consistently with saved reports and B2A definitions.
-No route here executes a report, cancels a run, or writes a terminal result.
+Phase 1 reservation never executes a report, cancels a run, or writes a terminal result.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -22,13 +22,20 @@ from app.api.reports import (
 )
 from app.core.config import get_settings
 from app.db import get_db
-from app.models import ReportRun, SavedReport
-from app.schemas import ReportRunDetail, ReportRunResult, ReportRunSummary
+from app.models import ReportDefinitionVersion, ReportRun, SavedReport
+from app.schemas import (
+    CreateReportRunRequest,
+    ReportRunDetail,
+    ReportRunResult,
+    ReportRunSummary,
+)
 from app.services.report_runs import (
     MAX_RESULT_BYTES,
+    ReportRunConflict,
     _parse_trace_ids,
     get_report_run,
     list_report_runs,
+    reserve_report_run,
 )
 
 router = APIRouter(prefix="/reports", tags=["report-runs"])
@@ -131,6 +138,60 @@ async def _detail(db: AsyncSession, run: ReportRun) -> ReportRunDetail:
     summary = _summary(run)
     result = await _authorize_run_read(db, run)
     return ReportRunDetail(**summary.model_dump(), result=result)
+
+
+@router.post(
+    "/{report_id}/definitions/{version}/runs",
+    response_model=ReportRunDetail,
+    status_code=202,
+)
+async def submit_run(
+    report_id: str,
+    version: int,
+    request: CreateReportRunRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reserve an explicitly versioned run; Phase 1 performs no execution."""
+    definition_id = (
+        await db.execute(
+            select(ReportDefinitionVersion.id)
+            .join(SavedReport, SavedReport.id == ReportDefinitionVersion.report_id)
+            .where(
+                ReportDefinitionVersion.report_id == report_id,
+                ReportDefinitionVersion.version == version,
+                ReportDefinitionVersion.user_id == settings.dev_user_id,
+                SavedReport.user_id == settings.dev_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if definition_id is None:
+        raise HTTPException(status_code=404, detail="Report definition not found")
+
+    question, mode, scope = await load_validated_definition_scope(
+        db,
+        report_id,
+        version,
+        settings.dev_user_id,
+        definition_id=definition_id,
+    )
+    pinned_documents = sorted(scope.document_ids)
+    pinned_tables = {
+        source_id: sorted(tables) for source_id, tables in scope.source_tables
+    }
+    try:
+        run, _owns_execution = await reserve_report_run(
+            db=db,
+            report_id=report_id,
+            definition_version=version,
+            idempotency_key=request.idempotency_key,
+            requested_mode=mode,
+            question=question,
+            pinned_document_ids=pinned_documents,
+            pinned_source_tables=pinned_tables,
+        )
+    except ReportRunConflict as exc:
+        raise HTTPException(status_code=409, detail="Report run reservation conflict") from exc
+    return await _detail(db, run)
 
 
 @router.get("/{report_id}/runs", response_model=list[ReportRunSummary])

@@ -275,10 +275,10 @@ async def test_api_get_unknown_run_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_public_revoke_route_absent_in_b2c1(client, file_db):
+async def test_public_revoke_route_absent(client, file_db):
     """The public POST /runs/{run_id}/revoke endpoint was an unrecorded
-    addition to the read-only B2C1 scope; it is deferred to B2C2/C1 with a
-    linked plan-change decision. No route may exist in this batch."""
+    addition to the read-only B2C1 scope and remains outside B2C2 Phase 1.
+    No route may exist in this phase."""
     fixture = await seed_definition(file_db)
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     async with file_db() as db:
@@ -294,4 +294,4 @@ async def test_public_revoke_route_absent_in_b2c1(client, file_db):
     assert resp.status_code == 405 or resp.status_code == 404
     async with file_db() as db:
         row = await db.get(ReportRun, run.id)
-    assert row.status == "running", "no public route may mutate run state in B2C1"
+    assert row.status == "running", "no public revoke route may mutate run state"
