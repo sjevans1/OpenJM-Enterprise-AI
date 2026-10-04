@@ -204,3 +204,34 @@ class ReportDefinitionVersionOut(BaseModel):
     created_at: datetime
     executes_queries: Literal[False] = False
     runnable: Literal[False] = False
+
+
+# VS4-B2C1: owner-scoped, read-only report-run history. These never grant
+# execution authority; they only describe an already-persisted (or reserved)
+# run and, for a succeeded run, its bounded persisted result envelope.
+class ReportRunResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str | None = None
+    evidence: list[Evidence] = Field(default_factory=list)
+    structured_result: dict = Field(default_factory=dict)
+    trace_ids: list[str] = Field(default_factory=list)
+
+
+class ReportRunSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    report_id: str
+    definition_version: int
+    requested_mode: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    failure_category: str | None = None
+    result_size_bytes: int | None = None
+    trace_count: int = 0
+
+
+class ReportRunDetail(ReportRunSummary):
+    result: ReportRunResult | None = None

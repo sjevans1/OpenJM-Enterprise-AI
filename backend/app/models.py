@@ -1,7 +1,16 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -165,4 +174,71 @@ class ReportDefinitionVersion(Base):
     requested_mode: Mapped[str] = mapped_column(String(16), nullable=False)
     pinned_document_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
     pinned_source_tables_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ReportRun(Base):
+    """VS4-B2C1: immutable execution history row. No SQL/model output authority.
+
+    Intent and identity are immutable. Lifecycle transitions are monotonic:
+    running -> succeeded|failed|interrupted. Terminal result/evidence are
+    written once. The internal reserve/finalize API is exercised only by tests
+    in this batch; no public submission endpoint exists yet.
+    """
+
+    __tablename__ = "report_runs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key", name="uq_report_run_owner_key"),
+        UniqueConstraint("id", name="uq_report_run_id"),
+        CheckConstraint(
+            "status IN ('running','succeeded','failed','interrupted')",
+            name="ck_report_run_status",
+        ),
+        CheckConstraint(
+            "(status = 'running') = (finished_at IS NULL)",
+            name="ck_report_run_running_unfinished",
+        ),
+        CheckConstraint(
+            "NOT (status = 'running' AND failure_category IS NOT NULL)",
+            name="ck_report_run_running_no_failure",
+        ),
+        CheckConstraint(
+            "(status IN ('succeeded','failed','interrupted')) = (finished_at IS NOT NULL)",
+            name="ck_report_run_terminal_finished",
+        ),
+        CheckConstraint(
+            "(status = 'succeeded') = (result_json IS NOT NULL)",
+            name="ck_report_run_succeeded_has_result",
+        ),
+        CheckConstraint(
+            "(status IN ('failed','interrupted')) = (failure_category IS NOT NULL)",
+            name="ck_report_run_failed_has_category",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    report_id: Mapped[str] = mapped_column(
+        ForeignKey("saved_reports.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    definition_id: Mapped[str] = mapped_column(
+        ForeignKey("report_definition_versions.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    definition_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failure_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    trace_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

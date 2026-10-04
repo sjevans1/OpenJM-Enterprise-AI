@@ -3,6 +3,19 @@
 No unresolved product blocker recorded at setup. Human review of the setup PR is
 a normal workflow boundary. Hermes has not been launched on the workstation.
 
+## Previously active blocker (resolved)
+
+2026-10-02T08:24:56Z / VS4-B2C1 startup / `pilot_ci_gate.py --main` returned
+`GitHub returned invalid JSON`. Read-only diagnosis showed `/home/sjeva/.local/bin/gh`
+was an npm package whose `gh api` command prints a Node TypeError to stdout while
+exiting zero, rather than the official GitHub CLI required by the gate.
+
+Resolved by replacing it with the official GitHub CLI 2.102.0 (checksum verified)
+authenticated with the existing git-stored token, reusing the user's credential
+without exposing it. The maintainer authorized installation of the official CLI.
+The main gate now accepts: `python scripts/pilot_ci_gate.py --main` returned
+accepted=true against main `208d329735348ac4cee7b7adfe9a62037bc5b7c2`, run 36983493324.
+
 ## Verified constraints
 
 - Main's branch API reported `protected: false` on 2026-10-02. CI evidence and
