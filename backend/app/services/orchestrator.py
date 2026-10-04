@@ -408,6 +408,7 @@ class OpenJMOrchestrator:
         conversation_id: str | None = None,
         mode: ExecutionMode = "chat",
         scope: ReportSourceScope | None = None,
+        request_id: str | None = None,
     ) -> ExecutionPlan:
         """Route with optional server-validated report scope, never from Chat input."""
         execution_class = MODE_TO_EXECUTION_CLASS.get(mode, "general")
@@ -434,6 +435,7 @@ class OpenJMOrchestrator:
         if execution_class == "knowledge":
             evidence, direct_answer = await self._execute_knowledge_search(
                 message, db, user_id, conversation_id, "knowledge",
+                request_id=request_id,
                 **({"scope": scope} if scope is not None else {}),
             )
             return ExecutionPlan(
@@ -447,6 +449,7 @@ class OpenJMOrchestrator:
         if execution_class == "structured":
             return await self._execute_structured_plan(
                 message, db, user_id, conversation_id, "data",
+                request_id=request_id,
                 **({"scope": scope} if scope is not None else {}),
             )
 
@@ -456,6 +459,7 @@ class OpenJMOrchestrator:
             # questions keep using the proven independent dual-source path.
             return await self._plan_hybrid(
                 message, db, user_id, conversation_id, "hybrid",
+                request_id=request_id,
                 **({"scope": scope} if scope is not None else {}),
             )
 
@@ -476,6 +480,7 @@ class OpenJMOrchestrator:
         prefetched_knowledge_evidence: list[Evidence] | None = None,
         prefetched_knowledge_error: str | None = None,
         scope: ReportSourceScope | None = None,
+        request_id: str | None = None,
     ) -> ExecutionPlan:
         """Independent dual-source execution for Hybrid mode.
 
@@ -486,7 +491,7 @@ class OpenJMOrchestrator:
         5. Handle partial success: return grounded evidence from whichever
            source succeeded, explain the failure of the other.
         """
-        request_id = str(uuid4())
+        request_id = request_id or str(uuid4())
         # A dependent (policy-derived) hybrid question must not degrade into an
         # independent Structured execution. Route it through the fail-closed
         # dependent gate; independent questions keep the proven path below.

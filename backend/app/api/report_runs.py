@@ -1,4 +1,4 @@
-"""Owner-scoped report-run reservation and read-only history.
+"""Owner-scoped report-run execution and read-only history.
 
 Runs are immutable execution-history rows. This router exposes one bounded
 reservation POST plus owner-scoped history reads:
@@ -6,7 +6,7 @@ reservation POST plus owner-scoped history reads:
   * the bounded persisted result envelope of a completed run.
 Source availability/authorization is re-checked on every read and fails
 closed with 409, consistently with saved reports and B2A definitions.
-Phase 1 reservation never executes a report, cancels a run, or writes a terminal result.
+Newly owned reservations execute inline through the existing governed orchestrator.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -33,13 +33,187 @@ from app.services.report_runs import (
     MAX_RESULT_BYTES,
     ReportRunConflict,
     _parse_trace_ids,
+    finalize_failure,
+    finalize_success,
     get_report_run,
     list_report_runs,
     reserve_report_run,
 )
+from app.services.model_gateway import ModelGatewayError, OpenAICompatibleModelGateway
+from app.services.orchestrator import orchestrator
+from app.services.report_scope import ReportScopeError, ReportSourceScope
 
 router = APIRouter(prefix="/reports", tags=["report-runs"])
 settings = get_settings()
+model_gateway = OpenAICompatibleModelGateway()
+
+
+def _same_execution_intent(
+    question: str,
+    mode: str,
+    scope: ReportSourceScope,
+    refreshed: tuple[str, str, ReportSourceScope],
+) -> bool:
+    """Compare the complete trusted immutable intent at an execution boundary."""
+    return refreshed == (question, mode, scope)
+
+
+async def _reload_execution_intent(
+    db: AsyncSession,
+    *,
+    report_id: str,
+    definition_version: int,
+    definition_id: str,
+) -> tuple[str, str, ReportSourceScope]:
+    """Force a current authority read rather than reusing identity-map state."""
+    db.expire_all()
+    return await load_validated_definition_scope(
+        db,
+        report_id,
+        definition_version,
+        settings.dev_user_id,
+        definition_id=definition_id,
+    )
+
+
+async def _failed_execution_detail(
+    db: AsyncSession,
+    run_id: str,
+) -> ReportRunDetail:
+    """Return bounded terminal metadata only; never expose generated payloads."""
+    run = await get_report_run(db, settings.dev_user_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Report run not found")
+    return ReportRunDetail(**_summary(run).model_dump(), result=None)
+
+
+async def _fail_owned_run(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    fingerprint: str,
+    category: str,
+) -> ReportRunDetail:
+    await finalize_failure(
+        db=db,
+        run_id=run_id,
+        user_id=settings.dev_user_id,
+        fingerprint=fingerprint,
+        failure_category=category,
+    )
+    return await _failed_execution_detail(db, run_id)
+
+
+async def _execute_owned_run(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    report_id: str,
+    definition_id: str,
+    definition_version: int,
+    fingerprint: str,
+    question: str,
+    mode: str,
+    scope: ReportSourceScope,
+) -> ReportRunDetail:
+    """Execute one newly owned reservation across two current-authority gates."""
+    try:
+        refreshed = await _reload_execution_intent(
+            db,
+            report_id=report_id,
+            definition_version=definition_version,
+            definition_id=definition_id,
+        )
+    except HTTPException as exc:
+        category = "invalid_definition" if exc.status_code == 404 else "authorization"
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category=category
+        )
+    if not _same_execution_intent(question, mode, scope, refreshed):
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="invalid_definition"
+        )
+
+    try:
+        plan = await orchestrator.plan(
+            message=question,
+            db=db,
+            user_id=settings.dev_user_id,
+            conversation_id=None,
+            mode=mode,
+            scope=scope,
+            request_id=run_id,
+        )
+    except ReportScopeError:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="authorization"
+        )
+    except Exception:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="planning"
+        )
+
+    if plan.direct_answer is not None:
+        answer = plan.direct_answer
+    else:
+        try:
+            answer = await model_gateway.chat(
+                [
+                    {"role": "system", "content": plan.system_prompt},
+                    {"role": "user", "content": question},
+                ],
+                max_tokens=2048,
+            )
+        except ModelGatewayError:
+            return await _fail_owned_run(
+                db, run_id=run_id, fingerprint=fingerprint, category="model"
+            )
+        except Exception:
+            return await _fail_owned_run(
+                db, run_id=run_id, fingerprint=fingerprint, category="model"
+            )
+
+    try:
+        refreshed = await _reload_execution_intent(
+            db,
+            report_id=report_id,
+            definition_version=definition_version,
+            definition_id=definition_id,
+        )
+    except HTTPException as exc:
+        category = "invalid_definition" if exc.status_code == 404 else "authorization"
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category=category
+        )
+    if not _same_execution_intent(question, mode, scope, refreshed):
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="invalid_definition"
+        )
+
+    persisted = await finalize_success(
+        db=db,
+        run_id=run_id,
+        user_id=settings.dev_user_id,
+        fingerprint=fingerprint,
+        answer=answer,
+        evidence=[item.model_dump(mode="json") for item in plan.evidence],
+        structured_result=None,
+        trace_ids=None,
+    )
+    if persisted != 1:
+        # A concurrent revocation wins the lifecycle compare-and-set. Never
+        # deliver the generated answer when this reservation no longer runs.
+        current = await get_report_run(db, settings.dev_user_id, run_id)
+        if current is not None and current.status == "running":
+            return await _fail_owned_run(
+                db, run_id=run_id, fingerprint=fingerprint, category="internal"
+            )
+        return await _failed_execution_detail(db, run_id)
+
+    completed = await get_report_run(db, settings.dev_user_id, run_id)
+    if completed is None:
+        raise HTTPException(status_code=404, detail="Report run not found")
+    return await _detail(db, completed)
 
 
 async def _owned_available_report(db: AsyncSession, report_id: str) -> SavedReport:
@@ -151,7 +325,7 @@ async def submit_run(
     request: CreateReportRunRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Reserve an explicitly versioned run; Phase 1 performs no execution."""
+    """Reserve an explicitly versioned run and execute only a newly owned row."""
     definition_id = (
         await db.execute(
             select(ReportDefinitionVersion.id)
@@ -179,7 +353,7 @@ async def submit_run(
         source_id: sorted(tables) for source_id, tables in scope.source_tables
     }
     try:
-        run, _owns_execution = await reserve_report_run(
+        run, owns_execution = await reserve_report_run(
             db=db,
             report_id=report_id,
             definition_version=version,
@@ -191,6 +365,18 @@ async def submit_run(
         )
     except ReportRunConflict as exc:
         raise HTTPException(status_code=409, detail="Report run reservation conflict") from exc
+    if owns_execution:
+        return await _execute_owned_run(
+            db,
+            run_id=run.id,
+            report_id=run.report_id,
+            definition_id=run.definition_id,
+            definition_version=run.definition_version,
+            fingerprint=run.request_fingerprint,
+            question=question,
+            mode=mode,
+            scope=scope,
+        )
     return await _detail(db, run)
 
 

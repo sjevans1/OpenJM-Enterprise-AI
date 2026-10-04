@@ -12,6 +12,19 @@ from conftest import seed_definition
 SUBMIT_KEY = "00000000-0000-4000-8000-000000000200"
 
 
+@pytest.fixture(autouse=True)
+def phase_one_reservation_contract_only(monkeypatch):
+    """Keep Phase 1 assertions isolated from Phase 2 inline execution."""
+    async def reservation_detail(db, *, run_id, **_kwargs):
+        run = await report_runs_api.get_report_run(
+            db, report_runs_api.settings.dev_user_id, run_id
+        )
+        assert run is not None
+        return await report_runs_api._detail(db, run)
+
+    monkeypatch.setattr(report_runs_api, "_execute_owned_run", reservation_detail)
+
+
 @pytest.mark.asyncio
 async def test_submit_reserves_running_detail_with_stable_202(file_db, client):
     """Phase 1 uses 202 for both new reservations and later replays."""
