@@ -474,6 +474,7 @@ export default function App() {
         error instanceof Error ? error.message : 'Live report execution information is unavailable',
       )
       if (isRevocationError(error)) {
+        setReportError(error instanceof Error ? error.message : 'Report access was revoked')
         setActiveReport(null)
         await loadReports()
       }
@@ -494,6 +495,7 @@ export default function App() {
       if (sequence === reportExecutionSequence.current) {
         setReportExecutionError(error instanceof Error ? error.message : 'Unable to create pinned definition')
         if (isRevocationError(error)) {
+          setReportError(error instanceof Error ? error.message : 'Report access was revoked')
           setActiveReport(null)
           await loadReports()
         }
@@ -515,6 +517,7 @@ export default function App() {
         setActiveRun(null)
         setReportExecutionError(error instanceof Error ? error.message : 'Report run is unavailable')
         if (isRevocationError(error)) {
+          setReportError(error instanceof Error ? error.message : 'Report access was revoked')
           setActiveReport(null)
           await loadReports()
         }
@@ -574,10 +577,12 @@ export default function App() {
     } catch (error) {
       if (sequence === reportExecutionSequence.current) {
         if (isRevocationError(error)) {
+          const message = error instanceof Error ? error.message : 'Report access was revoked'
           setPendingRunIntent(null)
           setActiveRun(null)
           setActiveReport(null)
-          setReportExecutionError(error instanceof Error ? error.message : 'Report access was revoked')
+          setReportExecutionError(message)
+          setReportError(message)
           await loadReports()
         } else {
           setReportExecutionError(

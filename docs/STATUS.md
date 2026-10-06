@@ -83,3 +83,8 @@ public revoke, push, PR or Phase 2 work performed.
 
 Do not create a bookkeeping-only commit after final CI. Put final SHA, run links,
 gate output and ready-state evidence in PR metadata, then stop for review.
+
+2026-10-06 | VS4-C1 repair 1 | CI run 37416879709 exposed a revocation-race
+UX defect: cached content cleared correctly, but the explanatory 409 reason lived
+inside the execution panel that was removed with the snapshot. Repair promotes
+revocation detail to the page-level report banner before clearing cached content.
