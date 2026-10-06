@@ -7,6 +7,7 @@ from app.api import (
     actions,
     auth,
     chat,
+    connectors,
     data,
     knowledge,
     report_exports,
@@ -24,6 +25,13 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Register the connector types this deployment knows about. Registration is
+    # explicit and happens once at start-up: an importable package cannot add
+    # network access by being present.
+    from app.services.actions.builtin import registry as tool_registry  # noqa: F401
+    from app.services.connectors.workspace import register_workspace_connector
+
+    register_workspace_connector()
     yield
 
 
@@ -58,6 +66,7 @@ async def health():
 app.include_router(chat.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
+app.include_router(connectors.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
 

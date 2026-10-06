@@ -567,3 +567,468 @@ class ActionExecution(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# ---------------------------------------------------------------------------
+# VS7 — governed connectors, external resources and operational workflows
+#
+# Every table here is tenant-owned. A connector instance, its credential, its
+# cached external resources and its schedules are all scoped by ``tenant_id``,
+# and a row belonging to one tenant is indistinguishable from a missing row to
+# any other tenant.
+# ---------------------------------------------------------------------------
+
+
+CONNECTOR_STATUS_CONFIGURED = "configured"
+CONNECTOR_STATUS_ACTIVE = "active"
+CONNECTOR_STATUS_DISABLED = "disabled"
+CONNECTOR_STATUS_ERROR = "error"
+CONNECTOR_STATUS_DISCONNECTED = "disconnected"
+
+# External-resource lifecycle. ``quarantined`` is the interesting one: the
+# content is still physically cached, but it must not be retrievable because
+# current authorization could not be proven.
+EXTERNAL_STATE_ACTIVE = "active"
+EXTERNAL_STATE_QUARANTINED = "quarantined"
+EXTERNAL_STATE_DELETED = "deleted"
+
+EXTERNAL_PERMISSION_ALLOWED = "allowed"
+EXTERNAL_PERMISSION_REVOKED = "revoked"
+EXTERNAL_PERMISSION_UNKNOWN = "unknown"
+
+
+class ConnectorInstance(Base):
+    """One tenant-scoped configured connection to an external system.
+
+    ``config_json`` holds only non-secret configuration (base URL, scope,
+    options). Credential material lives in :class:`ConnectorCredential` as
+    ciphertext and is referenced, never copied.
+    """
+
+    __tablename__ = "connector_instances"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_connector_instance_tenant_name"),
+        CheckConstraint(
+            "status IN ('configured','active','disabled','error','disconnected')",
+            name="ck_connector_instance_status",
+        ),
+        CheckConstraint(
+            "health_status IN ('unknown','healthy','unhealthy')",
+            name="ck_connector_instance_health",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    connector_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    connector_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), default=CONNECTOR_STATUS_CONFIGURED, nullable=False
+    )
+    # Distinct from status: an instance can be configured and enabled but still
+    # unhealthy. Disabling is the authorization-relevant switch.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    credential_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    health_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
+    health_detail: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    last_successful_connection_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_reconciliation_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_failure_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class ConnectorCredential(Base):
+    """A tenant-bound credential for one connector instance.
+
+    Only the Fernet ciphertext is stored. Rotation adds a new active row and
+    supersedes the previous one, so a connector instance never has to be
+    recreated. Revocation sets ``revoked_at``, and resolution refuses to hand
+    back a revoked credential, which is what makes revocation fail closed.
+    """
+
+    __tablename__ = "connector_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','superseded','revoked')", name="ck_connector_credential_status"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    connector_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_instances.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class ExternalResource(Base):
+    """A connector-owned external resource, normalized.
+
+    ``resource_namespace`` namespaces the identity of every row so a connector
+    resource can never collide with an uploaded document, a structured data
+    source, another connector, or another tenant. ``document_id`` links the row
+    to the Knowledge document that carries its content through the accepted
+    VS1 document lifecycle; the content itself always lives there.
+    """
+
+    __tablename__ = "external_resources"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "connector_instance_id",
+            "resource_namespace",
+            "external_id",
+            name="uq_external_resource_identity",
+        ),
+        CheckConstraint(
+            "lifecycle_state IN ('active','quarantined','deleted')",
+            name="ck_external_resource_lifecycle",
+        ),
+        CheckConstraint(
+            "permission_state IN ('allowed','revoked','unknown')",
+            name="ck_external_resource_permission",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    connector_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_instances.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    resource_namespace: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    external_parent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(32), default=EXTERNAL_STATE_ACTIVE, nullable=False
+    )
+    permission_state: Mapped[str] = mapped_column(
+        String(32), default=EXTERNAL_PERMISSION_UNKNOWN, nullable=False
+    )
+    document_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    source_metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provenance_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    quarantine_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    quarantined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class ConnectorCursor(Base):
+    """A persisted checkpoint for one stream of one connector instance.
+
+    Cursors are opaque provider values. ``last_event_id`` supports deterministic
+    deduplication of overlapping reads without depending on the cursor format.
+    """
+
+    __tablename__ = "connector_cursors"
+    __table_args__ = (
+        UniqueConstraint(
+            "connector_instance_id", "stream", name="uq_connector_cursor_stream"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    connector_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_instances.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    stream: Mapped[str] = mapped_column(String(64), nullable=False)
+    cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class ConnectorSyncRun(Base):
+    """Operator-visible record of one sync, reconcile or lifecycle execution.
+
+    Counters and a safe failure category only. Provider error text is sanitized
+    before it is stored, so a provider echoing a secret in an error cannot leak
+    it into operational state.
+    """
+
+    __tablename__ = "connector_sync_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "run_type IN ('initial','incremental','reconcile','test','purge')",
+            name="ck_connector_sync_run_type",
+        ),
+        CheckConstraint(
+            "status IN ('running','succeeded','failed','skipped')",
+            name="ck_connector_sync_run_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    connector_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_instances.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="running", nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    items_scanned: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_updated: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_deleted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_quarantined: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cursor_before: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cursor_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class WorkspaceUserMapping(Base):
+    """An explicit, auditable mapping between one external user and one principal.
+
+    Uniqueness is enforced on both directions for a connector instance, so an
+    ambiguous mapping is impossible to create rather than merely discouraged.
+    A missing mapping fails closed for user-specific evidence.
+    """
+
+    __tablename__ = "workspace_user_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "connector_instance_id",
+            "principal_id",
+            name="uq_workspace_mapping_principal",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "connector_instance_id",
+            "external_user_id",
+            name="uq_workspace_mapping_external",
+        ),
+        CheckConstraint("status IN ('active','revoked')", name="ck_workspace_mapping_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    connector_instance_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_instances.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class Schedule(Base):
+    """A persisted, bounded schedule definition.
+
+    Deliberately not an arbitrary cron expression: the interval is an integer
+    number of seconds plus a timezone, and the ``operation`` must name a
+    registered operation. A model cannot invent a schedule target.
+    """
+
+    __tablename__ = "schedules"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_schedule_tenant_name"),
+        CheckConstraint(
+            "schedule_type IN "
+            "('connector_sync','connector_reconcile','report_rerun','notification_retry','workflow')",
+            name="ck_schedule_type",
+        ),
+        CheckConstraint("status IN ('active','paused','disabled')", name="ck_schedule_status"),
+        CheckConstraint("misfire_policy IN ('skip','run_once')", name="ck_schedule_misfire"),
+        CheckConstraint("interval_seconds >= 60", name="ck_schedule_interval"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    owner_principal_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    schedule_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation: Mapped[str] = mapped_column(String(120), nullable=False)
+    target_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=True
+    )
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_result: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    misfire_policy: Mapped[str] = mapped_column(String(16), default="skip", nullable=False)
+    max_retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class ScheduleRun(Base):
+    """One claimed occurrence of one schedule.
+
+    ``uq_schedule_run_occurrence`` on (schedule_id, scheduled_for) is what makes
+    claiming idempotent across concurrent schedulers and across a restart: the
+    second claimer loses on the unique constraint instead of running the job a
+    second time.
+    """
+
+    __tablename__ = "schedule_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "schedule_id", "scheduled_for", name="uq_schedule_run_occurrence"
+        ),
+        CheckConstraint(
+            "status IN ('claimed','running','succeeded','failed','skipped')",
+            name="ck_schedule_run_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    schedule_id: Mapped[str] = mapped_column(
+        ForeignKey("schedules.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="claimed", nullable=False)
+    claim_token: Mapped[str] = mapped_column(String(36), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class NotificationChannel(Base):
+    """A registered notification destination.
+
+    Only channel types with a registered implementation may be created. There is
+    no free-form URL field, because a channel with an arbitrary destination is
+    an arbitrary network call wearing a different name.
+    """
+
+    __tablename__ = "notification_channels"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_notification_channel_tenant_name"),
+        CheckConstraint("status IN ('active','disabled')", name="ck_notification_channel_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class Notification(Base):
+    """A notification for one recipient, with bounded delivery state.
+
+    ``status='suppressed'`` is a first-class outcome: it means the notification
+    was generated but delivery was refused because the recipient could no longer
+    see the evidence it referenced.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','delivered','failed','suppressed')",
+            name="ck_notification_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    principal_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    channel_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject: Mapped[str] = mapped_column(String(240), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )

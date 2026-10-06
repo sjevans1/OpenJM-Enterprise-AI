@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional, Protocol
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DataSource, Document
@@ -254,8 +254,20 @@ class KnowledgeSearchTool:
         if context.budget is not None:
             context.budget.count_knowledge()
 
+        # Connector-owned documents enter this selection only through the
+        # current authorization gate, which revalidates the mapped user's
+        # provider permissions and yields nothing when it cannot prove access.
+        # Without a proven yes, connector content is not a candidate at all.
+        from app.services.connectors.authorization import (
+            authorized_connector_document_ids_for_context,
+        )
+
+        ownership = Document.user_id == context.user_id
+        connector_document_ids = await authorized_connector_document_ids_for_context(context.db)
+        if connector_document_ids:
+            ownership = or_(ownership, Document.id.in_(connector_document_ids))
         statement = select(Document).where(
-            Document.user_id == context.user_id,
+            ownership,
             Document.status == "ready",
             Document.indexed.is_(True),
         )
