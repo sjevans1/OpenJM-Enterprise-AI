@@ -4,22 +4,19 @@
 | --- | --- |
 | Repository | sjevans1/OpenJM-Enterprise-AI |
 | Plan revision | vs4-pilot-1 |
-| State | VS4-B2C2 Phase 1 implemented and locally verified; stopped at the requested commit boundary, not pushed |
-| Current batch / phase | VS4-B2C2 / Phase 1 explicit versioned run reservation only |
-| Active writer | Hermes |
+| State | VS4-B2C2 correction pass after reviewer finding; PR #29 open, unmerged |
+| Current batch / phase | VS4-B2C2 / release-gate correction |
+| Active writer | ChatGPT correction pass on existing Hermes branch |
 | Branch | milestone/vs4-b2c2-manual-execution |
-| PR | None for B2C2; PR #28 is merged and accepted historical work |
+| PR | #29 |
 | Starting main SHA | de391e92b510fb38e445e382fab33ee1517a2c12 |
-| Last reviewed SHA | 21e1df78c0ea2a97388e372dfd4037808cc14a39 (B2C1 final reviewed head) |
-| Current code | Phase-1 ordinary local commit on starting main; not pushed |
-| Last verified product CI | Main run 37176830805 green on de391e92b510fb38e445e382fab33ee1517a2c12; `pilot_ci_gate.py --main` accepted |
-| Setup / prerequisite | PR #28 merged/accepted; B2C2 claim: https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/23#issuecomment-5982046257 |
-| Current failure fingerprint / repair count | none / 0 |
-| Total code-repair attempts in active batch | 0 |
-| Service retries | 0 in B2C2 |
-| Local verification | 102 focused report/definition/submission tests passed; focused Ruff critical checks passed |
-| Next phase | VS4-B2C2 Phase 2 governed execution; intentionally not started |
-| Next action | Review the local Phase-1 commit; do not push or begin Phase 2 without a new instruction |
+| Last reviewed SHA | 8948825fd4f4341e5224b9f31048e469781bc31b |
+| Last verified PR CI | Fast PR run 37408679705 green on 8948825; exact correction-head CI pending |
+| Real-runtime acceptance | 30/30 accepted on 8948825 with real Gemma + isolated temp DB/vector/uploads/key; rerun required after wall-budget correction |
+| Local regression | 504 passed, 19 subtests passed on 8948825 |
+| Review finding | 600-second wall budget was checked only at run entry |
+| Correction | Overall planning/synthesis deadlines, external-boundary checks, pre-persist wall check, and deadline-aware success CAS |
+| Next action | Final correction-head tests, fast CI, full hosted workflow_dispatch, then real-runtime acceptance rerun and review |
 
 ## Checkpoint protocol
 
