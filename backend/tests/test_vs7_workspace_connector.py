@@ -13,6 +13,7 @@ import pytest
 from app.core.connectors import (
     AuthorizationBehavior,
     ConnectorCapability,
+    ConnectorRegistryError,
     OperationClass,
     connector_registry,
 )
@@ -126,7 +127,7 @@ def test_spec_registration_is_idempotent_and_validates(registered):
     assert spec.max_retries == 3
     assert spec.initial_sync_limit == 500
 
-    assert len(spec.operations) == 4
+    assert len(spec.operations) == 3
     names = {op.name for op in spec.operations}
 
     list_op = spec.operation("workspace.list_resources")
@@ -144,18 +145,22 @@ def test_spec_registration_is_idempotent_and_validates(registered):
     assert check_op.operation_class is OperationClass.READ
     assert check_op.required_permission == Permission.CONNECTOR_READ.value
 
-    write_op = spec.operation("workspace.update_page")
-    assert write_op.capability is ConnectorCapability.DOCUMENTS
-    assert write_op.operation_class is OperationClass.WRITE
-    assert write_op.required_permission == Permission.CONNECTOR_WRITE.value
-    assert write_op.requires_approval is True
-    assert write_op.approval_required is True
+    # Workspace advertises no write operation. Its documented write route
+    # authorizes the caller's own identity, and the integration credential is a
+    # synthetic service principal, so a write through it could not be authorized
+    # by the mapped end user. Advertising an operation that cannot honour the
+    # connector's own authorization model would be worse than not advertising it.
+    with pytest.raises(ConnectorRegistryError) as exc:
+        spec.operation("workspace.update_page")
+    assert exc.value.code == "unregistered_operation"
+    assert all(op.operation_class is OperationClass.READ for op in spec.operations), (
+        "the registry must not advertise a Workspace write"
+    )
 
     assert names == {
         "workspace.list_resources",
         "workspace.fetch_resource",
         "workspace.check_access",
-        "workspace.update_page",
     }
 
 

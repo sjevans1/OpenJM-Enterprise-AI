@@ -251,6 +251,9 @@ async def deliver_notification(
     The authorization check re-runs against current state at delivery time. If
     it fails the notification is suppressed rather than delivered, so a
     notification cannot carry evidence the recipient has lost access to.
+
+    The check itself lives in the notification service, not here, so this path
+    and the scheduler retry path apply exactly the same rule.
     """
     from app.models import Notification
 
@@ -267,34 +270,12 @@ async def deliver_notification(
             detail={"code": "notification_not_found", "message": "notification not found"},
         )
 
-    async def authorization_check() -> bool:
-        # Recipient access is re-derived from current provider state, never taken
-        # from the notification row. An unparseable or unknown reference fails
-        # closed rather than defaulting to delivery.
-        from app.services.connectors.authorization import (
-            parse_connector_resource_reference,
-            require_current_authorization,
-        )
-
-        if notification.resource_type != "connector_resource":
-            return True
-        parsed = parse_connector_resource_reference(notification.resource_id or "")
-        if parsed is None:
-            return False
-        connector_id, external_id = parsed
-        outcome = await require_current_authorization(
-            db,
-            tenant_id=principal.tenant_id,
-            connector_instance_id=connector_id,
-            external_id=external_id,
-            principal_id=notification.principal_id,
-        )
-        return outcome.allowed
-
+    # Recipient access is re-proved from current provider state by the shared
+    # notification-authorization rule, which the scheduler retry path uses too.
+    # That rule reads the persisted notification row, so it authorizes the
+    # recipient rather than whoever is making this request.
     try:
-        await notifications_service.deliver(
-            db, notification=notification, authorization_check=authorization_check
-        )
+        await notifications_service.deliver(db, notification=notification)
     except NotificationError as exc:
         await db.commit()
         return {"delivered": False, "code": exc.code, "status": notification.status}

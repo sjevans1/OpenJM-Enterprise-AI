@@ -14,6 +14,11 @@ Contract rules every implementation must honour:
   ``True`` must deny. Raising is the correct response to a timeout, an outage,
   an ambiguous mapping or contradictory state. Never return ``True`` because the
   *service credential* can read something.
+* **Prove the user, not the credential.** An operation declared with
+  ``requires_user_authorization`` is not executable until
+  :meth:`Connector.authorize_operation` has proven that the mapped end user may
+  perform it on the target. The connector's own credential is never sufficient
+  evidence, and the base class refuses rather than assuming.
 * **No secrets in errors.** Use :func:`redact` before surfacing any provider
   text. A provider that echoes a token in an error message must not be able to
   write that token into OpenJM logs, audit rows or user-visible output.
@@ -36,7 +41,7 @@ from typing import Any
 
 import httpx
 
-from app.core.connectors import ConnectorTypeSpec
+from app.core.connectors import ConnectorTypeSpec, DeclaredOperation
 
 # ---------------------------------------------------------------------------
 # Error handling
@@ -280,6 +285,46 @@ class Connector(ABC):
         prove authorization, which the caller must also treat as a deny. It must
         never be possible to reach a ``True`` from "the credential can read it".
         """
+
+    # -- operation authorization -------------------------------------------
+
+    async def authorize_operation(
+        self,
+        ctx: ConnectorContext,
+        *,
+        operation: str,
+        declared: DeclaredOperation,
+        arguments: dict,
+        external_user_id: str | None,
+    ) -> None:
+        """Prove the mapped external user may perform ``operation``.
+
+        The runtime calls this immediately before :meth:`execute_operation` for
+        any declared operation whose ``requires_user_authorization`` is set, so
+        no provider has to remember to check for itself and none can forget to.
+
+        ``external_user_id`` is the provider-side identity of the OpenJM
+        principal that planned the action. ``arguments`` are the operation's own
+        arguments, so an implementation can work out the target resource.
+
+        Returning normally means current-user authorization was proven. Raising
+        :class:`ConnectorAuthUnavailable` means it could not be proven, which the
+        runtime treats as a refusal. The default refuses, because the base class
+        knows nothing about a provider's ACLs: an operation that declares
+        ``requires_user_authorization`` and does not override this is
+        *not executable* rather than quietly allowed.
+
+        The service credential is never sufficient evidence here. Proving that
+        the connector's own token can reach a resource says nothing about whether
+        the end user may act on it, and substituting one for the other is exactly
+        the substitution this seam exists to prevent.
+        """
+        if declared.requires_user_authorization:
+            raise ConnectorError(
+                f"connector {self.type_id} cannot prove current-user "
+                f"authorization for operation '{operation}'",
+                code="user_authorization_unsupported",
+            )
 
     # -- operations --------------------------------------------------------
 

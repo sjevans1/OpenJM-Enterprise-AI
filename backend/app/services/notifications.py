@@ -12,10 +12,17 @@ this module:
    access at all.
 
 2. **Re-prove before surfacing.** Authorization can change between the moment a
-   notification is queued and the moment it would be shown. Delivery therefore
-   takes an ``authorization_check`` callable that re-proves the recipient may
-   still access the referenced evidence. A refusal suppresses the notification
-   permanently rather than delivering stale content.
+   notification is queued and the moment it would be shown. Every delivery
+   attempt therefore re-proves that the recipient may still access the
+   referenced evidence, through one shared rule
+   (:func:`notification_evidence_authorized`). A refusal suppresses the
+   notification permanently rather than delivering stale content.
+
+   This applies to *every* attempt, not only the first. A retry after a
+   transient failure is a fresh opportunity for the recipient's access to have
+   been withdrawn in the meantime, so retries re-prove access exactly as an
+   initial delivery does. A retry that skipped the check would turn a transient
+   failure into a way to deliver evidence the recipient has since lost.
 
 Every state-changing operation appends an audit record through
 :func:`~app.services.identity.record_audit` with an action prefixed
@@ -301,6 +308,78 @@ async def _resolve_channel(
     return result.scalars().first()
 
 
+# ---------------------------------------------------------------------------
+# Notification authorization
+# ---------------------------------------------------------------------------
+
+# Resource types that name something other than protected connector evidence.
+# A notification about one of these is operational: it carries no cached
+# provider content, so there is no recipient access to lose and delivery does
+# not depend on a provider check.
+EVIDENCE_FREE_RESOURCE_TYPES = frozenset(
+    {
+        "report",
+        "run",
+        "schedule",
+        "connector_instance",
+        "connector_sync",
+        "notification",
+        "notification_channel",
+        "operation",
+        "system",
+    }
+)
+
+
+async def notification_evidence_authorized(
+    db: AsyncSession, *, notification: Notification
+) -> bool:
+    """Re-prove the recipient may currently access this notification's evidence.
+
+    This is the single authorization rule for notifications. The API delivery
+    path and the scheduler retry path both use it, so a retry can never be a
+    weaker check than a first attempt. It reads the persisted notification row,
+    so it does not depend on an HTTP caller being present.
+
+    The recipient is always ``notification.principal_id``. Whoever triggered the
+    delivery is irrelevant: a scheduler retry must prove the *recipient's*
+    access, never the scheduler's.
+
+    Fails closed. A malformed reference, an unknown resource, a revoked mapping,
+    a provider outage, a permission timeout, a disabled connector and a revoked
+    credential all yield ``False``, because every one of them is an inability to
+    prove access rather than evidence of it.
+    """
+    resource_type = notification.resource_type
+
+    if resource_type is None or resource_type in EVIDENCE_FREE_RESOURCE_TYPES:
+        # Operational notification: no protected evidence reference to re-prove.
+        return True
+
+    if resource_type != "connector_resource":
+        # A protected or unrecognised evidence type that this module cannot
+        # revalidate. Assuming access would be the unsafe default, so refuse.
+        return False
+
+    from app.services.connectors.authorization import (
+        parse_connector_resource_reference,
+        require_current_authorization,
+    )
+
+    parsed = parse_connector_resource_reference(notification.resource_id or "")
+    if parsed is None:
+        return False
+    connector_id, external_id = parsed
+    outcome = await require_current_authorization(
+        db,
+        tenant_id=notification.tenant_id,
+        connector_instance_id=connector_id,
+        external_id=external_id,
+        principal_id=notification.principal_id,
+    )
+    return outcome.allowed
+
+
 async def _attempt_delivery(db: AsyncSession, *, notification: Notification) -> Notification:
     """One bounded delivery attempt against the notification's channel."""
     notification.attempts = int(notification.attempts) + 1
@@ -367,11 +446,18 @@ async def _attempt_delivery(db: AsyncSession, *, notification: Notification) -> 
     return notification
 
 
-async def deliver(db: AsyncSession, *, notification: Notification, authorization_check) -> Notification:
+async def deliver(
+    db: AsyncSession, *, notification: Notification, authorization_check=None
+) -> Notification:
     """Attempt one delivery, re-proving the recipient's access first.
 
-    ``authorization_check`` is an async callable taking no arguments and
-    returning a bool. When it returns False the notification is suppressed, a
+    Authorization is re-proved on every attempt through
+    :func:`notification_evidence_authorized`, which is the shared rule the
+    scheduler retry path uses too. ``authorization_check`` exists so a test can
+    substitute a check; production callers leave it unset, so the shared rule is
+    always the one that runs.
+
+    When the check returns False the notification is suppressed, a
     ``NotificationSuppressedError`` is raised, and the body is never surfaced or
     marked delivered. When the channel is missing or disabled the attempt is
     recorded as failed with ``failure_category='channel_disabled'``. Attempts
@@ -383,7 +469,10 @@ async def deliver(db: AsyncSession, *, notification: Notification, authorization
     if notification.status == "delivered":
         return notification
 
-    authorized = await authorization_check()
+    if authorization_check is None:
+        authorized = await notification_evidence_authorized(db, notification=notification)
+    else:
+        authorized = await authorization_check()
     if not authorized:
         notification.status = "suppressed"
         notification.failure_category = "evidence_not_authorized"
@@ -414,6 +503,11 @@ async def deliver(db: AsyncSession, *, notification: Notification, authorization
 async def retry_failed(db: AsyncSession, *, tenant_id: str, limit: int = 50) -> int:
     """Re-attempt failed notifications that still have attempts left.
 
+    Each retry goes through :func:`deliver`, so it re-proves the recipient's
+    current access exactly as a first attempt does. A retry is not a cheaper
+    check: if the recipient lost access between the initial failure and the
+    retry, the notification is suppressed instead of delivered.
+
     Bounded on both axes: only notifications in ``failed`` status with
     ``attempts`` below ``max_attempts`` are selected, and at most ``limit`` of
     them. Suppressed notifications are never selected, because suppression is a
@@ -434,7 +528,7 @@ async def retry_failed(db: AsyncSession, *, tenant_id: str, limit: int = 50) -> 
     attempted = 0
     for notification in notifications:
         try:
-            await _attempt_delivery(db, notification=notification)
+            await deliver(db, notification=notification)
         except NotificationError:
             # A refused attempt is already recorded on the notification row.
             pass
@@ -443,6 +537,7 @@ async def retry_failed(db: AsyncSession, *, tenant_id: str, limit: int = 50) -> 
 
 
 __all__ = [
+    "EVIDENCE_FREE_RESOURCE_TYPES",
     "NOTIFICATION_CHANNEL_TYPES",
     "ChannelDisabledError",
     "ChannelUnsupportedError",
@@ -455,6 +550,7 @@ __all__ = [
     "enqueue_notification",
     "list_channels",
     "list_notifications",
+    "notification_evidence_authorized",
     "registered_channel_types",
     "retry_failed",
     "set_channel_enabled",

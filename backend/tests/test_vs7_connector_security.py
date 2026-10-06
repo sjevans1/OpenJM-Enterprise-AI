@@ -53,6 +53,9 @@ from app.services.connectors.base import (
     ExternalResourceRef,
     ResourceContent,
 )
+from app.models import Notification, NotificationChannel, ScheduleRun
+from app.services import notifications as notifications_service
+from app.services import scheduler as scheduler_service
 from app.services.credentials import credential_vault
 
 TYPE_ID = "sectest"
@@ -1175,3 +1178,343 @@ async def test_quarantine_is_cleared_only_by_a_sweep_that_sees_the_resource(
 
         after = await _resource(db, instance_id, "rs-1")
         assert after.lifecycle_state == "deleted", "an absent resource must not be resurrected"
+
+
+# ---------------------------------------------------------------------------
+# Notification delivery re-proves recipient authorization on every attempt
+# ---------------------------------------------------------------------------
+
+
+async def _notify_evidence_setup(maker, provider, *, name: str):
+    """An authorized connector resource, plus an in-app channel in the tenant."""
+    instance_id = await _authorized_setup(maker, provider, name=name)
+    provider.access[("u1", "r1")] = True
+    async with maker() as db:
+        channel = await notifications_service.create_channel(
+            db, tenant_id=TENANT_A, actor="ops", name=f"{name}-in-app", channel_type="in_app"
+        )
+        await db.commit()
+        return instance_id, channel.id
+
+
+async def _enqueue_evidence_notification(db, *, instance_id, channel_id, max_attempts=3):
+    return await notifications_service.enqueue_notification(
+        db,
+        tenant_id=TENANT_A,
+        principal_id=PRINCIPAL_A,
+        category="evidence_ready",
+        subject="Evidence ready",
+        body="evidence body",
+        resource_type="connector_resource",
+        resource_id=authorization_service.connector_resource_reference(instance_id, "r1"),
+        channel_id=channel_id,
+        max_attempts=max_attempts,
+    )
+
+
+async def _fail_attempt_then_restore_channel(maker, *, notification_id, channel_id):
+    """Drive one transient channel failure, then bring the channel back."""
+    async with maker() as db:
+        channel = await db.get(NotificationChannel, channel_id)
+        await notifications_service.set_channel_enabled(
+            db, channel=channel, enabled=False, actor="ops"
+        )
+        notification = await db.get(Notification, notification_id)
+        with pytest.raises(notifications_service.ChannelDisabledError):
+            await notifications_service.deliver(db, notification=notification)
+        await db.commit()
+        assert notification.status == "failed"
+        assert notification.failure_category == "channel_disabled"
+
+
+async def _enable_channel(maker, channel_id):
+    async with maker() as db:
+        channel = await db.get(NotificationChannel, channel_id)
+        await notifications_service.set_channel_enabled(
+            db, channel=channel, enabled=True, actor="ops"
+        )
+        await db.commit()
+
+
+async def test_failed_connector_notification_retries_while_access_is_valid(
+    file_db, connector, provider, knowledge
+):
+    """A transient channel failure is recoverable while access still holds."""
+    instance_id, channel_id = await _notify_evidence_setup(
+        file_db, provider, name="notify-retry-ok"
+    )
+    async with file_db() as db:
+        channel = await db.get(NotificationChannel, channel_id)
+        await notifications_service.set_channel_enabled(
+            db, channel=channel, enabled=False, actor="ops"
+        )
+        notification = await _enqueue_evidence_notification(
+            db, instance_id=instance_id, channel_id=channel_id
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    await _fail_attempt_then_restore_channel(
+        file_db, notification_id=notification_id, channel_id=channel_id
+    )
+    await _enable_channel(file_db, channel_id)
+
+    async with file_db() as db:
+        assert await notifications_service.retry_failed(db, tenant_id=TENANT_A) == 1
+        await db.commit()
+        delivered = await db.get(Notification, notification_id)
+        assert delivered.status == "delivered"
+        assert delivered.delivered_at is not None
+        assert delivered.failure_category is None
+
+
+async def test_access_revoked_between_failure_and_retry_suppresses(
+    file_db, connector, provider, knowledge
+):
+    """The unsafe sequence: queue, fail transiently, lose access, retry.
+
+    Regression: ``retry_failed`` called ``_attempt_delivery`` directly, so the
+    scheduler retry skipped the evidence check entirely. A notification that
+    failed transiently while the recipient still had access would be delivered
+    on retry even after that access had been withdrawn.
+    """
+    instance_id, channel_id = await _notify_evidence_setup(
+        file_db, provider, name="notify-retry-revoked"
+    )
+    async with file_db() as db:
+        channel = await db.get(NotificationChannel, channel_id)
+        await notifications_service.set_channel_enabled(
+            db, channel=channel, enabled=False, actor="ops"
+        )
+        notification = await _enqueue_evidence_notification(
+            db, instance_id=instance_id, channel_id=channel_id
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    await _fail_attempt_then_restore_channel(
+        file_db, notification_id=notification_id, channel_id=channel_id
+    )
+
+    # Access is withdrawn while the notification sits failed.
+    provider.access[("u1", "r1")] = False
+    await _enable_channel(file_db, channel_id)
+
+    async with file_db() as db:
+        assert await notifications_service.retry_failed(db, tenant_id=TENANT_A) == 1
+        await db.commit()
+        suppressed = await db.get(Notification, notification_id)
+        assert suppressed.status == "suppressed", "a retry must not deliver revoked evidence"
+        assert suppressed.failure_category == "evidence_not_authorized"
+        assert suppressed.delivered_at is None
+
+
+async def test_provider_authorization_outage_during_retry_fails_closed(
+    file_db, connector, provider, knowledge
+):
+    """An unprovable authorization during retry suppresses rather than delivers."""
+    instance_id, channel_id = await _notify_evidence_setup(
+        file_db, provider, name="notify-retry-outage"
+    )
+    async with file_db() as db:
+        channel = await db.get(NotificationChannel, channel_id)
+        await notifications_service.set_channel_enabled(
+            db, channel=channel, enabled=False, actor="ops"
+        )
+        notification = await _enqueue_evidence_notification(
+            db, instance_id=instance_id, channel_id=channel_id
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    await _fail_attempt_then_restore_channel(
+        file_db, notification_id=notification_id, channel_id=channel_id
+    )
+
+    # The provider cannot answer the authorization question at retry time.
+    provider.access_error = ConnectorAuthUnavailable("timed out", code="provider_timeout")
+    await _enable_channel(file_db, channel_id)
+
+    async with file_db() as db:
+        assert await notifications_service.retry_failed(db, tenant_id=TENANT_A) == 1
+        await db.commit()
+        suppressed = await db.get(Notification, notification_id)
+        assert suppressed.status == "suppressed"
+        assert suppressed.delivered_at is None
+
+
+async def test_scheduler_notification_retry_uses_the_same_authorization_rule(
+    file_db, connector, provider, knowledge
+):
+    """The scheduled notification.retry operation must not skip the check.
+
+    Regression: ``scheduler._dispatch`` -> ``retry_failed`` -> ``_attempt_delivery``
+    bypassed authorization, so a scheduled sweep could deliver evidence the
+    recipient had since lost access to.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.models import TenantMembership
+    from app.services.identity import utcnow
+
+    instance_id, channel_id = await _notify_evidence_setup(
+        file_db, provider, name="notify-sched-retry"
+    )
+    # notification.retry requires notifications:write, which only admin and
+    # owner hold. The schedule owner must actually hold it, otherwise the run is
+    # refused before dispatch and the test would prove nothing about the retry.
+    async with file_db() as db:
+        await db.execute(
+            update(TenantMembership)
+            .where(
+                TenantMembership.tenant_id == TENANT_A,
+                TenantMembership.principal_id == PRINCIPAL_A,
+            )
+            .values(role="admin")
+        )
+        await db.commit()
+    async with file_db() as db:
+        channel = await db.get(NotificationChannel, channel_id)
+        await notifications_service.set_channel_enabled(
+            db, channel=channel, enabled=False, actor="ops"
+        )
+        notification = await _enqueue_evidence_notification(
+            db, instance_id=instance_id, channel_id=channel_id
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    await _fail_attempt_then_restore_channel(
+        file_db, notification_id=notification_id, channel_id=channel_id
+    )
+
+    provider.access[("u1", "r1")] = False
+    await _enable_channel(file_db, channel_id)
+
+    async with file_db() as db:
+        await scheduler_service.create_schedule(
+            db,
+            tenant_id=TENANT_A,
+            owner_principal_id=PRINCIPAL_A,
+            name="notify-retry-sweep",
+            schedule_type="notification_retry",
+            operation="notification.retry",
+            interval_seconds=60,
+            target={},
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        ran = await scheduler_service.run_due(db, now=utcnow() + timedelta(hours=1), limit=10)
+        await db.commit()
+        assert ran == 1, "the scheduled retry should have run"
+        runs = (await db.execute(select(ScheduleRun))).scalars().all()
+        assert len(runs) == 1
+        assert runs[0].status == "succeeded", (
+            f"the scheduled retry must actually execute, not be refused: "
+            f"{runs[0].failure_category} {runs[0].detail}"
+        )
+        suppressed = await db.get(Notification, notification_id)
+        assert suppressed.status == "suppressed", (
+            "the scheduler retry must apply the same authorization rule"
+        )
+        assert suppressed.delivered_at is None
+
+
+async def test_suppressed_notification_is_never_retried(
+    file_db, connector, provider, knowledge
+):
+    """Suppression is final: a suppressed notification is never selected again."""
+    instance_id, channel_id = await _notify_evidence_setup(
+        file_db, provider, name="notify-final"
+    )
+    async with file_db() as db:
+        notification = await _enqueue_evidence_notification(
+            db, instance_id=instance_id, channel_id=channel_id
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    provider.access[("u1", "r1")] = False
+    async with file_db() as db:
+        notification = await db.get(Notification, notification_id)
+        with pytest.raises(notifications_service.NotificationSuppressedError):
+            await notifications_service.deliver(db, notification=notification)
+        await db.commit()
+        assert notification.status == "suppressed"
+
+    async with file_db() as db:
+        assert await notifications_service.retry_failed(db, tenant_id=TENANT_A) == 0
+        await db.commit()
+        still = await db.get(Notification, notification_id)
+        assert still.status == "suppressed"
+        assert still.delivered_at is None
+
+
+async def test_notification_with_unrevalidatable_resource_type_fails_closed(
+    file_db, connector, provider, knowledge
+):
+    """A protected evidence type OpenJM cannot revalidate must not be delivered.
+
+    A notification naming a resource type that is neither an operational notice
+    nor a revalidatable connector reference cannot have its recipient's access
+    proven, so the safe answer is refusal rather than assumed access.
+    """
+    await _seed(file_db)
+    async with file_db() as db:
+        channel = await notifications_service.create_channel(
+            db, tenant_id=TENANT_A, actor="ops", name="unrevalidatable", channel_type="in_app"
+        )
+        notification = await notifications_service.enqueue_notification(
+            db,
+            tenant_id=TENANT_A,
+            principal_id=PRINCIPAL_A,
+            category="evidence_ready",
+            subject="Evidence ready",
+            body="evidence body",
+            resource_type="document",
+            resource_id="doc-1",
+            channel_id=channel.id,
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    async with file_db() as db:
+        notification = await db.get(Notification, notification_id)
+        with pytest.raises(notifications_service.NotificationSuppressedError):
+            await notifications_service.deliver(db, notification=notification)
+        await db.commit()
+        suppressed = await db.get(Notification, notification_id)
+        assert suppressed.status == "suppressed"
+        assert suppressed.failure_category == "evidence_not_authorized"
+
+
+async def test_retry_bounds_still_hold_for_evidence_notifications(
+    file_db, connector, provider, knowledge
+):
+    """Retry stays bounded when the evidence check is the thing failing."""
+    instance_id, channel_id = await _notify_evidence_setup(
+        file_db, provider, name="notify-bounds"
+    )
+    async with file_db() as db:
+        notification = await _enqueue_evidence_notification(
+            db, instance_id=instance_id, channel_id=channel_id, max_attempts=3
+        )
+        await db.commit()
+        notification_id = notification.id
+
+    provider.access[("u1", "r1")] = False
+    async with file_db() as db:
+        # A suppressed notification leaves the retry candidate set entirely.
+        notification = await db.get(Notification, notification_id)
+        with pytest.raises(notifications_service.NotificationSuppressedError):
+            await notifications_service.deliver(db, notification=notification)
+        await db.commit()
+
+    for _ in range(3):
+        async with file_db() as db:
+            assert await notifications_service.retry_failed(db, tenant_id=TENANT_A) == 0
+            await db.commit()
+            assert (await db.get(Notification, notification_id)).attempts == 0

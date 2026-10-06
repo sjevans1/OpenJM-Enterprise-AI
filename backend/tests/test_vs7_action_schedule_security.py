@@ -56,6 +56,7 @@ from app.services import notifications, scheduler
 from app.services.actions import runtime
 from app.services.actions.builtin import registry
 from app.services.actions.connector_tools import CONNECTOR_TOOL_NAMES
+from app.services.connectors import authorization as authorization_service
 from app.services.connectors import service as connector_service
 from app.services.connectors import sync as sync_engine
 from app.services.connectors.base import (
@@ -140,6 +141,11 @@ def _security_spec() -> ConnectorTypeSpec:
                 operation_class=OperationClass.READ,
                 description="List resources.",
                 required_permission=Permission.CONNECTOR_READ.value,
+                # This connector is CONNECTOR_SCOPED with no user mapping, so its
+                # operations are authorized by the connector's own grant and the
+                # caller's OpenJM permission. Declaring that explicitly keeps the
+                # registry metadata honest; the default is True.
+                requires_user_authorization=False,
             ),
             DeclaredOperation(
                 name="sectest.fetch_resource",
@@ -147,6 +153,7 @@ def _security_spec() -> ConnectorTypeSpec:
                 operation_class=OperationClass.READ,
                 description="Fetch one resource.",
                 required_permission=Permission.CONNECTOR_READ.value,
+                requires_user_authorization=False,
             ),
             DeclaredOperation(
                 name="sectest.write_note",
@@ -155,6 +162,7 @@ def _security_spec() -> ConnectorTypeSpec:
                 description="Write a note to the provider.",
                 required_permission=Permission.CONNECTOR_WRITE.value,
                 requires_approval=True,
+                requires_user_authorization=False,
             ),
         ),
         authorization_behavior=AuthorizationBehavior.CONNECTOR_SCOPED,
@@ -1013,3 +1021,358 @@ async def test_secrets_do_not_appear_in_responses_or_logs(file_db, security_conn
     assert run.detail is not None
     assert token not in run.detail
     assert "[REDACTED]" in run.detail
+
+
+# ---------------------------------------------------------------------------
+# requires_user_authorization is enforced, not merely descriptive
+# ---------------------------------------------------------------------------
+
+USERAUTH_TYPE = "userauthtest"
+USERAUTH_KEY = "userauthtest@1.0.0"
+
+
+class _UserAuthConnector(Connector):
+    """A connector whose write requires current end-user provider authorization.
+
+    ``authorize_operation`` consults a provider-side access map, so a test can
+    grant, revoke or break the provider's answer between planning and execution.
+    ``execute_operation`` records every call, so a test can prove the mutation
+    handler is never reached on a refusal.
+    """
+
+    type_id = USERAUTH_TYPE
+    version = "1.0.0"
+
+    def __init__(self) -> None:
+        self.operation_calls: list[tuple[str, dict]] = []
+        self.authorize_calls: list[tuple[str, str | None, str]] = []
+        self.access: dict[tuple[str, str], bool] = {}
+        self.access_error: ConnectorError | None = None
+
+    async def test_connection(self, ctx: ConnectorContext) -> dict:
+        return {"ok": True, "detail": "ok"}
+
+    async def list_resources(self, ctx, *, limit, cursor=None):
+        return [], None
+
+    async def fetch_resource(self, ctx, external_id):
+        return None
+
+    async def check_user_access(self, ctx, *, external_user_id, external_id) -> bool:
+        if self.access_error is not None:
+            raise self.access_error
+        return bool(self.access.get((external_user_id, external_id), False))
+
+    async def authorize_operation(
+        self, ctx, *, operation, declared, arguments, external_user_id
+    ) -> None:
+        target = str(arguments.get("target_id") or "")
+        self.authorize_calls.append((operation, external_user_id, target))
+        if external_user_id is None:
+            raise ConnectorError("no mapped user to authorize", code="user_not_mapped")
+        if not target:
+            # The target could not be determined, so authorization cannot be
+            # proven for it. Guessing would authorize the wrong resource.
+            raise ConnectorError(
+                "operation target could not be determined", code="target_undetermined"
+            )
+        if self.access_error is not None:
+            raise self.access_error
+        if not self.access.get((external_user_id, target), False):
+            raise ConnectorError(
+                "the mapped user may not perform this operation on the target",
+                code="user_not_authorized",
+            )
+
+    async def execute_operation(self, ctx, operation, arguments) -> dict:
+        self.operation_calls.append((operation, dict(arguments)))
+        return {"ok": True, "operation": operation, "echo": arguments}
+
+
+def _user_auth_spec() -> ConnectorTypeSpec:
+    return ConnectorTypeSpec(
+        type_id=USERAUTH_TYPE,
+        version="1.0.0",
+        display_name="User Authorization Test",
+        description="In-process connector whose write requires end-user authorization.",
+        capabilities=frozenset({ConnectorCapability.DOCUMENTS}),
+        operations=(
+            DeclaredOperation(
+                name="userauthtest.write_note",
+                capability=ConnectorCapability.DOCUMENTS,
+                operation_class=OperationClass.WRITE,
+                description="Write a note as the mapped user.",
+                required_permission=Permission.CONNECTOR_WRITE.value,
+                requires_approval=True,
+                requires_user_authorization=True,
+            ),
+        ),
+        authorization_behavior=AuthorizationBehavior.PROVIDER_CURRENT_STATE,
+        requires_user_mapping=True,
+        credential_kind="bearer_token",
+        credential_fields=("token",),
+        credential_rotation="replace",
+        event_support=False,
+        reconciliation_support=False,
+        incremental_support=False,
+        supports_test_connection=True,
+        timeout_seconds=30,
+        max_retries=3,
+        initial_sync_limit=100,
+    )
+
+
+@pytest.fixture
+def user_auth_connector(monkeypatch):
+    monkeypatch.setattr(credential_vault, "_key", Fernet.generate_key())
+    implementation = _UserAuthConnector()
+    if not connector_registry.has(USERAUTH_TYPE, "1.0.0"):
+        connector_registry.register(_user_auth_spec())
+    connector_service.register_implementation(implementation)
+    try:
+        yield implementation
+    finally:
+        connector_registry.unregister(USERAUTH_KEY)
+        connector_service._IMPLEMENTATIONS.pop(USERAUTH_KEY, None)
+
+
+async def _make_user_auth_instance(maker, tenant_id: str, *, name: str, enabled: bool = True) -> str:
+    async with maker() as db:
+        instance = ConnectorInstance(
+            tenant_id=tenant_id,
+            name=name,
+            connector_type=USERAUTH_TYPE,
+            connector_version="1.0.0",
+            display_name="User Authorization Test",
+            status="active" if enabled else "disabled",
+            enabled=enabled,
+        )
+        db.add(instance)
+        await db.flush()
+        credential = ConnectorCredential(
+            tenant_id=tenant_id,
+            connector_instance_id=instance.id,
+            label="primary",
+            kind="bearer_token",
+            secret_ciphertext=credential_vault.encrypt(json.dumps({"token": "fake"})),
+            status="active",
+            version=1,
+        )
+        db.add(credential)
+        await db.flush()
+        instance.credential_id = credential.id
+        await db.commit()
+        return instance.id
+
+
+async def _map_user(maker, *, instance_id: str, principal_id: str, external_user_id: str) -> None:
+    async with maker() as db:
+        await authorization_service.create_mapping(
+            db,
+            connector_instance_id=instance_id,
+            tenant_id=TENANT,
+            principal_id=principal_id,
+            external_user_id=external_user_id,
+            actor="tester",
+        )
+        await db.commit()
+
+
+async def _run_approved_write(maker, principal, instance_id: str, *, arguments_json: str):
+    async with maker() as db:
+        plan = await _invoke_proposal(
+            db,
+            principal,
+            instance_id,
+            "userauthtest.write_note",
+            arguments_json=arguments_json,
+        )
+        plan_id = plan.id
+    async with maker() as db:
+        await runtime.approve_step(db, principal, plan_id=plan_id, step_index=0)
+    async with maker() as db:
+        return await runtime.execute_plan(db, principal, plan_id=plan_id)
+
+
+async def test_user_authorized_write_without_mapping_is_refused(
+    file_db, user_auth_connector
+):
+    """No mapping means no user whose authority could be proven, so no mutation."""
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-ua", role="owner")
+    instance_id = await _make_user_auth_instance(file_db, TENANT, name="ua-nomap")
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        outcome = await _run_approved_write(
+            file_db, principal, instance_id, arguments_json='{"target_id":"doc-1","note":"hi"}'
+        )
+        step = outcome["steps"][0]
+        assert step["status"] == "failed"
+        assert step["failure_category"] == "user_not_mapped"
+        assert user_auth_connector.operation_calls == [], (
+            "the mutation handler must never run without a proven mapping"
+        )
+    finally:
+        reset_principal()
+
+
+async def test_service_credential_alone_does_not_authorize_a_user_scoped_write(
+    file_db, user_auth_connector
+):
+    """The connector's credential is not a substitute for the user's authority.
+
+    The credential resolves and the instance is enabled, but the provider says
+    the mapped user may not act on the target. The write must refuse.
+    """
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-ua2", role="owner")
+    instance_id = await _make_user_auth_instance(file_db, TENANT, name="ua-noperm")
+    await _map_user(file_db, instance_id=instance_id, principal_id=PRINCIPAL, external_user_id="u-x")
+    # No access entry for ("u-x", "doc-1"): the provider denies.
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        outcome = await _run_approved_write(
+            file_db, principal, instance_id, arguments_json='{"target_id":"doc-1","note":"hi"}'
+        )
+        step = outcome["steps"][0]
+        assert step["status"] == "failed"
+        assert step["failure_category"] == "user_not_authorized"
+        assert user_auth_connector.operation_calls == []
+        assert user_auth_connector.authorize_calls == [
+            ("userauthtest.write_note", "u-x", "doc-1")
+        ]
+    finally:
+        reset_principal()
+
+
+async def test_authorized_mapped_user_can_execute_the_write(file_db, user_auth_connector):
+    """The positive control: a mapped user with provider access does mutate."""
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-ua3", role="owner")
+    instance_id = await _make_user_auth_instance(file_db, TENANT, name="ua-ok")
+    await _map_user(file_db, instance_id=instance_id, principal_id=PRINCIPAL, external_user_id="u-ok")
+    user_auth_connector.access[("u-ok", "doc-1")] = True
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        outcome = await _run_approved_write(
+            file_db, principal, instance_id, arguments_json='{"target_id":"doc-1","note":"hi"}'
+        )
+        assert outcome["steps"][0]["status"] == "succeeded"
+        assert [op for op, _ in user_auth_connector.operation_calls] == [
+            "userauthtest.write_note"
+        ]
+    finally:
+        reset_principal()
+
+
+async def test_revoked_provider_access_after_approval_blocks_mutation(
+    file_db, user_auth_connector
+):
+    """Plan, approve, revoke the user's provider access, then execute."""
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-ua4", role="owner")
+    instance_id = await _make_user_auth_instance(file_db, TENANT, name="ua-revoke")
+    await _map_user(file_db, instance_id=instance_id, principal_id=PRINCIPAL, external_user_id="u-r")
+    user_auth_connector.access[("u-r", "doc-1")] = True
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        # 1. Plan and approve while the user still has access.
+        async with file_db() as db:
+            plan = await _invoke_proposal(
+                db,
+                principal,
+                instance_id,
+                "userauthtest.write_note",
+                arguments_json='{"target_id":"doc-1","note":"hi"}',
+            )
+            plan_id = plan.id
+        async with file_db() as db:
+            await runtime.approve_step(db, principal, plan_id=plan_id, step_index=0)
+
+        # 2. The provider access is revoked after approval, before execution.
+        user_auth_connector.access[("u-r", "doc-1")] = False
+
+        # 3. Execution must refuse and must not reach the mutation handler.
+        async with file_db() as db:
+            outcome = await runtime.execute_plan(db, principal, plan_id=plan_id)
+        step = outcome["steps"][0]
+        assert step["status"] == "failed"
+        assert step["failure_category"] == "user_not_authorized"
+        assert user_auth_connector.operation_calls == [], (
+            "a revoked provider permission must prevent the mutation entirely"
+        )
+    finally:
+        reset_principal()
+
+
+async def test_provider_outage_during_operation_authorization_blocks_mutation(
+    file_db, user_auth_connector
+):
+    """An unprovable authorization is a refusal, not a pass."""
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-ua5", role="owner")
+    instance_id = await _make_user_auth_instance(file_db, TENANT, name="ua-outage")
+    await _map_user(file_db, instance_id=instance_id, principal_id=PRINCIPAL, external_user_id="u-o")
+    user_auth_connector.access[("u-o", "doc-1")] = True
+    user_auth_connector.access_error = ConnectorError("timed out", code="provider_timeout")
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        outcome = await _run_approved_write(
+            file_db, principal, instance_id, arguments_json='{"target_id":"doc-1","note":"hi"}'
+        )
+        step = outcome["steps"][0]
+        assert step["status"] == "failed"
+        assert step["failure_category"] == "provider_timeout"
+        assert user_auth_connector.operation_calls == []
+    finally:
+        reset_principal()
+
+
+async def test_indeterminate_target_blocks_mutation(file_db, user_auth_connector):
+    """An operation whose target cannot be determined must not mutate anything."""
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-ua6", role="owner")
+    instance_id = await _make_user_auth_instance(file_db, TENANT, name="ua-notarget")
+    await _map_user(file_db, instance_id=instance_id, principal_id=PRINCIPAL, external_user_id="u-t")
+    user_auth_connector.access[("u-t", "doc-1")] = True
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        outcome = await _run_approved_write(
+            file_db, principal, instance_id, arguments_json='{"note":"no target"}'
+        )
+        step = outcome["steps"][0]
+        assert step["status"] == "failed"
+        assert step["failure_category"] == "target_undetermined"
+        assert user_auth_connector.operation_calls == []
+    finally:
+        reset_principal()
+
+
+async def test_connector_scoped_operation_follows_its_declared_model(
+    file_db, security_connector
+):
+    """requires_user_authorization=False does not consult a user mapping.
+
+    A connector-scoped operation is authorized by the connector's own grant and
+    the caller's OpenJM permission. It must not be forced through a user check it
+    never declared, which would break every connector that is not per-user.
+    """
+    await _seed_tenant(file_db, TENANT, PRINCIPAL, subject="sub-cs", role="owner")
+    instance_id = await _make_instance(file_db, TENANT, enabled=True, name="cs-ok")
+    # Deliberately no mapping exists for this instance.
+    principal = _principal("admin")
+    set_principal(principal)
+    try:
+        async with file_db() as db:
+            plan = await _invoke_proposal(
+                db, principal, instance_id, "sectest.write_note", arguments_json='{"note":"hi"}'
+            )
+            plan_id = plan.id
+        async with file_db() as db:
+            await runtime.approve_step(db, principal, plan_id=plan_id, step_index=0)
+        async with file_db() as db:
+            outcome = await runtime.execute_plan(db, principal, plan_id=plan_id)
+        assert outcome["steps"][0]["status"] == "succeeded"
+        assert [op for op, _ in security_connector.operation_calls] == ["sectest.write_note"]
+    finally:
+        reset_principal()

@@ -122,14 +122,27 @@ def workspace_type_spec() -> ConnectorTypeSpec:
                 description="Ask Workspace whether a mapped user may see a resource.",
                 required_permission=Permission.CONNECTOR_READ.value,
             ),
-            DeclaredOperation(
-                name="workspace.update_page",
-                capability=ConnectorCapability.DOCUMENTS,
-                operation_class=OperationClass.WRITE,
-                description="Update a Workspace page. Approval-gated.",
-                required_permission=Permission.CONNECTOR_WRITE.value,
-                requires_approval=True,
-            ),
+            # There is deliberately no write operation here. Workspace does
+            # expose a documented write route (PATCH /pages/:id/content, with an
+            # expected_revision precondition), but it cannot be used to honour
+            # this connector's authorization model.
+            #
+            # That route authorizes the *caller's own identity*: requireAccess
+            # evaluates the actor's role and user_id against the resource ACLs.
+            # The integration credential is a synthetic service principal
+            # (is_service=true, role guest), so a write through it would be
+            # authorized by the service principal's grants, never by the mapped
+            # end user's. There is no on-behalf-of parameter, no delegated
+            # per-user token and no documented impersonation mechanism, and the
+            # only user-bound credential is a human session, which this
+            # connector must not hold.
+            #
+            # A declared write would therefore let the service credential
+            # substitute for end-user authorization, which is precisely the
+            # substitution the framework forbids. Advertising an operation that
+            # cannot execute safely is worse than not advertising it, so
+            # Workspace is read-only for VS7. The generic write path stays proven
+            # through the controlled test connector.
         ),
         authorization_behavior=AuthorizationBehavior.PROVIDER_CURRENT_STATE,
         requires_user_mapping=True,

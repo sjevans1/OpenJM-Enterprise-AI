@@ -39,7 +39,7 @@ from app.services.actions.registry import (
     ToolSpec,
 )
 from app.services.connectors import sync as sync_engine
-from app.services.connectors.authorization import authorize_resource
+from app.services.connectors.authorization import authorize_resource, resolve_mapping
 from app.services.connectors.base import ConnectorError, redact
 from app.services.connectors.ingest import load_resource
 from app.services.connectors.service import (
@@ -247,6 +247,13 @@ async def _connector_invoke(db: AsyncSession, arguments: dict) -> dict:
     the instance must still belong to the caller's tenant, still be enabled, and
     still have a live credential, and the named operation must still be a
     declared write operation of the connector type.
+
+    It also enforces the operation's declared authorization model. When the
+    declaration sets ``requires_user_authorization``, the mapped end user's
+    authority is proven through
+    :meth:`~app.services.connectors.base.Connector.authorize_operation` before
+    the provider operation is reached. The connector's service credential is
+    never accepted as a substitute for that proof.
     """
     principal = current_principal()
     connector_id = str(arguments.get("connector_id") or "")
@@ -297,6 +304,40 @@ async def _connector_invoke(db: AsyncSession, arguments: dict) -> dict:
 
     try:
         connector = get_implementation(spec.type_id, spec.version)
+    except ConnectorError as exc:
+        return _refuse(exc.code, exc.detail or "")
+
+    if declared.requires_user_authorization:
+        # The declaration says the provider must confirm the *mapped end user*
+        # may perform this operation, so that authority is proven here, before
+        # the provider operation is reached, rather than being left to each
+        # provider implementation to remember.
+        #
+        # The mapping is resolved first: with no active mapping there is no user
+        # whose authority could be proven. A revoked mapping does not resolve,
+        # so revocation between planning and execution refuses here.
+        mapping = await resolve_mapping(
+            db,
+            connector_instance_id=instance.id,
+            tenant_id=instance.tenant_id,
+            principal_id=principal.principal_id,
+        )
+        if mapping is None:
+            return _refuse("user_not_mapped")
+        try:
+            await connector.authorize_operation(
+                ctx,
+                operation=operation,
+                declared=declared,
+                arguments=payload,
+                external_user_id=mapping.external_user_id,
+            )
+        except ConnectorError as exc:
+            # An unprovable authorization (provider outage, permission timeout,
+            # inaccessible or undeterminable target) lands here and refuses.
+            return _refuse(exc.code, exc.detail or "")
+
+    try:
         result = await connector.execute_operation(ctx, operation, payload)
     except ConnectorError as exc:
         return _refuse(exc.code, exc.detail or "")
