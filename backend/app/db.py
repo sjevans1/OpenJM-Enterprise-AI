@@ -116,7 +116,12 @@ async def init_db() -> None:
     # idempotent helper for engines created directly by tests.
     await _migrate_add_active_run_index()
 
-    async with SessionLocal() as db:
+    # Bind the bootstrap session to the engine this process is actually using.
+    # ``SessionLocal`` is created at import time from settings, so a replaced
+    # engine (a test, or an embedding application) would otherwise be migrated
+    # and then bootstrapped against a different, empty database.
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as db:
         await ensure_local_identity(db)
 
     await _recover_stale_report_runs()
