@@ -300,6 +300,13 @@ def _register_all() -> None:
         _set_source_enabled,
     )
 
+    # VS7 connector tools. Registered here so a single import of this module
+    # produces the complete governed tool surface, and so connector operations
+    # cannot exist outside the VS6 runtime.
+    from app.services.actions.connector_tools import register_connector_tools
+
+    register_connector_tools(registry)
+
 
 _register_all()
 

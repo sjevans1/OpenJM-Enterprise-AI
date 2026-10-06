@@ -108,6 +108,17 @@ def test_fresh_database_upgrades_to_head(tmp_path):
         "documents",
         "conversations",
         "report_runs",
+        # VS7
+        "connector_instances",
+        "connector_credentials",
+        "external_resources",
+        "connector_cursors",
+        "connector_sync_runs",
+        "workspace_user_mappings",
+        "schedules",
+        "schedule_runs",
+        "notification_channels",
+        "notifications",
     ):
         assert expected in names
 
@@ -206,3 +217,93 @@ def test_downgrade_and_reupgrade_preserves_application_data(tmp_path):
 
     assert _counts(path) == before
     assert current_revision(url)
+
+
+VS7_TABLES = (
+    "connector_instances",
+    "connector_credentials",
+    "external_resources",
+    "connector_cursors",
+    "connector_sync_runs",
+    "workspace_user_mappings",
+    "schedules",
+    "schedule_runs",
+    "notification_channels",
+    "notifications",
+)
+
+
+def test_vs7_upgrade_from_accepted_head_preserves_vs1_to_vs6_data(tmp_path):
+    """Upgrade a deployment that already sits at the accepted VS5+VS6 head.
+
+    This is the real upgrade path for VS7: a live deployment is at
+    ``0006_guard_triggers`` with data in it, not at the baseline. The test seeds
+    representative VS1-VS6 rows, applies the VS7 revision, and asserts that no
+    earlier row was lost, duplicated or rewritten, that the VS7 tables now
+    exist, and that a repeated start-up stays a no-op.
+    """
+    path = tmp_path / "vs7_upgrade.db"
+    url = f"sqlite+aiosqlite:///{path}"
+    config = _alembic_config(sync_url_for(url))
+
+    # Sit at the accepted head, which is where a real deployment is today.
+    command.upgrade(config, "0006_guard_triggers")
+    assert current_revision(url) == "0006_guard_triggers"
+
+    connection = sqlite3.connect(path)
+    connection.executescript(LEGACY_ROWS)
+    connection.commit()
+    connection.close()
+    before = _counts(str(path))
+    assert before["documents"] == 1 and before["conversations"] == 1
+
+    result = adopt_and_upgrade(url)
+    assert result["adopted_baseline"] is False, "an already-versioned DB must not be re-stamped"
+    assert current_revision(url) != "0006_guard_triggers"
+
+    after = _counts(str(path))
+    assert after == before, "no VS1-VS6 row may be lost or duplicated by the VS7 upgrade"
+
+    connection = sqlite3.connect(path)
+    assert (
+        connection.execute("SELECT content FROM messages WHERE id='m1'").fetchone()[0]
+        == "legacy question"
+    )
+    assert (
+        connection.execute("SELECT original_name FROM documents WHERE id='d1'").fetchone()[0]
+        == "policy.md"
+    )
+    names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    connection.close()
+    for table in VS7_TABLES:
+        assert table in names, f"VS7 table {table} was not created"
+
+    # Repeated startup after the VS7 upgrade stays a no-op.
+    revision = current_revision(url)
+    for _ in range(3):
+        assert adopt_and_upgrade(url)["adopted_baseline"] is False
+        assert current_revision(url) == revision
+
+
+def test_vs7_downgrade_and_reupgrade_preserves_earlier_data(tmp_path):
+    """The VS7 revision must be reversible without touching earlier data."""
+    path = tmp_path / "vs7_downgrade.db"
+    url = f"sqlite+aiosqlite:///{path}"
+    config = _alembic_config(sync_url_for(url))
+    command.upgrade(config, "0006_guard_triggers")
+    connection = sqlite3.connect(path)
+    connection.executescript(LEGACY_ROWS)
+    connection.commit()
+    connection.close()
+    before = _counts(str(path))
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "0006_guard_triggers")
+    connection = sqlite3.connect(path)
+    names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    connection.close()
+    for table in VS7_TABLES:
+        assert table not in names, f"downgrade left {table} behind"
+
+    command.upgrade(config, "head")
+    assert _counts(str(path)) == before, "re-upgrade must not disturb earlier data"

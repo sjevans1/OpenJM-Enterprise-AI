@@ -42,6 +42,20 @@ class Permission(str, Enum):
     ACTIONS_EXECUTE = "actions:execute"
     ACTIONS_APPROVE = "actions:approve"
 
+    # VS7 connector / operational permissions. Reading connector state is an
+    # operational visibility permission; configuring, enabling or rotating a
+    # connector is a write; purging cached external state is the destructive
+    # tier and is reserved for owners.
+    CONNECTOR_READ = "connector:read"
+    CONNECTOR_WRITE = "connector:write"
+    CONNECTOR_ADMIN = "connector:admin"
+
+    SCHEDULES_READ = "schedules:read"
+    SCHEDULES_WRITE = "schedules:write"
+
+    NOTIFICATIONS_READ = "notifications:read"
+    NOTIFICATIONS_WRITE = "notifications:write"
+
     TENANT_ADMIN = "tenant:admin"
 
 
@@ -72,6 +86,9 @@ _EDITOR = _VIEWER | frozenset(
         Permission.REPORTS_EXPORT,
         Permission.ACTIONS_PLAN,
         Permission.ACTIONS_EXECUTE,
+        # Operational visibility of connector and schedule state.
+        Permission.CONNECTOR_READ,
+        Permission.SCHEDULES_READ,
     }
 )
 
@@ -80,6 +97,12 @@ _ADMIN = _EDITOR | frozenset(
         Permission.KNOWLEDGE_DELETE,
         Permission.AUDIT_READ,
         Permission.ACTIONS_APPROVE,
+        # Administering connectors, schedules and notification channels is a
+        # tenant-level operation, not a per-user one.
+        Permission.CONNECTOR_WRITE,
+        Permission.SCHEDULES_WRITE,
+        Permission.NOTIFICATIONS_READ,
+        Permission.NOTIFICATIONS_WRITE,
         Permission.TENANT_ADMIN,
     }
 )

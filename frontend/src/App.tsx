@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   BrainCircuit,
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   Database,
@@ -10,6 +11,7 @@ import {
   Gauge,
   LogOut,
   MessageSquareText,
+  Plug,
   Plus,
   Send,
   Settings,
@@ -17,7 +19,6 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  Workflow,
 } from 'lucide-react'
 import {
   api,
@@ -43,10 +44,12 @@ import {
   onAuthLost,
   type AuthState,
 } from './auth'
+import ConnectorsPanel from './ConnectorsPanel'
+import OperationsPanel from './OperationsPanel'
 
 const CALLBACK_PATH = '/auth/callback'
 
-type View = 'chat' | 'knowledge' | 'data' | 'reports'
+type View = 'chat' | 'knowledge' | 'data' | 'reports' | 'connectors' | 'operations'
 
 type ReportRunIntent = {
   reportId: string
@@ -62,7 +65,6 @@ const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
 ]
 
 const futureNav = [
-  { label: 'Automations', icon: Workflow },
   { label: 'Administration', icon: Settings },
 ]
 
@@ -1007,6 +1009,22 @@ export default function App() {
             <span className="count-pill">{reports.length}</span>
           </button>
 
+          <button
+            className={view === 'connectors' ? 'nav-item active' : 'nav-item'}
+            onClick={() => setView('connectors')}
+          >
+            <Plug size={17} />
+            Connectors
+          </button>
+
+          <button
+            className={view === 'operations' ? 'nav-item active' : 'nav-item'}
+            onClick={() => setView('operations')}
+          >
+            <CalendarClock size={17} />
+            Operations
+          </button>
+
           <div className="nav-divider" />
           <div className="nav-section-label">Next capabilities</div>
           {futureNav.map((item) => (
@@ -1607,7 +1625,11 @@ export default function App() {
               </div>
             </section>
           </>
-) : (
+        ) : view === 'connectors' ? (
+          <ConnectorsPanel />
+        ) : view === 'operations' ? (
+          <OperationsPanel />
+        ) : (
           <>
             <header className="workspace-header">
               <div>

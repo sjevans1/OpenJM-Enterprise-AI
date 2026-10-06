@@ -2,7 +2,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -133,8 +133,22 @@ class OpenJMOrchestrator:
         user_id: str,
         scope: ReportSourceScope | None = None,
     ) -> list[Document]:
+        # Connector-owned documents are admitted only through the current
+        # authorization gate. That gate re-asks the provider whether this
+        # principal's mapped user may still see each resource, and returns an
+        # empty set when it cannot prove a yes, so the OR clause below never
+        # widens retrieval on the strength of a cached decision. Quarantined
+        # documents are additionally excluded by retrievable_filter().
+        from app.services.connectors.authorization import (
+            authorized_connector_document_ids_for_context,
+        )
+
+        ownership = Document.user_id == user_id
+        connector_document_ids = await authorized_connector_document_ids_for_context(db)
+        if connector_document_ids:
+            ownership = or_(ownership, Document.id.in_(connector_document_ids))
         stmt = select(Document).where(
-            Document.user_id == user_id,
+            ownership,
             # The single authoritative "may this be read" predicate: ready,
             # indexed and not deleted. A document that is mid-deletion must
             # never be surfaced as evidence.
