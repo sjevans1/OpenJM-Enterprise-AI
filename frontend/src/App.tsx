@@ -28,6 +28,9 @@ import {
   type Message,
   type SavedReportSummary,
   type SavedReportDetail,
+  type ReportDefinition,
+  type ReportRunSummary,
+  type ReportRunDetail,
 } from './api'
 
 type View = 'chat' | 'knowledge' | 'data' | 'reports'
@@ -175,12 +178,25 @@ export default function App() {
   const [activeReport, setActiveReport] = useState<SavedReportDetail | null>(null)
   const [reportError, setReportError] = useState<string | null>(null)
   const [reportBusyId, setReportBusyId] = useState<string | null>(null)
+  const [reportDefinitions, setReportDefinitions] = useState<ReportDefinition[]>([])
+  const [activeDefinition, setActiveDefinition] = useState<ReportDefinition | null>(null)
+  const [reportRuns, setReportRuns] = useState<ReportRunSummary[]>([])
+  const [activeRun, setActiveRun] = useState<ReportRunDetail | null>(null)
+  const [reportExecutionError, setReportExecutionError] = useState<string | null>(null)
+  const [reportExecutionBusy, setReportExecutionBusy] = useState(false)
+  const [confirmingRun, setConfirmingRun] = useState(false)
+  const [pendingRunIntent, setPendingRunIntent] = useState<{
+    reportId: string
+    version: number
+    idempotencyKey: string
+  } | null>(null)
   const [rerunNotice, setRerunNotice] = useState(false)
   const [selectedMode, setSelectedMode] = useState<ExecutionMode>('chat')
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const reportOpenSequence = useRef(0)
+  const reportExecutionSequence = useRef(0)
   const pendingReportId = useRef<string | null>(null)
 
   // Persist selected mode across sessions via localStorage.
@@ -418,8 +434,141 @@ export default function App() {
     }
   }
 
+  const clearReportExecution = () => {
+    reportExecutionSequence.current += 1
+    setReportDefinitions([])
+    setActiveDefinition(null)
+    setReportRuns([])
+    setActiveRun(null)
+    setReportExecutionError(null)
+    setReportExecutionBusy(false)
+    setConfirmingRun(false)
+    setPendingRunIntent(null)
+  }
+
+  const loadReportExecution = async (reportId: string, sequence = reportExecutionSequence.current) => {
+    try {
+      const [definitions, runs] = await Promise.all([
+        api.reportDefinitions(reportId),
+        api.reportRuns(reportId),
+      ])
+      if (sequence !== reportExecutionSequence.current) return
+      setReportDefinitions(definitions)
+      setActiveDefinition(definitions[0] || null)
+      setReportRuns(runs)
+      setReportExecutionError(null)
+    } catch (error) {
+      if (sequence !== reportExecutionSequence.current) return
+      setReportDefinitions([])
+      setActiveDefinition(null)
+      setReportRuns([])
+      setActiveRun(null)
+      setReportExecutionError(
+        error instanceof Error ? error.message : 'Live report execution information is unavailable',
+      )
+    }
+  }
+
+  const createReportDefinition = async () => {
+    if (!activeReport || reportExecutionBusy) return
+    const sequence = reportExecutionSequence.current
+    setReportExecutionBusy(true)
+    setReportExecutionError(null)
+    try {
+      const definition = await api.createReportDefinition(activeReport.id)
+      if (sequence !== reportExecutionSequence.current) return
+      setReportDefinitions([definition])
+      setActiveDefinition(definition)
+    } catch (error) {
+      if (sequence === reportExecutionSequence.current) {
+        setReportExecutionError(error instanceof Error ? error.message : 'Unable to create pinned definition')
+      }
+    } finally {
+      if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
+    }
+  }
+
+  const openReportRun = async (runId: string) => {
+    const sequence = reportExecutionSequence.current
+    setReportExecutionBusy(true)
+    setReportExecutionError(null)
+    try {
+      const detail = await api.reportRun(runId)
+      if (sequence === reportExecutionSequence.current) setActiveRun(detail)
+    } catch (error) {
+      if (sequence === reportExecutionSequence.current) {
+        setActiveRun(null)
+        setReportExecutionError(error instanceof Error ? error.message : 'Report run is unavailable')
+      }
+    } finally {
+      if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
+    }
+  }
+
+  const loadOlderRuns = async () => {
+    if (!activeReport || reportExecutionBusy) return
+    const sequence = reportExecutionSequence.current
+    setReportExecutionBusy(true)
+    try {
+      const older = await api.reportRuns(activeReport.id, reportRuns.length, 20)
+      if (sequence === reportExecutionSequence.current) {
+        setReportRuns((current) => [...current, ...older.filter(
+          (item) => !current.some((existing) => existing.id === item.id),
+        )])
+      }
+    } catch (error) {
+      if (sequence === reportExecutionSequence.current) {
+        setReportExecutionError(error instanceof Error ? error.message : 'Unable to load older runs')
+      }
+    } finally {
+      if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
+    }
+  }
+
+  const submitPinnedRun = async (reusePending = false) => {
+    if (!activeReport || !activeDefinition || reportExecutionBusy) return
+    const reportId = activeReport.id
+    const version = activeDefinition.version
+    const existing = pendingRunIntent
+    const intent = (
+      reusePending
+      && existing
+      && existing.reportId === reportId
+      && existing.version === version
+    ) ? existing : {
+      reportId,
+      version,
+      idempotencyKey: crypto.randomUUID(),
+    }
+    const sequence = reportExecutionSequence.current
+    setPendingRunIntent(intent)
+    setConfirmingRun(false)
+    setReportExecutionBusy(true)
+    setReportExecutionError(null)
+    try {
+      const detail = await api.submitReportRun(reportId, version, intent.idempotencyKey)
+      if (sequence !== reportExecutionSequence.current) return
+      setActiveRun(detail)
+      setPendingRunIntent(null)
+      const refreshed = await api.reportRuns(reportId)
+      if (sequence === reportExecutionSequence.current) setReportRuns(refreshed)
+    } catch (error) {
+      if (sequence === reportExecutionSequence.current) {
+        setReportExecutionError(
+          error instanceof Error
+            ? `${error.message}. If the response was interrupted, retrying below reuses the same run request.`
+            : 'Run response was not confirmed. Retry the same run request.',
+        )
+      }
+    } finally {
+      if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
+    }
+  }
+
   const openReport = async (id: string) => {
     const requestSequence = ++reportOpenSequence.current
+    clearReportExecution()
+    const executionSequence = reportExecutionSequence.current
     pendingReportId.current = id
     setActiveReport(null)
     setReportError(null)
@@ -432,6 +581,7 @@ export default function App() {
       ) {
         setActiveReport(report)
         pendingReportId.current = null
+        await loadReportExecution(id, executionSequence)
       }
     } catch (error) {
       // Never render a cached snapshot when server revocation checks fail.
@@ -454,6 +604,7 @@ export default function App() {
         reportOpenSequence.current += 1
         pendingReportId.current = null
       }
+      if (activeReport?.id === id) clearReportExecution()
       setActiveReport((current) => current?.id === id ? null : current)
       setReports((current) => current.filter((report) => report.id !== id))
       await loadReports()
@@ -551,6 +702,7 @@ export default function App() {
               pendingReportId.current = null
               setView('reports')
               setActiveReport(null)
+              clearReportExecution()
               setReportError(null)
               loadReports()
             }}
@@ -928,6 +1080,163 @@ export default function App() {
                         Nothing executes until you review the question and press Send in Chat.
                         The saved report remains an unchanged historical snapshot.
                       </p>
+
+                      <section className="report-execution-panel" aria-label="Fresh pinned report run">
+                        <div className="report-execution-heading">
+                          <div>
+                            <span>Fresh governed run</span>
+                            <strong>Run the pinned report definition</strong>
+                          </div>
+                          {activeDefinition && (
+                            <span className={activeDefinition.runnable ? 'run-state ready' : 'run-state disabled'}>
+                              {activeDefinition.runnable ? 'Ready' : 'Unavailable'}
+                            </span>
+                          )}
+                        </div>
+
+                        {reportExecutionError && (
+                          <div className="error-banner report-execution-error">{reportExecutionError}</div>
+                        )}
+
+                        {!activeDefinition ? (
+                          <div className="definition-empty">
+                            <p>
+                              Create an immutable definition from this snapshot’s current authorized sources.
+                              Creating it does not execute Knowledge, SQL, or a model.
+                            </p>
+                            <button
+                              className="secondary-action"
+                              type="button"
+                              disabled={reportExecutionBusy}
+                              onClick={createReportDefinition}
+                            >
+                              {reportExecutionBusy ? 'Creating…' : 'Create pinned definition'}
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="definition-summary">
+                              <span>Version {activeDefinition.version}</span>
+                              <span>{activeDefinition.mode}</span>
+                              <span>
+                                {activeDefinition.pinned_document_ids.length} document(s)
+                                {' · '}
+                                {Object.values(activeDefinition.pinned_source_tables).reduce(
+                                  (count, tables) => count + tables.length, 0,
+                                )} table(s)
+                              </span>
+                            </div>
+                            <div className="definition-question">{activeDefinition.question}</div>
+                            <div className="run-actions">
+                              <button
+                                className="primary-action"
+                                type="button"
+                                disabled={!activeDefinition.runnable || reportExecutionBusy || confirmingRun}
+                                onClick={() => setConfirmingRun(true)}
+                              >
+                                {reportExecutionBusy ? 'Running…' : 'Run fresh report'}
+                              </button>
+                              {!activeDefinition.runnable && (
+                                <span>Manual execution is not enabled for this environment.</span>
+                              )}
+                            </div>
+
+                            {confirmingRun && (
+                              <div className="run-confirmation" role="group" aria-label="Confirm fresh report run">
+                                <strong>Run this pinned definition now?</strong>
+                                <p>
+                                  This explicitly starts fresh governed retrieval/model/SQL work.
+                                  The historical snapshot above will not change.
+                                </p>
+                                <div>
+                                  <button
+                                    type="button"
+                                    className="secondary-action"
+                                    onClick={() => setConfirmingRun(false)}
+                                  >Cancel</button>
+                                  <button
+                                    type="button"
+                                    className="primary-action"
+                                    onClick={() => submitPinnedRun(false)}
+                                  >Confirm and run</button>
+                                </div>
+                              </div>
+                            )}
+
+                            {pendingRunIntent && !reportExecutionBusy && (
+                              <button
+                                type="button"
+                                className="secondary-action retry-same-run"
+                                onClick={() => submitPinnedRun(true)}
+                              >
+                                Retry same run request
+                              </button>
+                            )}
+                          </>
+                        )}
+
+                        <div className="run-history">
+                          <div className="run-history-heading">
+                            <strong>Immutable run history</strong>
+                            <span>{reportRuns.length} loaded</span>
+                          </div>
+                          {reportRuns.length === 0 ? (
+                            <p className="run-history-empty">No fresh runs recorded for this report yet.</p>
+                          ) : (
+                            reportRuns.map((run) => (
+                              <button
+                                key={run.id}
+                                type="button"
+                                className={activeRun?.id === run.id ? 'run-history-item selected' : 'run-history-item'}
+                                disabled={reportExecutionBusy}
+                                onClick={() => openReportRun(run.id)}
+                              >
+                                <span>
+                                  <strong>{run.status}</strong>
+                                  <small>v{run.definition_version} · {run.requested_mode}</small>
+                                </span>
+                                <span>
+                                  <small>{new Date(run.started_at).toLocaleString()}</small>
+                                  {run.failure_category && <small>{run.failure_category}</small>}
+                                </span>
+                              </button>
+                            ))
+                          )}
+                          {reportRuns.length > 0 && reportRuns.length % 20 === 0 && (
+                            <button
+                              className="secondary-action load-more-runs"
+                              type="button"
+                              disabled={reportExecutionBusy}
+                              onClick={loadOlderRuns}
+                            >Load older runs</button>
+                          )}
+                        </div>
+
+                        {activeRun && (
+                          <div className="run-detail">
+                            <div className="report-as-of">
+                              Fresh pinned run · Started {new Date(activeRun.started_at).toLocaleString()}
+                              {activeRun.finished_at && <> · Completed {new Date(activeRun.finished_at).toLocaleString()}</>}
+                              <br />Status: {activeRun.status}
+                              {activeRun.failure_category && <> · {activeRun.failure_category}</>}
+                            </div>
+                            {activeRun.status === 'succeeded' && activeRun.result ? (
+                              <>
+                                <div className="message-content">{activeRun.result.answer}</div>
+                                <EvidencePanel evidence={activeRun.result.evidence} />
+                              </>
+                            ) : (
+                              <div className="run-terminal-state">
+                                {activeRun.status === 'running'
+                                  ? 'This run is still in progress on the server.'
+                                  : 'This run has no deliverable result. Start a new run only with another explicit confirmation.'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </section>
+
+                      <div className="snapshot-divider"><span>Historical saved snapshot</span></div>
                       <div className="message-content">{activeReport.answer}</div>
                       <EvidencePanel evidence={activeReport.evidence} />
                     </>

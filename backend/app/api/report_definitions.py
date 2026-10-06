@@ -170,7 +170,7 @@ async def _definition_out(
         pinned_source_tables=stored_tables,
         created_at=definition.created_at,
         executes_queries=False,
-        runnable=False,
+        runnable=settings.report_runs_enabled,
     )
 
 

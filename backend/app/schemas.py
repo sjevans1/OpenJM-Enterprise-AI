@@ -203,7 +203,7 @@ class ReportDefinitionVersionOut(BaseModel):
     pinned_source_tables: dict[str, list[str]]
     created_at: datetime
     executes_queries: Literal[False] = False
-    runnable: Literal[False] = False
+    runnable: bool = False
 
 
 # VS4-B2C1: owner-scoped, read-only report-run history. These never grant

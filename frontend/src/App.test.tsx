@@ -259,3 +259,111 @@ test('preflight refusal clears stale report instead of putting leaked text in Ch
   expect(screen.queryByText('Historical policy passage')).toBeNull()
   expect(screen.queryByText(/Review this historical report question/)).toBeNull()
 })
+
+
+test('opening a report loads definition/history but never executes a run', async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  expect(await screen.findByText('Create pinned definition')).toBeTruthy()
+  expect(fetchMock.mock.calls.filter(([input, init]) =>
+    String(input).includes('/definitions/') && (init as RequestInit | undefined)?.method === 'POST'
+  )).toHaveLength(0)
+})
+
+test('fresh report execution requires confirmation and submits one canonical intent', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'What was the FY2025 policy and revenue?', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  const run = {
+    id: 'run-a', report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'succeeded', started_at: '2026-10-05T00:01:00Z', finished_at: '2026-10-05T00:01:02Z',
+    failure_category: null, result_size_bytes: 100, trace_count: 2,
+    result: { answer: 'Fresh answer', evidence: reportDetail.evidence, structured_result: {}, trace_ids: ['t1'] },
+  }
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse(method === 'GET' ? [] : [])
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') return jsonResponse(run, 202)
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  const runButton = await screen.findByRole('button', { name: 'Run fresh report' })
+  fireEvent.click(runButton)
+  expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/definitions/1/runs'))).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+
+  await screen.findByText('Fresh answer')
+  const posts = fetchMock.mock.calls.filter(([input, init]) =>
+    String(input).endsWith('/definitions/1/runs') && (init as RequestInit | undefined)?.method === 'POST'
+  )
+  expect(posts).toHaveLength(1)
+  const body = JSON.parse(String((posts[0][1] as RequestInit).body))
+  expect(body.idempotency_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+})
+
+test('uncertain run response preserves the same idempotency key for explicit retry', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'What was the FY2025 policy and revenue?', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  let attempts = 0
+  const bodies: string[] = []
+  const run = {
+    id: 'run-a', report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'failed', started_at: '2026-10-05T00:01:00Z', finished_at: '2026-10-05T00:01:02Z',
+    failure_category: 'model', result_size_bytes: null, trace_count: 0, result: null,
+  }
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') {
+      bodies.push(String(init?.body))
+      attempts += 1
+      return attempts === 1 ? Promise.reject(new TypeError('network interrupted')) : jsonResponse(run, 202)
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Run fresh report' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry same run request' }))
+
+  await waitFor(() => expect(bodies).toHaveLength(2))
+  expect(JSON.parse(bodies[0]).idempotency_key).toBe(JSON.parse(bodies[1]).idempotency_key)
+})
