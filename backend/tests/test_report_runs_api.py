@@ -209,7 +209,7 @@ async def test_revoke_transitions_running_to_interrupted(file_db):
 @pytest.mark.asyncio
 async def test_revoke_rejects_terminal_run(file_db):
     fixture = await seed_definition(file_db)
-    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    clock = _Clock(datetime.now(timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
             db=db,
@@ -311,7 +311,7 @@ async def test_api_list_runs_excludes_other_owner_404(file_db, client):
 @pytest.mark.asyncio
 async def test_api_get_run_detail(file_db, client):
     fixture = await seed_definition(file_db)
-    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    clock = _Clock(datetime.now(timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
             db=db,

@@ -438,6 +438,7 @@ async def _execute_owned_run(
         )
 
     try:
+        remaining = budget.remaining_seconds()
         plan = await asyncio.wait_for(
             orchestrator.plan(
                 message=question,
@@ -449,7 +450,7 @@ async def _execute_owned_run(
                 request_id=run_id,
                 budget=budget,
             ),
-            timeout=budget.remaining_seconds(),
+            timeout=remaining,
         )
     except ReportScopeError:
         return await _fail_owned_run(
@@ -478,6 +479,7 @@ async def _execute_owned_run(
         )
 
     try:
+        remaining = budget.remaining_seconds()
         answer = await asyncio.wait_for(
             model_gateway.chat(
                 [
@@ -487,7 +489,7 @@ async def _execute_owned_run(
                 max_tokens=2048,
                 budget=budget,
             ),
-            timeout=budget.remaining_seconds(),
+            timeout=remaining,
         )
     except ModelGatewayError:
         return await _fail_owned_run(
