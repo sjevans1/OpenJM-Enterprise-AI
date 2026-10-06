@@ -165,6 +165,170 @@ export type ReportRunDetail = ReportRunSummary & {
   result: ReportRunResult | null
 }
 
+export type ConnectorTypeOperation = {
+  name: string
+  capability: string
+  operation_class: string
+  description: string
+  required_permission: string
+  requires_user_authorization: boolean
+  requires_approval: boolean
+  timeout_seconds: number
+  idempotency: string
+}
+
+export type ConnectorTypeSpec = {
+  type_id: string
+  version: string
+  key: string
+  display_name: string
+  description: string
+  capabilities: string[]
+  authorization_behavior: string
+  requires_user_mapping: boolean
+  credential_kind: string
+  credential_fields: string[]
+  credential_rotation: string
+  event_support: boolean
+  reconciliation_support: boolean
+  incremental_support: boolean
+  supports_test_connection: boolean
+  timeout_seconds: number
+  max_retries: number
+  initial_sync_limit: number
+  operations: ConnectorTypeOperation[]
+}
+
+export type ConnectorRun = {
+  id: string
+  run_type: string
+  status: string
+  started_at: string
+  finished_at?: string | null
+  items_scanned: number
+  items_created: number
+  items_updated: number
+  items_deleted: number
+  items_quarantined: number
+  items_skipped: number
+  failure_category?: string | null
+  detail?: string | null
+}
+
+export type ConnectorInstance = {
+  id: string
+  name: string
+  connector_type: string
+  connector_version: string
+  connector_key: string
+  display_name: string
+  enabled: boolean
+  status: string
+  health_status: string
+  health_detail?: string | null
+  config: Record<string, unknown>
+  has_credential: boolean
+  last_successful_connection_at?: string | null
+  last_successful_sync_at?: string | null
+  last_reconciliation_at?: string | null
+  last_failure_category?: string | null
+  last_failure_at?: string | null
+  created_at: string
+  updated_at: string
+  runs?: ConnectorRun[]
+}
+
+export type ConnectorResource = {
+  id: string
+  external_id: string
+  resource_type: string
+  title: string
+  external_revision?: string | null
+  lifecycle_state: string
+  permission_state: string
+  quarantine_reason?: string | null
+  document_id?: string | null
+  last_observed_at?: string | null
+  last_synced_at?: string | null
+  last_reconciled_at?: string | null
+  provenance?: Record<string, unknown>
+}
+
+export type ConnectorMapping = {
+  id: string
+  principal_id: string
+  external_user_id: string
+  status: string
+  created_at?: string | null
+  revoked_at?: string | null
+}
+
+export type ConnectorCreate = {
+  name: string
+  connector_type: string
+  version?: string | null
+  config: Record<string, unknown>
+  credential?: Record<string, string> | null
+  credential_label?: string
+}
+
+export type ConnectorTestResult = {
+  ok: boolean
+  detail: string
+  connector: ConnectorInstance
+}
+
+export type Schedule = {
+  id: string
+  name: string
+  schedule_type: string
+  operation: string
+  status: string
+  enabled: boolean
+  timezone: string
+  interval_seconds: number
+  next_run_at?: string | null
+  last_run_at?: string | null
+  last_result?: string | null
+  last_failure_category?: string | null
+  misfire_policy: string
+  max_retries: number
+}
+
+export type ScheduleCreate = {
+  name: string
+  schedule_type: string
+  operation: string
+  interval_seconds: number
+  timezone_name: string
+  misfire_policy: string
+  max_retries: number
+  target?: Record<string, unknown> | null
+}
+
+export type NotificationChannel = {
+  id: string
+  name: string
+  channel_type: string
+  status: string
+  enabled: boolean
+  last_delivery_at?: string | null
+  last_failure_category?: string | null
+}
+
+export type NotificationRecord = {
+  id: string
+  category: string
+  subject: string
+  status: string
+  attempts: number
+  max_attempts: number
+  resource_type?: string | null
+  resource_id?: string | null
+  failure_category?: string | null
+  created_at?: string | null
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -175,13 +339,27 @@ export class ApiError extends Error {
   }
 }
 
+/** Pull a human-readable message out of an error body. Most routes return a
+ * plain string detail, while connectors and schedules return a
+ * ``{code, message}`` object; both must surface a message, not "[object Object]". */
+function detailMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === 'object') {
+    const detail = (body as { detail?: unknown }).detail
+    if (typeof detail === 'string' && detail) return detail
+    if (detail && typeof detail === 'object') {
+      const message = (detail as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+    }
+  }
+  return fallback
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await authorizedFetch(url, init)
   if (!response.ok) {
     let message = `Request failed (${response.status})`
     try {
-      const body = await response.json()
-      message = body.detail || message
+      message = detailMessage(await response.json(), message)
     } catch {
       // keep generic message
     }

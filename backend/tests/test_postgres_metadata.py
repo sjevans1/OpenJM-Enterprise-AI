@@ -94,6 +94,18 @@ def test_postgres_fresh_upgrade_creates_full_schema(postgres, pg_url):
         "saved_reports",
         "report_definition_versions",
         "report_runs",
+        # VS7: the connector, scheduling and notification tables must exist on
+        # PostgreSQL too, not only on SQLite.
+        "connector_instances",
+        "connector_credentials",
+        "external_resources",
+        "connector_cursors",
+        "connector_sync_runs",
+        "workspace_user_mappings",
+        "schedules",
+        "schedule_runs",
+        "notification_channels",
+        "notifications",
     ):
         assert expected in names, f"{expected} missing on PostgreSQL"
     assert {
