@@ -4,19 +4,27 @@
 | --- | --- |
 | Repository | sjevans1/OpenJM-Enterprise-AI |
 | Plan revision | vs4-pilot-1 |
-| State | VS4-C1 in progress on draft PR #30 after accepted B2C2 merge and green post-merge main CI |
-| Current batch / phase | VS4-C1 / manual report controls, history and failure states |
-| Active writer | ChatGPT on milestone/vs4-c1-report-run-ui |
-| Branch | milestone/vs4-c1-report-run-ui |
-| PR | #30 (draft) |
-| Starting main SHA | dfbddd2308d2730409ae525bcef955cf9bbf3238 |
-| Last reviewed SHA | dfbddd2308d2730409ae525bcef955cf9bbf3238 (accepted B2C2 merge on main) |
-| Last verified PR CI | C1 first-head run 37416566854 green on d456fd0d (backend + frontend) |
-| Real-runtime acceptance | B2C2 final-head 3590f2cc accepted 30/30; C1 controlled browser/local-model flow still pending |
-| Local regression | C1 relies on hosted deterministic CI during implementation; final controlled browser evidence pending |
-| Review finding | none active; C1 behavior hardening underway |
-| Correction | not applicable; current work is C1 product implementation |
-| Next action | Complete C1 behavior/security tests, final fast/full CI, controlled browser + real-model evidence, then stop for review |
+| State | VS4-D runtime acceptance complete; final documentation-only review head pending exact-head fast/full CI |
+| Current batch / phase | VS4-D / final review package |
+| Active writer | ChatGPT with narrow Hermes workstation/browser acceptance handoff |
+| Branch | milestone/vs4-d-acceptance |
+| PR | #32 (draft until final exact-head CI) |
+| Starting main SHA | 52e7fd8c4c514538874a6b167b9fb4bd64321806 |
+| Last reviewed SHA | 3b60fc2231dd2c7883f3057576ac771d92f3afc3 (accepted C2 head) |
+| Last verified main CI | 37425676477 green on 52e7fd8c4c514538874a6b167b9fb4bd64321806 |
+| Real-runtime acceptance | VS4-D 39/39 integrated assertions; restart digest stable; Phase 3 upgrade/recovery 10/10 |
+| Review finding | none active; Hermes first-pass harness corrections did not modify app code |
+| Next action | validate final documentation-only head with fast + full CI, apply awaiting_review, stop before merge |
+
+## Batch ledger
+
+| Batch | State | PR / evidence |
+| --- | --- | --- |
+| VS4-B2C1 | accepted/merged | PR #28; main 37176830805 |
+| VS4-B2C2 | accepted/merged | PR #29; full 37414383020; main 37415877675 |
+| VS4-C1 | accepted/merged | PR #30; full 37418485617; main 37420633672 |
+| VS4-C2 | accepted/merged | PR #31; full 37424846415; main 37425676477 |
+| VS4-D | awaiting final CI/review | PR #32; runtime acceptance comment 6011928489 |
 
 ## Checkpoint protocol
 
@@ -102,3 +110,14 @@ that the browser cannot set runnable state.
 authoritative successful run response from a later history-refresh failure so
 the UI cannot invite an unnecessary idempotent replay. History pagination now
 also treats source revocation as a cache-clearing authorization event.
+
+
+
+2026-10-06 | VS4-D integrated acceptance | frozen runtime head
+`8e2a4db5facecfb03602d3c5128ea802bcf33564` | fast CI 37426623882 green,
+full CI 37431715041 green | isolated assembled workflow 39/39 assertions,
+restart full-state digest stable, synthetic upgrade/recovery 10/10, source DB
+hash unchanged, no application code modified during acceptance. Three first-pass
+assertion failures were acceptance-harness/fixture defects and were corrected
+without app changes. Final documentation-only head requires exact-head fast/full
+CI before awaiting_review.
