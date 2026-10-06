@@ -23,6 +23,7 @@ Phase B reliability design (docs/MODEL_GATEWAY_RELIABILITY.md):
 """
 
 import json
+from datetime import datetime, timezone
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -259,6 +260,8 @@ class OpenAICompatibleModelGateway:
             _, body = await self._post_json(url, headers, payload)
         except (httpx.HTTPError, ValueError) as exc:
             raise ModelGatewayError(f"Model request failed: {exc}") from exc
+        if budget is not None:
+            budget.check_wall(datetime.now(timezone.utc))
         content = self._extract_content(body)
         return content, validate_model_output(content)
 
