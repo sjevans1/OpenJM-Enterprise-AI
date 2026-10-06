@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+import logging
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
@@ -14,6 +15,7 @@ from app.core.config import get_settings
 
 settings = get_settings()
 engine = create_async_engine(settings.database_url, future=True)
+logger = logging.getLogger(__name__)
 
 
 def enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
@@ -84,17 +86,34 @@ async def install_report_run_triggers(conn) -> None:
 
 
 async def init_db() -> None:
-    from app import models  # noqa: F401
+    """Bring the application-metadata database to the latest revision.
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # aiosqlite executes one statement at a time; install_report_run_triggers
-        # drop-and-recreates each trigger so upgrades replace old bodies.
-        await install_report_run_triggers(conn)
-    # Additive, idempotent upgrades preserve all rows from older deployments.
-    await _migrate_add_requested_mode(conn=None)
-    await _migrate_add_revenue_currency()
+    Order matters:
+
+    1. Versioned migrations (Alembic). A database created by the previous
+       bootstrap is detected and stamped at the baseline revision first, so no
+       row is rewritten.
+    2. Local identity bootstrap (tenant + principal + membership) so a
+       development deployment has a real, server-resolved identity context.
+    3. Stale report-run recovery.
+    """
+    import asyncio
+
+    from app import models  # noqa: F401
+    from app.migrations_runner import adopt_and_upgrade
+    from app.services.identity import ensure_local_identity
+
+    result = await asyncio.to_thread(adopt_and_upgrade, settings.database_url)
+    if result.get("adopted_baseline"):
+        logger.info("Application database adopted at baseline revision")
+
+    # The active-run partial index is part of the baseline revision; keep the
+    # idempotent helper for engines created directly by tests.
     await _migrate_add_active_run_index()
+
+    async with SessionLocal() as db:
+        await ensure_local_identity(db)
+
     await _recover_stale_report_runs()
 
 

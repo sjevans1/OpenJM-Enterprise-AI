@@ -15,7 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.report_runs import _authorize_run_read, _owned_available_report
 from app.api.reports import _available, _owned_report, _parse_evidence
+from app.api.deps import require
 from app.core.config import get_settings
+from app.core.context import current_principal
+from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.services.export_render import (
     ExportError,
@@ -102,6 +105,7 @@ async def export_saved_report(
     export_format: str,
     index: int | None = Query(default=None, ge=0),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_EXPORT)),
 ) -> Response:
     """Export an owned saved snapshot after reauthorizing its current sources."""
     report = await _owned_report(db, report_id)
@@ -137,9 +141,10 @@ async def export_report_run(
     export_format: str,
     index: int | None = Query(default=None, ge=0),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_EXPORT)),
 ) -> Response:
     """Export a terminal successful run's persisted result, never a fresh run."""
-    run = await get_report_run(db, settings.dev_user_id, run_id)
+    run = await get_report_run(db, current_principal().user_id, run_id)
     if run is None or run.report_id != report_id:
         raise HTTPException(status_code=404, detail="Report run not found")
     report = await _owned_available_report(db, run.report_id)

@@ -11,7 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require
 from app.core.config import get_settings
+from app.core.context import current_principal
+from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import Conversation, DataSource, Document, Message, SavedReport
 from app.schemas import (
@@ -118,7 +121,7 @@ def _authorized_tables(source: DataSource) -> set[str]:
 async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool:
     document_ids, source_ids = _source_ids(evidence)
     structured_tables = _structured_tables(evidence)
-    user_id = settings.dev_user_id  # Replace only via VS5 trusted identity context.
+    user_id = current_principal().user_id  # Replace only via VS5 trusted identity context.
     if document_ids:
         documents = (
             await db.execute(
@@ -157,7 +160,7 @@ async def _owned_report(db: AsyncSession, report_id: str) -> SavedReport | None:
         await db.execute(
             select(SavedReport).where(
                 SavedReport.id == report_id,
-                SavedReport.user_id == settings.dev_user_id,
+                SavedReport.user_id == current_principal().user_id,
             )
         )
     ).scalars().first()
@@ -172,7 +175,7 @@ async def _source_message_exists(db: AsyncSession, report: SavedReport) -> bool:
                 Message.id == report.message_id,
                 Message.conversation_id == report.conversation_id,
                 Message.role == "assistant",
-                Conversation.user_id == settings.dev_user_id,
+                Conversation.user_id == current_principal().user_id,
             )
         )
     ).scalars().first() is not None
@@ -221,6 +224,7 @@ async def _detail(db: AsyncSession, report: SavedReport) -> SavedReportDetail:
 async def create_report(
     payload: SaveReportRequest,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_WRITE)),
 ):
     """Save the actual persisted assistant response, never client-supplied data."""
     message = (
@@ -229,7 +233,7 @@ async def create_report(
             .join(Conversation, Conversation.id == Message.conversation_id)
             .where(
                 Message.id == payload.message_id,
-                Conversation.user_id == settings.dev_user_id,
+                Conversation.user_id == current_principal().user_id,
                 Message.role == "assistant",
                 Message.execution_class.in_(ALLOWED_EXECUTION_CLASSES),
             )
@@ -241,7 +245,7 @@ async def create_report(
     prior = (
         await db.execute(
             select(SavedReport).where(
-                SavedReport.user_id == settings.dev_user_id,
+                SavedReport.user_id == current_principal().user_id,
                 SavedReport.message_id == message.id,
             )
         )
@@ -262,7 +266,7 @@ async def create_report(
 
     document_ids, data_source_ids = _source_ids(evidence)
     report = SavedReport(
-        user_id=settings.dev_user_id,
+        user_id=current_principal().user_id,
         conversation_id=message.conversation_id,
         message_id=message.id,
         title=payload.title.strip() if payload.title else "Saved report",
@@ -285,7 +289,7 @@ async def create_report(
         prior = (
             await db.execute(
                 select(SavedReport).where(
-                    SavedReport.user_id == settings.dev_user_id,
+                    SavedReport.user_id == current_principal().user_id,
                     SavedReport.message_id == message.id,
                 )
             )
@@ -302,11 +306,12 @@ async def list_reports(
     limit: int = Query(default=20, ge=1, le=50),
     offset: int = Query(default=0, ge=0, le=100000),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
 ):
     reports = (
         await db.execute(
             select(SavedReport)
-            .where(SavedReport.user_id == settings.dev_user_id)
+            .where(SavedReport.user_id == current_principal().user_id)
             .order_by(SavedReport.created_at.desc(), SavedReport.id.desc())
             .limit(limit)
             .offset(offset)
@@ -316,7 +321,11 @@ async def list_reports(
 
 
 @router.get("/{report_id}", response_model=SavedReportDetail)
-async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
+async def get_report(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
+):
     report = await _owned_report(db, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="Saved report not found")
@@ -330,6 +339,7 @@ async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
 async def preview_report_rerun(
     report_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
 ):
     """Prepare a **user-reviewed** Chat question; never execute anything.
 
@@ -407,7 +417,11 @@ async def preview_report_rerun(
     )
 
 @router.delete("/{report_id}", status_code=204)
-async def delete_report(report_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_report(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_WRITE)),
+):
     """Idempotent owner-scoped deletion affects the snapshot alone."""
     report = await _owned_report(db, report_id)
     if report is not None:

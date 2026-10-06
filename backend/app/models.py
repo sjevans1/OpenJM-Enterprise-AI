@@ -13,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.tenancy import DOC_STATE_PENDING, LEGACY_TENANT_ID
 from app.db import Base
 
 
@@ -24,10 +25,21 @@ def new_id() -> str:
     return str(uuid4())
 
 
+# Every tenant-owned table carries this column. The Python-side default keeps
+# direct ORM inserts (tests, fixtures, migrations) valid without forcing every
+# caller to thread an explicit tenant; the API layer always sets it explicitly
+# from the trusted principal context.
+def tenant_column():
+    return mapped_column(
+        String(36), index=True, nullable=False, default=LEGACY_TENANT_ID
+    )
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     user_id: Mapped[str] = mapped_column(String(128), index=True)
     title: Mapped[str] = mapped_column(String(240), default="New conversation")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -60,9 +72,19 @@ class Message(Base):
 
 
 class Document(Base):
+    """Knowledge document with an explicit, monotonic lifecycle (#6).
+
+    ``status``/``indexed`` are the legacy VS1 fields kept in sync for the
+    existing acceptance surfaces. ``lifecycle_state`` is the authoritative
+    state used by the hardened lifecycle and by every retrieval authorization
+    check: a document is only retrievable when ``lifecycle_state == 'ready'``,
+    ``indexed`` is true and ``deleted_at`` is null.
+    """
+
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     user_id: Mapped[str] = mapped_column(String(128), index=True)
     original_name: Mapped[str] = mapped_column(String(500))
     stored_path: Mapped[str] = mapped_column(String(1000))
@@ -70,14 +92,45 @@ class Document(Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), default="indexing")
     indexed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # --- #6 lifecycle hardening ---
+    lifecycle_state: Mapped[str] = mapped_column(String(32), default=DOC_STATE_PENDING)
+    lifecycle_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Identifies the ingestion attempt allowed to publish this document. A
+    # crashed or superseded attempt holds a stale token and cannot commit.
+    ingest_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
+
+class DocumentLease(Base):
+    """Cross-process compare-and-swap lease for one document (#6).
+
+    Acquired with a conditional UPDATE / first INSERT so two processes cannot
+    both hold it. A lease is always time-bounded: an expired lease can be
+    stolen, which is what makes crash recovery deterministic.
+    """
+
+    __tablename__ = "document_leases"
+
+    document_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    holder_token: Mapped[str] = mapped_column(String(36), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class DataSource(Base):
     __tablename__ = "data_sources"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     user_id: Mapped[str] = mapped_column(String(128), index=True)
     name: Mapped[str] = mapped_column(String(240))
     engine: Mapped[str] = mapped_column(String(32))
@@ -102,6 +155,7 @@ class ExecutionTrace(Base):
     __tablename__ = "execution_traces"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     request_id: Mapped[str] = mapped_column(String(36), index=True, default=new_id)
     tool_invocation_id: Mapped[str] = mapped_column(String(36), default=new_id)
     user_id: Mapped[str] = mapped_column(String(128), index=True)
@@ -139,6 +193,7 @@ class SavedReport(Base):
     __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_saved_report_owner_message"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False
@@ -165,6 +220,7 @@ class ReportDefinitionVersion(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     report_id: Mapped[str] = mapped_column(
         ForeignKey("saved_reports.id", ondelete="CASCADE"), index=True, nullable=False
     )
@@ -217,6 +273,7 @@ class ReportRun(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
     user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     report_id: Mapped[str] = mapped_column(
         ForeignKey("saved_reports.id", ondelete="CASCADE"), index=True, nullable=False
@@ -242,3 +299,242 @@ class ReportRun(Base):
     result_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# VS5 — trusted identity, tenancy and audit
+# ---------------------------------------------------------------------------
+
+
+class Tenant(Base):
+    """An isolation boundary. Every owned row carries its ``tenant_id``."""
+
+    __tablename__ = "tenants"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PrincipalAccount(Base):
+    """The OpenJM-owned user record for one OIDC/local subject.
+
+    A principal is tenant-agnostic: tenant scope comes from an active
+    :class:`TenantMembership`. ``subject`` is the stable external identifier
+    (OIDC ``sub``) used to resolve a validated token to a local account.
+    """
+
+    __tablename__ = "principal_accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    subject: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    issuer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class TenantMembership(Base):
+    """Grants one principal a role inside one tenant.
+
+    Re-reading this row on every request is what makes role changes and
+    membership revocation take effect immediately, without waiting for any
+    token or cache to expire.
+    """
+
+    __tablename__ = "tenant_memberships"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "principal_id", name="uq_membership_tenant_principal"),
+        CheckConstraint(
+            "status IN ('active','revoked')", name="ck_membership_status"
+        ),
+        CheckConstraint(
+            "role IN ('viewer','editor','admin','owner')", name="ck_membership_role"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principal_accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AuthSession(Base):
+    """An OpenJM-native session token minted after a successful OIDC login.
+
+    Only a SHA-256 digest of the opaque token is stored. ``revoked_at`` and
+    ``expires_at`` are evaluated on every request so a revoked session stops
+    working immediately.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principal_accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    auth_method: Mapped[str] = mapped_column(String(24), default="oidc", nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AuditRecord(Base):
+    """Append-only record of an authorization decision or governed action."""
+
+    __tablename__ = "audit_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    principal_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    action: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    resource_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    auth_method: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# VS6 — bounded action / agent runtime
+# ---------------------------------------------------------------------------
+
+
+class ActionPlan(Base):
+    """A server-bounded, deterministic plan proposed by the model.
+
+    The plan records the exact permission context it was created under so that
+    execution can prove nothing changed between planning and acting.
+    """
+
+    __tablename__ = "action_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('proposed','approved','executing','succeeded','failed','rejected','expired')",
+            name="ck_action_plan_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    goal_text: Mapped[str] = mapped_column(Text, nullable=False)
+    steps_json: Mapped[str] = mapped_column(Text, nullable=False)
+    max_steps: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    budget_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="proposed", nullable=False)
+    plan_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    permissions_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    planner_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ActionApproval(Base):
+    """A human approval bound to one exact action fingerprint.
+
+    Changing any approved parameter changes the fingerprint, so a stale
+    approval can never authorize a materially different action.
+    """
+
+    __tablename__ = "action_approvals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','approved','rejected','consumed','expired')",
+            name="ck_action_approval_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    plan_id: Mapped[str] = mapped_column(
+        ForeignKey("action_plans.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    action_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ActionExecution(Base):
+    """Audit row for one executed (or refused) plan step."""
+
+    __tablename__ = "action_executions"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "idempotency_key", name="uq_action_execution_idempotency"
+        ),
+        CheckConstraint(
+            "status IN ('started','succeeded','failed','refused','dry_run')",
+            name="ck_action_execution_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    plan_id: Mapped[str | None] = mapped_column(
+        ForeignKey("action_plans.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    step_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tool_name: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    operation_class: Mapped[str] = mapped_column(String(16), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(16), nullable=False)
+    arguments_json: Mapped[str] = mapped_column(Text, nullable=False)
+    arguments_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    approval_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="started", nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

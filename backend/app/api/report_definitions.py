@@ -19,7 +19,10 @@ from app.api.reports import (
     _structured_tables,
     preview_report_rerun,
 )
+from app.api.deps import require
 from app.core.config import get_settings
+from app.core.context import current_principal
+from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import DataSource, ReportDefinitionVersion, SavedReport
 from app.schemas import (
@@ -67,7 +70,7 @@ async def _schema_scope_current(
         await db.execute(
             select(DataSource).where(
                 DataSource.id.in_(list(source_tables)),
-                DataSource.user_id == settings.dev_user_id,
+                DataSource.user_id == current_principal().user_id,
                 DataSource.enabled.is_(True),
                 DataSource.status == "connected",
             )
@@ -155,7 +158,7 @@ async def _definition_out(
     if (
         original.original_question != definition.question_text
         or original.mode != definition.requested_mode
-        or definition.user_id != settings.dev_user_id
+        or definition.user_id != current_principal().user_id
         or definition.report_id != report.id
         or definition.version != 1
     ):
@@ -183,6 +186,7 @@ async def create_definition(
     report_id: str,
     request: CreateReportDefinitionRequest,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_WRITE)),
 ):
     """Idempotently register v1 from an owned, still-governed report only.
 
@@ -198,7 +202,7 @@ async def create_definition(
         await db.execute(
             select(ReportDefinitionVersion).where(
                 ReportDefinitionVersion.report_id == report.id,
-                ReportDefinitionVersion.user_id == settings.dev_user_id,
+                ReportDefinitionVersion.user_id == current_principal().user_id,
                 ReportDefinitionVersion.version == 1,
             )
         )
@@ -207,7 +211,7 @@ async def create_definition(
         return await _definition_out(db, report, previous)
 
     row = ReportDefinitionVersion(
-        user_id=settings.dev_user_id,
+        user_id=current_principal().user_id,
         report_id=report.id,
         version=1,
         question_text=original.original_question,
@@ -224,7 +228,7 @@ async def create_definition(
             await db.execute(
                 select(ReportDefinitionVersion).where(
                     ReportDefinitionVersion.report_id == report.id,
-                    ReportDefinitionVersion.user_id == settings.dev_user_id,
+                    ReportDefinitionVersion.user_id == current_principal().user_id,
                     ReportDefinitionVersion.version == 1,
                 )
             )
@@ -243,6 +247,7 @@ async def create_definition(
 async def list_definitions(
     report_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
 ):
     report = await _owned_available_report(db, report_id)
     versions = (
@@ -250,7 +255,7 @@ async def list_definitions(
             select(ReportDefinitionVersion)
             .where(
                 ReportDefinitionVersion.report_id == report.id,
-                ReportDefinitionVersion.user_id == settings.dev_user_id,
+                ReportDefinitionVersion.user_id == current_principal().user_id,
             )
             .order_by(ReportDefinitionVersion.version.desc())
             .limit(20)
@@ -267,13 +272,14 @@ async def get_definition(
     report_id: str,
     version: int,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
 ):
     report = await _owned_available_report(db, report_id)
     result = (
         await db.execute(
             select(ReportDefinitionVersion).where(
                 ReportDefinitionVersion.report_id == report.id,
-                ReportDefinitionVersion.user_id == settings.dev_user_id,
+                ReportDefinitionVersion.user_id == current_principal().user_id,
                 ReportDefinitionVersion.version == version,
             )
         )
@@ -297,7 +303,7 @@ async def load_validated_definition_scope(
     scope, historical question and requested mode on every load. Does not run
     SQL, retrieval or model calls. Not a public execution endpoint.
     """
-    if user_id != settings.dev_user_id:
+    if user_id != current_principal().user_id:
         raise HTTPException(status_code=404, detail="Report definition not found")
     report = await _owned_available_report(db, report_id)
     definition = (

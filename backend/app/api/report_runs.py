@@ -27,7 +27,10 @@ from app.api.reports import (
     _sources_available,
     _structured_tables,
 )
+from app.api.deps import require
 from app.core.config import get_settings
+from app.core.context import current_principal
+from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import ExecutionTrace, ReportDefinitionVersion, ReportRun, SavedReport
 from app.schemas import (
@@ -249,7 +252,7 @@ async def _validated_trace_ids(db, *, plan, run_id: str, mode: str, structured_r
         if (
             trace.id not in trace_ids
             or trace.request_id != run_id
-            or trace.user_id != settings.dev_user_id
+            or trace.user_id != current_principal().user_id
             or trace.conversation_id is not None
             or trace.status != "succeeded"
             or trace.route != allowed_route
@@ -367,7 +370,7 @@ async def _reload_execution_intent(
         db,
         report_id,
         definition_version,
-        settings.dev_user_id,
+        current_principal().user_id,
         definition_id=definition_id,
     )
 
@@ -377,7 +380,7 @@ async def _failed_execution_detail(
     run_id: str,
 ) -> ReportRunDetail:
     """Return bounded terminal metadata only; never expose generated payloads."""
-    run = await get_report_run(db, settings.dev_user_id, run_id)
+    run = await get_report_run(db, current_principal().user_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Report run not found")
     return ReportRunDetail(**_summary(run).model_dump(), result=None)
@@ -393,7 +396,7 @@ async def _fail_owned_run(
     await finalize_failure(
         db=db,
         run_id=run_id,
-        user_id=settings.dev_user_id,
+        user_id=current_principal().user_id,
         fingerprint=fingerprint,
         failure_category=category,
     )
@@ -443,7 +446,7 @@ async def _execute_owned_run(
             orchestrator.plan(
                 message=question,
                 db=db,
-                user_id=settings.dev_user_id,
+                user_id=current_principal().user_id,
                 conversation_id=None,
                 mode=mode,
                 scope=scope,
@@ -537,7 +540,7 @@ async def _execute_owned_run(
     persisted = await finalize_success(
         db=db,
         run_id=run_id,
-        user_id=settings.dev_user_id,
+        user_id=current_principal().user_id,
         fingerprint=fingerprint,
         answer=answer,
         evidence=evidence_payload,
@@ -547,7 +550,7 @@ async def _execute_owned_run(
     if persisted != 1:
         # A concurrent revocation wins the lifecycle compare-and-set. Never
         # deliver the generated answer when this reservation no longer runs.
-        current = await get_report_run(db, settings.dev_user_id, run_id)
+        current = await get_report_run(db, current_principal().user_id, run_id)
         if current is not None and current.status == "running":
             deadline = current.deadline_at
             if deadline is not None and deadline.tzinfo is None:
@@ -562,7 +565,7 @@ async def _execute_owned_run(
             )
         return await _failed_execution_detail(db, run_id)
 
-    completed = await get_report_run(db, settings.dev_user_id, run_id)
+    completed = await get_report_run(db, current_principal().user_id, run_id)
     if completed is None:
         raise HTTPException(status_code=404, detail="Report run not found")
     return await _detail(db, completed)
@@ -699,6 +702,7 @@ async def submit_run(
     version: int,
     request: CreateReportRunRequest,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_RUN)),
 ):
     """Reserve an explicitly versioned run and execute only a newly owned row."""
     definition_id = (
@@ -708,8 +712,8 @@ async def submit_run(
             .where(
                 ReportDefinitionVersion.report_id == report_id,
                 ReportDefinitionVersion.version == version,
-                ReportDefinitionVersion.user_id == settings.dev_user_id,
-                SavedReport.user_id == settings.dev_user_id,
+                ReportDefinitionVersion.user_id == current_principal().user_id,
+                SavedReport.user_id == current_principal().user_id,
             )
         )
     ).scalar_one_or_none()
@@ -726,7 +730,7 @@ async def submit_run(
         db,
         report_id,
         version,
-        settings.dev_user_id,
+        current_principal().user_id,
         definition_id=definition_id,
     )
     pinned_documents = sorted(scope.document_ids)
@@ -770,11 +774,12 @@ async def list_runs(
     limit: int = Query(default=20, ge=1, le=50),
     offset: int = Query(default=0, ge=0, le=100000),
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
 ):
     """Read-only, owner-scoped history of a saved report's execution runs."""
     await _owned_available_report(db, report_id)
     runs = await list_report_runs(
-        db, settings.dev_user_id, report_id, limit=limit, offset=offset
+        db, current_principal().user_id, report_id, limit=limit, offset=offset
     )
     for run in runs:
         await _authorize_run_read(db, run)
@@ -782,9 +787,13 @@ async def list_runs(
 
 
 @router.get("/runs/{run_id}", response_model=ReportRunDetail)
-async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
+async def get_run(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.REPORTS_READ)),
+):
     """Read-only detail for one owned run, including its bounded result envelope."""
-    run = await get_report_run(db, settings.dev_user_id, run_id)
+    run = await get_report_run(db, current_principal().user_id, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Report run not found")
     # Authorization is enforced for the run's own parent report, not the
