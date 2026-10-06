@@ -280,7 +280,7 @@ def test_budget_enforce_max_tokens_allows_low():
 
 def test_budget_is_exhausted_after_caps():
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+        started_at=datetime.now(timezone.utc)
     )
     assert not budget.is_exhausted()
     for _ in range(8):
@@ -331,7 +331,7 @@ async def test_model_gateway_budget_caps_max_tokens_none(monkeypatch):
     """max_tokens=None with budget must be capped to 2048."""
     gateway, calls = _make_gateway(monkeypatch, [_body("Answer.")])
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+        started_at=datetime.now(timezone.utc)
     )
     await gateway.chat([{"role": "user", "content": "Hello"}], budget=budget)
     assert calls[0]["max_tokens"] == 2048
@@ -341,7 +341,7 @@ async def test_model_gateway_budget_caps_max_tokens_high(monkeypatch):
     """max_tokens above 2048 with budget must be capped to 2048."""
     gateway, calls = _make_gateway(monkeypatch, [_body("Answer.")])
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+        started_at=datetime.now(timezone.utc)
     )
     await gateway.chat(
         [{"role": "user", "content": "Hello"}],
