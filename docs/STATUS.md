@@ -88,3 +88,11 @@ gate output and ready-state evidence in PR metadata, then stop for review.
 UX defect: cached content cleared correctly, but the explanatory 409 reason lived
 inside the execution panel that was removed with the snapshot. Repair promotes
 revocation detail to the page-level report banner before clearing cached content.
+
+
+2026-10-06 | VS4-C1 implementation checkpoint | Added synchronous double-click
+guard, same-key uncertain retry, explicit new-intent retry after terminal failure,
+bounded history pagination/deduplication, stale-response rejection, server-derived
+runnable UX, and future-compatible immutable definition selection. Existing B2C2
+strict submission/owner/scope tests remain authoritative; C1 adds a regression
+that the browser cannot set runnable state.

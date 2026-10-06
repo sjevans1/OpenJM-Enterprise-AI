@@ -1163,6 +1163,31 @@ export default function App() {
                           </div>
                         ) : (
                           <>
+                            {reportDefinitions.length > 1 && (
+                              <label className="definition-selector">
+                                <span>Definition version</span>
+                                <select
+                                  value={activeDefinition.id}
+                                  onChange={(event) => {
+                                    const next = reportDefinitions.find(
+                                      (definition) => definition.id === event.target.value,
+                                    )
+                                    if (!next) return
+                                    pendingRunIntentRef.current = null
+                                    setPendingRunIntent(null)
+                                    setConfirmingRun(false)
+                                    setActiveRun(null)
+                                    setActiveDefinition(next)
+                                  }}
+                                >
+                                  {reportDefinitions.map((definition) => (
+                                    <option key={definition.id} value={definition.id}>
+                                      Version {definition.version} · {definition.mode}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
                             <div className="definition-summary">
                               <span>Version {activeDefinition.version}</span>
                               <span>{activeDefinition.mode}</span>

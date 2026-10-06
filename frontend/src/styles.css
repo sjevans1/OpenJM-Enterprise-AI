@@ -759,3 +759,7 @@ button { cursor: pointer; }
 .run-detail { margin-top: 14px; border-top: 1px solid #e2eaec; padding-top: 14px; }
 .snapshot-divider { display: flex; align-items: center; gap: 10px; margin: 20px 0 12px; color: #83959b; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
 .snapshot-divider::before, .snapshot-divider::after { content: ''; height: 1px; background: #dfe8ea; flex: 1; }
+
+.definition-selector { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; }
+.definition-selector > span { color: #71858c; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.definition-selector select { min-width: 180px; border: 1px solid #c8d8dc; border-radius: 8px; background: white; color: #38545d; padding: 7px 9px; font-size: 11px; }

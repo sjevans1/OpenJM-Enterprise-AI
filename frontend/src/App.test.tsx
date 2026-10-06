@@ -594,3 +594,55 @@ test('run history loads older pages without duplicating existing runs', async ()
   fireEvent.click(screen.getByRole('button', { name: 'Load older runs' }))
   expect(await screen.findByText('21 loaded')).toBeTruthy()
 })
+
+
+test('selecting another immutable definition changes the explicit run target without executing', async () => {
+  const definitions = [
+    {
+      id: 'definition-v2', report_id: 'report-a', version: 2,
+      question: 'Version two question', mode: 'data',
+      pinned_document_ids: [], pinned_source_tables: { 'source-a': ['revenue'] },
+      created_at: '2026-10-05T00:02:00Z', executes_queries: false, runnable: true,
+    },
+    {
+      id: 'definition-v1', report_id: 'report-a', version: 1,
+      question: 'Version one question', mode: 'hybrid',
+      pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+      created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+    },
+  ]
+  const posts: string[] = []
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse(definitions)
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') {
+      posts.push(url)
+      return jsonResponse({
+        id: 'run-v1', report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+        status: 'failed', started_at: '2026-10-05T00:03:00Z', finished_at: '2026-10-05T00:03:01Z',
+        failure_category: 'model', result_size_bytes: null, trace_count: 0, result: null,
+      }, 202)
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+
+  const selector = await screen.findByLabelText('Definition version')
+  expect((selector as HTMLSelectElement).value).toBe('definition-v2')
+  fireEvent.change(selector, { target: { value: 'definition-v1' } })
+  expect(await screen.findByText('Version one question')).toBeTruthy()
+  expect(posts).toHaveLength(0)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Run fresh report' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+  await waitFor(() => expect(posts).toEqual(['/api/reports/report-a/definitions/1/runs']))
+})
