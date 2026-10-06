@@ -61,9 +61,14 @@ def safe_filename(title: str | None, suffix: str) -> str:
 
 
 def _neutralize_formula(text: str) -> str:
-    """Prefix spreadsheet-formula text cells, including after leading controls."""
+    """Prefix spreadsheet-formula text cells, including after leading controls.
+
+    The first *significant* character is found by skipping whitespace and every
+    non-printable character (Cc/Cf/Zs/Zl/Zp — e.g. U+200B, U+FEFF, U+2060),
+    so a format character cannot smuggle a leading ``= + - @`` past the defense.
+    """
     for char in text:
-        if char.isspace() or ord(char) < 0x20:
+        if char.isspace() or not char.isprintable():
             continue
         return "'" + text if char in _FORMULA_PREFIXES else text
     return text

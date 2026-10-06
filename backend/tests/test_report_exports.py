@@ -183,6 +183,26 @@ async def test_csv_unavailable_for_narrative_only_snapshot(client, file_db):
 
 
 @pytest.mark.asyncio
+async def test_formula_neutralizer_covers_unicode_format_characters(client, file_db):
+    """A leading format char (Cf) must not smuggle a formula past the defense."""
+    fixture = await seed_definition(file_db)
+    src_id = next(iter(fixture["pinned_source_tables"]))
+    rows = [
+        ["\u200b=cmd()", "\ufeff+cmd", "\u2060-cmd", "\u00a0@cmd"],
+        [-1.5, "-1.5", "  =cmd", 0],
+    ]
+    evidence = [_structured(src_id, ["a", "b", "c", "d"], rows)]
+    report_id = await _seed_snapshot(file_db, evidence=evidence)
+    resp = await client.get(f"/api/reports/{report_id}/exports/csv")
+    assert resp.status_code == 200
+    parsed = list(csv.reader(io.StringIO(resp.text)))
+    assert all(parsed[1][i].startswith("'") for i in range(4)), parsed[1]
+    assert parsed[2][0] == "-1.5"   # typed numeric value retained unchanged
+    assert parsed[2][1] == "'-1.5"  # numeric-looking *string* is untrusted text
+    assert parsed[2][2] == "'  =cmd"
+
+
+@pytest.mark.asyncio
 async def test_unsupported_structured_passage_fails_explicitly(client, file_db):
     fixture = await seed_definition(file_db)
     src_id = next(iter(fixture["pinned_source_tables"]))
