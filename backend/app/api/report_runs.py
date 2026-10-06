@@ -9,6 +9,7 @@ closed with 409, consistently with saved reports and B2A definitions.
 Newly owned reservations execute inline through the existing governed orchestrator.
 """
 
+import asyncio
 import json
 import math
 from datetime import date, datetime, time, timezone
@@ -433,21 +434,24 @@ async def _execute_owned_run(
         )
 
     try:
-        plan = await orchestrator.plan(
-            message=question,
-            db=db,
-            user_id=settings.dev_user_id,
-            conversation_id=None,
-            mode=mode,
-            scope=scope,
-            request_id=run_id,
-            budget=budget,
+        plan = await asyncio.wait_for(
+            orchestrator.plan(
+                message=question,
+                db=db,
+                user_id=settings.dev_user_id,
+                conversation_id=None,
+                mode=mode,
+                scope=scope,
+                request_id=run_id,
+                budget=budget,
+            ),
+            timeout=budget.remaining_seconds(),
         )
     except ReportScopeError:
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="authorization"
         )
-    except BudgetExceeded:
+    except (BudgetExceeded, TimeoutError):
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"
         )
@@ -470,19 +474,22 @@ async def _execute_owned_run(
         )
 
     try:
-        answer = await model_gateway.chat(
-            [
-                {"role": "system", "content": plan.system_prompt},
-                {"role": "user", "content": question},
-            ],
-            max_tokens=2048,
-            budget=budget,
+        answer = await asyncio.wait_for(
+            model_gateway.chat(
+                [
+                    {"role": "system", "content": plan.system_prompt},
+                    {"role": "user", "content": question},
+                ],
+                max_tokens=2048,
+                budget=budget,
+            ),
+            timeout=budget.remaining_seconds(),
         )
     except ModelGatewayError:
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="model"
         )
-    except BudgetExceeded:
+    except (BudgetExceeded, TimeoutError):
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"
         )
@@ -510,7 +517,12 @@ async def _execute_owned_run(
 
     evidence_payload = [item.model_dump(mode="json") for item in plan.evidence]
     try:
+        budget.check_wall(datetime.now(timezone.utc))
         _validate_result(answer, evidence_payload, structured_result, trace_ids)
+    except BudgetExceeded:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"
+        )
     except (TypeError, ValueError):
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="result_too_large"
