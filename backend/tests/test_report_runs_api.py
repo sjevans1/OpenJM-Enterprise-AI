@@ -5,13 +5,14 @@ Tests for the service layer (list/get/revoke) and the HTTP API. Written first
 not exist yet.
 """
 
+import json
 from datetime import datetime, timezone
 
 import pytest
 from httpx import AsyncClient
 
 from app.core.config import get_settings
-from app.models import ReportRun
+from app.models import ReportDefinitionVersion, ReportRun, SavedReport
 from app.services.report_runs import (
     finalize_success,
     get_report_run,
@@ -87,14 +88,28 @@ async def test_list_report_runs_excludes_other_reports(file_db):
 @pytest.mark.asyncio
 async def test_list_report_runs_pagination(file_db):
     fixture = await seed_definition(file_db)
+    # Seed two more definition versions for the same report so the
+    # one-active-run-per-definition index does not block concurrent runs.
+    async with file_db() as db:
+        for v in (2, 3):
+            db.add(ReportDefinitionVersion(
+                user_id=settings.dev_user_id,
+                report_id=fixture["report_id"],
+                version=v,
+                question_text=fixture["question"],
+                requested_mode=fixture["requested_mode"],
+                pinned_document_ids_json=json.dumps(fixture["pinned_document_ids"]),
+                pinned_source_tables_json=json.dumps(fixture["pinned_source_tables"]),
+            ))
+        await db.commit()
     clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
     ids = []
     async with file_db() as db:
-        for i in range(3):
+        for i, version in enumerate([1, 2, 3]):
             run, _ = await reserve_report_run(
                 db=db,
                 report_id=fixture["report_id"],
-                definition_version=1,
+                definition_version=version,
                 idempotency_key=f"00000000-0000-4000-8000-{i:012d}",
                 requested_mode=fixture["requested_mode"],
                 question=fixture["question"],

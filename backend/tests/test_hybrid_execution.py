@@ -24,7 +24,7 @@ async def test_independent_hybrid_both_sources_succeed(session, monkeypatch):
     """mode=hybrid orchestrates knowledge.search and structured.query independently."""
     tool_log = []
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -106,7 +106,7 @@ async def test_independent_hybrid_both_sources_succeed(session, monkeypatch):
 @pytest.mark.asyncio
 async def test_partial_hybrid_knowledge_succeeds_structured_fails(session, monkeypatch):
     """If Structured is unavailable, return grounded Knowledge answer with a note."""
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -163,7 +163,7 @@ async def test_partial_hybrid_knowledge_succeeds_structured_fails(session, monke
 @pytest.mark.asyncio
 async def test_partial_hybrid_structured_succeeds_knowledge_fails(session, monkeypatch):
     """If Knowledge retrieval fails, return grounded Structured answer with a note."""
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -216,7 +216,7 @@ async def test_partial_hybrid_structured_succeeds_knowledge_fails(session, monke
 @pytest.mark.asyncio
 async def test_hybrid_both_fail_returns_no_fabrication(session, monkeypatch):
     """If both sources fail, return a safe no-fabrication message."""
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -262,7 +262,7 @@ async def test_hostile_evidence_does_not_alter_execution(session, monkeypatch):
     """Hostile document text must not trigger tools or override Structured results."""
     tool_log = []
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -339,7 +339,7 @@ async def test_hybrid_decomposition_preserves_qualifiers(session, monkeypatch):
     """Hybrid decomposition must not change annual→current, actual→projected, etc."""
     captured_messages = []
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         captured_messages.append(("plan", message))
         return StructuredPlanningResult(
             candidate=True,

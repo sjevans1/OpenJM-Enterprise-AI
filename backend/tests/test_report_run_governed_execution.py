@@ -1,6 +1,7 @@
 """VS4-B2C2 Phase 2 governed report execution."""
 
 import json
+from unittest.mock import ANY
 
 import pytest
 from sqlalchemy import func, select
@@ -164,7 +165,7 @@ async def test_new_reservation_executes_exact_validated_intent_without_chat_rows
                 {"role": "system", "content": "Use only the governed report evidence."},
                 {"role": "user", "content": fixture["question"]},
             ],
-            {"max_tokens": 2048},
+            {"max_tokens": 2048, "budget": ANY},
         )
     ]
     async with file_db() as db:
