@@ -1,7 +1,7 @@
 # VS4 Acceptance Report
 
-Status: **AWAITING REVIEW — VS4-D integrated acceptance complete**  
-Candidate base for VS4-D: `52e7fd8c4c514538874a6b167b9fb4bd64321806`  
+Status: **ACCEPTED — VS4 complete**  
+Accepted merge: `86164252c38c74e1d7417d61c310951472ff81f8`  
 Repository: `sjevans1/OpenJM-Enterprise-AI`
 
 This report reconciles previously accepted VS4 evidence and records the final integrated VS4-D gates. It does **not** claim the entire OpenJM Enterprise AI product is complete. VS5–VS8 remain future work.
@@ -105,8 +105,16 @@ The VS4 lifecycle pilot included a mandatory real Hermes restart/resume during B
 
 ## 9. Final verdict
 
-**VS4-D runtime acceptance is complete and the batch is ready for final review once the documentation-only final head passes exact-head fast/full hosted CI.**
+**VS4 accepted on 2026-10-06.**
 
-The assembled VS4 feature set has passed the required isolated integrated runtime, browser, restart, export, authorization, upgrade and recovery checks. This does not remove the retained VS5 identity, issue #6 lifecycle, issue #7 migration, export-recall, or VS6–VS8 limitations.
+PR #32 merged at `86164252c38c74e1d7417d61c310951472ff81f8`. Post-merge main CI run `37435164243` passed Backend full regression and Frontend on that exact merge commit.
 
-Do not merge or begin VS5 until human review authorizes merge. After merge, require a green full main-push CI before recording VS4 accepted.
+The assembled VS4 feature set passed:
+- integrated runtime/browser acceptance: **39/39 assertions**;
+- synthetic upgrade/recovery: **10/10 checks**;
+- prior batch-specific real-runtime/browser/export gates;
+- final post-merge full main regression.
+
+Acceptance is deliberately scoped. It does **not** claim production multi-user identity/tenant isolation, cross-process lifecycle correctness, production migration/versioning, agent/action execution, connectors/automations, or commercialization readiness. Those remain VS5–VS8 and issues #6/#7/#9 as documented.
+
+**Next product stage: VS5 — Enterprise identity and tenant isolation.**

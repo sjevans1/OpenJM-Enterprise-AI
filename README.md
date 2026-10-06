@@ -34,9 +34,9 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 ## Repository workflow
 
-`main` is the accepted baseline through **VS4-C2**. VS1–VS3 and the VS4 Saved Reports implementation (immutable snapshots, governed pinned runs/history, and bounded CSV/HTML exports) are merged. **VS4-D integrated acceptance/closure is the active batch.**
+`main` is the accepted baseline through **VS4**. VS1–VS3 and the complete VS4 Saved Reports workflow (immutable snapshots, governed pinned runs/history, bounded CSV/HTML exports, and integrated acceptance/recovery evidence) are merged and accepted.
 
-See `docs/PRODUCT_ROADMAP.md`, `docs/VS4_ACCEPTANCE_REPORT.md`, and the canonical batch plans under `docs/plan/` before new implementation or release claims.
+See `docs/PRODUCT_ROADMAP.md` and `docs/VS4_ACCEPTANCE_REPORT.md`. **VS5 — enterprise identity and tenant isolation — is the next product stage.**
 
 ## Windows quick start
 

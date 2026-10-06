@@ -1,7 +1,7 @@
 # OpenJM Enterprise AI — Product Roadmap
 
-**Current accepted main:** `52e7fd8c4c514538874a6b167b9fb4bd64321806` (VS4-C2 merge).  
-**Active batch:** VS4-D integrated acceptance and closure.  
+**Current accepted main:** `86164252c38c74e1d7417d61c310951472ff81f8` (VS4-D merge).  
+**Accepted stage:** VS4 complete. **Next:** VS5 enterprise identity and tenant isolation.  
 **Checklist source:** roadmap issue #11 and the current batch contracts in `docs/plan/`.
 
 ## Delivered foundation
@@ -18,9 +18,9 @@
 | VS4-C1 | Manual Reports UX: definition selection, explicit confirmation, retry/idempotency handling, immutable run history/failure/revocation UX. |
 | VS4-C2 | Governed exports of already-persisted bounded results: structured CSV and escaped self-contained HTML/print artifacts. |
 
-## VS4-D — current
+## VS4 — accepted
 
-VS4-D does not add a new broad product surface. It reconciles prior evidence, runs the assembled isolated acceptance flow, proves synthetic upgrade/recovery behavior, and produces the final VS4 acceptance package. VS4 is not accepted until D merges by maintainer authorization and post-merge main CI is green.
+VS4 closed through PR #32, merge `86164252c38c74e1d7417d61c310951472ff81f8`. Post-merge main CI run `37435164243` passed the full backend regression and frontend. Integrated VS4-D acceptance passed 39/39 assembled runtime/browser assertions plus 10/10 synthetic upgrade/recovery checks. Retained limitations are carried forward explicitly into VS5 and issues #6/#7.
 
 ## Planned remaining vertical slices
 
