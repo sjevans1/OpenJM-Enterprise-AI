@@ -19,6 +19,7 @@ from app.services.model_gateway import (
     ModelGatewayError,
     OpenAICompatibleModelGateway,
 )
+from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 
 class StructuredPlannerError(RuntimeError):
@@ -390,6 +391,7 @@ class StructuredPlanner:
         db: AsyncSession,
         user_id: str,
         scope: ReportSourceScope | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> StructuredPlanningResult:
         sources = (
             await self._sources(db, user_id)
@@ -427,6 +429,7 @@ class StructuredPlanner:
                 [{"role": "system", "content": prompt}],
                 temperature=0.0,
                 max_tokens=700,
+                budget=budget,
             )
         except ModelGatewayError as exc:
             raise StructuredPlannerError(str(exc)) from exc

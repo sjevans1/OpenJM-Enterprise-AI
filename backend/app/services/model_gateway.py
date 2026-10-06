@@ -25,11 +25,12 @@ Phase B reliability design (docs/MODEL_GATEWAY_RELIABILITY.md):
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
 from app.core.config import get_settings
+from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 
 class ModelGatewayError(RuntimeError):
@@ -246,9 +247,11 @@ class OpenAICompatibleModelGateway:
         temperature: float,
         max_tokens: int | None,
         extras: dict[str, Any] | None,
+        budget: Optional[ReportRunBudget] = None,
     ) -> tuple[str, OutputValidation]:
         """One generation attempt. Returns (raw content, validation)."""
-
+        if budget is not None:
+            budget.count_model()
         url = self._endpoint()
         headers = self._headers()
         payload = self._build_payload(messages, temperature, max_tokens, extras)
@@ -265,6 +268,7 @@ class OpenAICompatibleModelGateway:
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        budget: Optional[ReportRunBudget] = None,
     ) -> str:
         """Generate one validated answer.
 
@@ -273,10 +277,17 @@ class OpenAICompatibleModelGateway:
         settings (temperature 0.0, bounded max_tokens) and the configured
         retry extras → validate → return if valid, else a controlled
         ModelGatewayError. Malformed content is never returned.
-        """
 
+        When *budget* is supplied (report-execution path only) every HTTP
+        attempt is counted and max_tokens is capped to
+        ``budget.max_output_tokens`` (default 2048).  When *budget* is
+        ``None`` (ordinary Chat) behaviour is unchanged.
+        """
+        if budget is not None:
+            max_tokens = budget.enforce_max_tokens(max_tokens)
         content, validation = await self._generate(
-            messages, temperature=temperature, max_tokens=max_tokens, extras=None
+            messages, temperature=temperature, max_tokens=max_tokens, extras=None,
+            budget=budget,
         )
         if validation.ok:
             return content
@@ -289,6 +300,7 @@ class OpenAICompatibleModelGateway:
             temperature=self.settings.model_retry_temperature,
             max_tokens=retry_max_tokens,
             extras=self._retry_extras,
+            budget=budget,
         )
         if retry_validation.ok:
             return retry_content

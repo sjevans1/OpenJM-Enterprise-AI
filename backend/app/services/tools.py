@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from time import perf_counter
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -24,6 +24,7 @@ from app.services.report_scope import (
     source_scope_still_authorized,
 )
 from app.services.structured_planner import StructuredPlan, StructuredPlanner
+from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 
 class ToolError(RuntimeError):
@@ -69,6 +70,7 @@ class ToolContext:
     model_name: str | None = None
     db: AsyncSession | None = None
     report_scope: ReportSourceScope | None = None
+    budget: Optional[ReportRunBudget] = None
 
 
 @dataclass
@@ -248,6 +250,8 @@ class KnowledgeSearchTool:
             raise ToolInputError("knowledge.search requires a non-empty query")
         if context.db is None:
             raise ToolInputError("knowledge.search requires a database session")
+        if context.budget is not None:
+            context.budget.count_knowledge()
 
         statement = select(Document).where(
             Document.user_id == context.user_id,
@@ -465,6 +469,8 @@ class StructuredQueryTool:
     ) -> ToolResult:
         if context.db is None:
             raise ToolInputError("structured.query requires a database session")
+        if context.budget is not None:
+            context.budget.count_sql()
 
         source_id = payload.get("source_id")
         sql = payload.get("sql")

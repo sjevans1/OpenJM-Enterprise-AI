@@ -30,6 +30,7 @@ from app.services.tools import (
     ToolError,
     tool_registry,
 )
+from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 from typing import Optional, Union
 
@@ -168,6 +169,7 @@ class OpenJMOrchestrator:
         request_id: str | None = None,
         trace_route: str = "structured",
         scope: ReportSourceScope | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Run the governed Structured planner + query for one message.
 
@@ -181,6 +183,7 @@ class OpenJMOrchestrator:
                 db,
                 user_id,
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
         except StructuredPlannerError:
             return ExecutionPlan(
@@ -231,6 +234,7 @@ class OpenJMOrchestrator:
             model_name=settings.model_name,
             db=db,
             report_scope=scope,
+            budget=budget,
         )
         try:
             result = await tool_registry.execute(
@@ -252,6 +256,8 @@ class OpenJMOrchestrator:
                 ),
                 requested_mode=requested_mode,
             )
+        except BudgetExceeded:
+            raise
         except Exception:
             return ExecutionPlan(
                 execution_class="structured",
@@ -307,6 +313,7 @@ class OpenJMOrchestrator:
         request_id: str | None = None,
         trace_route: str = "knowledge",
         scope: ReportSourceScope | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> tuple[list[Evidence], str | None, list[str]]:
         """Run knowledge.search. Returns evidence, direct answer, and trace IDs.
 
@@ -351,6 +358,7 @@ class OpenJMOrchestrator:
                 model_name=settings.model_name,
                 db=db,
                 report_scope=scope,
+                budget=budget,
             ),
             {"query": message},
         )
@@ -424,6 +432,7 @@ class OpenJMOrchestrator:
         mode: ExecutionMode = "chat",
         scope: ReportSourceScope | None = None,
         request_id: str | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Route with optional server-validated report scope, never from Chat input."""
         execution_class = MODE_TO_EXECUTION_CLASS.get(mode, "general")
@@ -455,6 +464,7 @@ class OpenJMOrchestrator:
                 conversation_id,
                 "knowledge",
                 request_id=request_id,
+                budget=budget,
                 **({"scope": scope} if scope is not None else {}),
             )
             return ExecutionPlan(
@@ -474,11 +484,12 @@ class OpenJMOrchestrator:
                 conversation_id,
                 "data",
                 request_id=request_id,
+                budget=budget,
                 **({"scope": scope} if scope is not None else {}),
             )
 
         if execution_class == "hybrid":
-            # Genuinely dependent (policy-derived predicate) questions route to
+            # Genuinely dependent (policy-derived) questions route to
             # the fail-closed dependent path. Independent multi-part Hybrid
             # questions keep using the proven independent dual-source path.
             return await self._plan_hybrid(
@@ -488,6 +499,7 @@ class OpenJMOrchestrator:
                 conversation_id,
                 "hybrid",
                 request_id=request_id,
+                budget=budget,
                 **({"scope": scope} if scope is not None else {}),
             )
 
@@ -509,6 +521,7 @@ class OpenJMOrchestrator:
         prefetched_knowledge_error: str | None = None,
         scope: ReportSourceScope | None = None,
         request_id: str | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Independent dual-source execution for Hybrid mode.
 
@@ -532,6 +545,7 @@ class OpenJMOrchestrator:
                 requested_mode,
                 request_id,
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
 
         sources = await self._structured_sources(
@@ -560,9 +574,12 @@ class OpenJMOrchestrator:
                     request_id,
                     "hybrid",
                     **({"scope": scope} if scope is not None else {}),
+                    budget=budget,
                 )
             except ToolError as exc:
                 knowledge_error = str(exc)
+            except BudgetExceeded:
+                raise
             except Exception:
                 knowledge_error = "Knowledge retrieval failed."
 
@@ -583,6 +600,7 @@ class OpenJMOrchestrator:
             request_id,
             "hybrid",
             **({"scope": scope} if scope is not None else {}),
+            budget=budget,
         )
         if structured_plan.evidence:
             structured_evidence = structured_plan.evidence
@@ -812,6 +830,7 @@ class OpenJMOrchestrator:
         requested_mode: ExecutionMode,
         request_id: str,
         scope: ReportSourceScope | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Fail-closed dependent hybrid: Knowledge -> Grounded Parameter -> Structured.
 
@@ -842,6 +861,7 @@ class OpenJMOrchestrator:
                 request_id,
                 "hybrid",
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
         except ToolError:
             knowledge_error = "Knowledge retrieval could not be completed safely."
@@ -890,6 +910,7 @@ class OpenJMOrchestrator:
                 db,
                 user_id,
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
         except StructuredPlannerError:
             return ExecutionPlan(
@@ -1038,6 +1059,7 @@ class OpenJMOrchestrator:
             model_name=settings.model_name,
             db=db,
             report_scope=scope,
+            budget=budget,
         )
         try:
             result = await tool_registry.execute(

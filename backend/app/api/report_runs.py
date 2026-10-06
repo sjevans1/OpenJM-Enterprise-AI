@@ -11,7 +11,7 @@ Newly owned reservations execute inline through the existing governed orchestrat
 
 import json
 import math
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +37,8 @@ from app.schemas import (
 )
 from app.services.report_runs import (
     MAX_RESULT_BYTES,
+    BudgetExceeded,
+    ReportRunBudget,
     ReportRunConflict,
     _parse_trace_ids,
     _validate_result,
@@ -408,8 +410,11 @@ async def _execute_owned_run(
     question: str,
     mode: str,
     scope: ReportSourceScope,
+    started_at: datetime,
 ) -> ReportRunDetail:
     """Execute one newly owned reservation across two current-authority gates."""
+    budget = ReportRunBudget(started_at=started_at)
+    budget.check_wall(datetime.now(timezone.utc))
     try:
         refreshed = await _reload_execution_intent(
             db,
@@ -436,10 +441,15 @@ async def _execute_owned_run(
             mode=mode,
             scope=scope,
             request_id=run_id,
+            budget=budget,
         )
     except ReportScopeError:
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="authorization"
+        )
+    except BudgetExceeded:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"
         )
     except Exception:
         return await _fail_owned_run(
@@ -466,10 +476,15 @@ async def _execute_owned_run(
                 {"role": "user", "content": question},
             ],
             max_tokens=2048,
+            budget=budget,
         )
     except ModelGatewayError:
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="model"
+        )
+    except BudgetExceeded:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"
         )
     except Exception:
         return await _fail_owned_run(
@@ -541,14 +556,22 @@ async def _owned_available_report(db: AsyncSession, report_id: str) -> SavedRepo
 
 
 def _summary(run: ReportRun) -> ReportRunSummary:
+    # SQLite DateTime(timezone=True) may round-trip as naive; normalize
+    # both timestamps so API output is always tz-aware and consistent.
+    started_at = run.started_at
+    if started_at is not None and started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    finished_at = run.finished_at
+    if finished_at is not None and finished_at.tzinfo is None:
+        finished_at = finished_at.replace(tzinfo=timezone.utc)
     return ReportRunSummary(
         id=run.id,
         report_id=run.report_id,
         definition_version=run.definition_version,
         requested_mode=run.requested_mode,
         status=run.status,
-        started_at=run.started_at,
-        finished_at=run.finished_at,
+        started_at=started_at,
+        finished_at=finished_at,
         failure_category=run.failure_category,
         result_size_bytes=run.result_size_bytes,
         trace_count=len(_parse_trace_ids(run.trace_ids_json)),
@@ -667,6 +690,12 @@ async def submit_run(
     if definition_id is None:
         raise HTTPException(status_code=404, detail="Report definition not found")
 
+    if not settings.report_runs_enabled:
+        raise HTTPException(
+            status_code=424,
+            detail="Report-run execution is not enabled",
+        )
+
     question, mode, scope = await load_validated_definition_scope(
         db,
         report_id,
@@ -704,6 +733,7 @@ async def submit_run(
             question=question,
             mode=mode,
             scope=scope,
+            started_at=run.started_at,
         )
     return await _detail(db, run)
 
