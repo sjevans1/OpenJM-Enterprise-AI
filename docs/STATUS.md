@@ -4,17 +4,17 @@
 | --- | --- |
 | Repository | sjevans1/OpenJM-Enterprise-AI |
 | Plan revision | vs4-pilot-1 |
-| State | VS4-D runtime acceptance complete; final documentation-only review head pending exact-head fast/full CI |
-| Current batch / phase | VS4-D / final review package |
-| Active writer | ChatGPT with narrow Hermes workstation/browser acceptance handoff |
-| Branch | milestone/vs4-d-acceptance |
-| PR | #32 (draft until final exact-head CI) |
+| State | VS4 accepted; PR #32 merged and post-merge full main CI green |
+| Current batch / phase | VS4 closed; next stage VS5 planning |
+| Active writer | none for VS4 |
+| Branch | main |
+| PR | #32 merged |
 | Starting main SHA | 52e7fd8c4c514538874a6b167b9fb4bd64321806 |
 | Last reviewed SHA | 3b60fc2231dd2c7883f3057576ac771d92f3afc3 (accepted C2 head) |
-| Last verified main CI | 37425676477 green on 52e7fd8c4c514538874a6b167b9fb4bd64321806 |
+| Last verified main CI | 37435164243 green on 86164252c38c74e1d7417d61c310951472ff81f8 |
 | Real-runtime acceptance | VS4-D 39/39 integrated assertions; restart digest stable; Phase 3 upgrade/recovery 10/10 |
 | Review finding | none active; Hermes first-pass harness corrections did not modify app code |
-| Next action | validate final documentation-only head with fast + full CI, apply awaiting_review, stop before merge |
+| Next action | plan VS5 identity/tenant isolation; keep #6 and #7 prerequisites explicit |
 
 ## Batch ledger
 
@@ -24,7 +24,7 @@
 | VS4-B2C2 | accepted/merged | PR #29; full 37414383020; main 37415877675 |
 | VS4-C1 | accepted/merged | PR #30; full 37418485617; main 37420633672 |
 | VS4-C2 | accepted/merged | PR #31; full 37424846415; main 37425676477 |
-| VS4-D | awaiting final CI/review | PR #32; runtime acceptance comment 6011928489 |
+| VS4-D | accepted/merged | PR #32; merge 86164252; main CI 37435164243 |
 
 ## Checkpoint protocol
 
@@ -121,3 +121,9 @@ hash unchanged, no application code modified during acceptance. Three first-pass
 assertion failures were acceptance-harness/fixture defects and were corrected
 without app changes. Final documentation-only head requires exact-head fast/full
 CI before awaiting_review.
+
+
+2026-10-06 | VS4 final acceptance | PR #32 merged at
+`86164252c38c74e1d7417d61c310951472ff81f8`; post-merge main CI
+`37435164243` passed full Backend and Frontend. VS4 is accepted. Next stage is
+VS5; retained prerequisites/limitations #6 and #7 remain open.
