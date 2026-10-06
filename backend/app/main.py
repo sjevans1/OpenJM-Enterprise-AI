@@ -10,6 +10,7 @@ from app.api import (
     connectors,
     data,
     knowledge,
+    operations,
     report_exports,
     report_definitions,
     report_runs,
@@ -67,6 +68,7 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
 app.include_router(connectors.router, prefix="/api")
+app.include_router(operations.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
 

@@ -28,6 +28,7 @@ tenant-wide and is never attributed to an individual user.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -412,6 +413,41 @@ async def require_current_authorization(
     )
 
 
+def connector_resource_reference(connector_instance_id: str, external_id: str) -> str:
+    """Canonical reference for a connector resource on a non-connector row.
+
+    Encoded as JSON rather than joined with a separator, because provider
+    resource ids are opaque and may legitimately contain any punctuation. A
+    delimiter scheme would be ambiguous for some provider, and an ambiguous
+    reference here would mean an authorization check against the wrong resource.
+    """
+    return json.dumps(
+        {"connector_id": connector_instance_id, "external_id": external_id},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def parse_connector_resource_reference(value: str) -> tuple[str, str] | None:
+    """Decode a reference, returning None when it is not well formed.
+
+    A caller must fail closed on None rather than guessing at the resource.
+    """
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    connector_id = payload.get("connector_id")
+    external_id = payload.get("external_id")
+    if not isinstance(connector_id, str) or not isinstance(external_id, str):
+        return None
+    if not connector_id or not external_id:
+        return None
+    return connector_id, external_id
+
+
 async def authorized_connector_document_ids_for_context(db: AsyncSession) -> set[str]:
     """Resolve the request principal and return the connector documents it may use.
 
@@ -438,8 +474,10 @@ __all__ = [
     "authorize_resource",
     "authorized_connector_document_ids",
     "authorized_connector_document_ids_for_context",
+    "connector_resource_reference",
     "create_mapping",
     "list_mappings",
+    "parse_connector_resource_reference",
     "require_current_authorization",
     "resolve_mapping",
     "revoke_mapping",
