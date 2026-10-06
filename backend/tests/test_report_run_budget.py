@@ -844,3 +844,93 @@ async def test_ordinary_chat_path_unaffected(file_db, client, monkeypatch):
             budget=None,
         )
         assert plan.execution_class == "general"
+
+
+@pytest.mark.asyncio
+async def test_overall_planning_wall_timeout_finalizes_without_result(
+    file_db, client, monkeypatch
+):
+    """The complete planner await is bounded by remaining report wall time."""
+    fixture = await seed_definition(file_db)
+    await _set_definition_mode(file_db, fixture, "knowledge")
+
+    class SlowPlanner:
+        async def plan(self, **_kwargs):
+            await asyncio.sleep(0.05)
+            raise AssertionError("planning should have been cancelled")
+
+    real_budget = report_runs_api.ReportRunBudget
+    monkeypatch.setattr(
+        report_runs_api,
+        "ReportRunBudget",
+        lambda *, started_at: real_budget(
+            started_at=started_at, wall_deadline_seconds=0.01
+        ),
+    )
+    monkeypatch.setattr(report_runs_api, "orchestrator", SlowPlanner())
+    monkeypatch.setattr(report_runs_api, "model_gateway", _AnswerGateway())
+    response = await client.post(
+        f"/api/reports/{fixture['report_id']}/definitions/1/runs",
+        json={"idempotency_key": "00000000-0000-4000-8000-000000000c01"},
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["failure_category"] == "budget_exceeded"
+    assert body["result"] is None
+
+
+@pytest.mark.asyncio
+async def test_finalize_success_refuses_run_after_persisted_deadline(file_db):
+    """The final persistence compare-and-set cannot succeed after deadline_at."""
+    fixture = await seed_definition(file_db)
+    await _set_definition_mode(file_db, fixture, "knowledge")
+    old = datetime.now(timezone.utc) - timedelta(seconds=601)
+    async with file_db() as db:
+        run, owns = await reserve_report_run(
+            db=db,
+            report_id=fixture["report_id"],
+            definition_version=1,
+            idempotency_key="00000000-0000-4000-8000-000000000c02",
+            requested_mode=fixture["requested_mode"],
+            question=fixture["question"],
+            pinned_document_ids=fixture["pinned_document_ids"],
+            pinned_source_tables=fixture["pinned_source_tables"],
+            now=old,
+        )
+        assert owns is True
+        persisted = await finalize_success(
+            db=db,
+            run_id=run.id,
+            user_id=report_runs_api.settings.dev_user_id,
+            fingerprint=run.request_fingerprint,
+            answer="late answer",
+            evidence=[{
+                "source_type": "document",
+                "source_id": fixture["pinned_document_ids"][0],
+                "title": "Policy",
+                "passage": "bounded",
+                "evidence_id": "e-late",
+            }],
+            structured_result=None,
+            trace_ids=["trace-late"],
+        )
+        assert persisted == 0
+        await db.refresh(run)
+        assert run.status == "running"
+        assert run.result_json is None
+
+
+@pytest.mark.asyncio
+async def test_remaining_seconds_and_counters_fail_after_wall_deadline():
+    """Every budget counter now enforces the same absolute wall deadline."""
+    old = datetime.now(timezone.utc) - timedelta(seconds=601)
+    budget = ReportRunBudget(started_at=old)
+    with pytest.raises(BudgetExceeded):
+        budget.remaining_seconds()
+    with pytest.raises(BudgetExceeded):
+        budget.count_model()
+    with pytest.raises(BudgetExceeded):
+        budget.count_sql()
+    with pytest.raises(BudgetExceeded):
+        budget.count_knowledge()
