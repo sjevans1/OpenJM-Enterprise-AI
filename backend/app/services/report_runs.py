@@ -87,6 +87,7 @@ class ReportRunBudget:
     knowledge_retrievals: int = field(default=0)
 
     def count_model(self) -> None:
+        self.check_wall(datetime.now(timezone.utc))
         self.model_attempts += 1
         if self.model_attempts > self.max_model_http_attempts:
             raise BudgetExceeded(
@@ -95,6 +96,7 @@ class ReportRunBudget:
             )
 
     def count_sql(self) -> None:
+        self.check_wall(datetime.now(timezone.utc))
         self.sql_executions += 1
         if self.sql_executions > self.max_sql_executions:
             raise BudgetExceeded(
@@ -103,6 +105,7 @@ class ReportRunBudget:
             )
 
     def count_knowledge(self) -> None:
+        self.check_wall(datetime.now(timezone.utc))
         self.knowledge_retrievals += 1
         if self.knowledge_retrievals > self.max_knowledge_retrievals:
             raise BudgetExceeded(
@@ -117,6 +120,17 @@ class ReportRunBudget:
                 f"wall-clock deadline exceeded ({elapsed:.1f}s > "
                 f"{self.wall_deadline_seconds}s)"
             )
+
+    def remaining_seconds(self, now: datetime | None = None) -> float:
+        current = now or datetime.now(timezone.utc)
+        elapsed = (current - self.started_at).total_seconds()
+        remaining = self.wall_deadline_seconds - elapsed
+        if remaining <= 0:
+            raise BudgetExceeded(
+                f"wall-clock deadline exceeded ({elapsed:.1f}s >= "
+                f"{self.wall_deadline_seconds}s)"
+            )
+        return remaining
 
     def enforce_max_tokens(self, max_tokens: _Optional[int]) -> _Optional[int]:
         if max_tokens is None:
@@ -389,6 +403,7 @@ async def finalize_success(
     result_json = json.dumps(aggregate, separators=(",", ":"), ensure_ascii=False)
     result_bytes = len(result_json.encode("utf-8"))
     result_sha = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+    finished_at = datetime.now(timezone.utc)
     result = await db.execute(
         update(ReportRun)
         .where(
@@ -397,10 +412,11 @@ async def finalize_success(
             ReportRun.status == "running",
             ReportRun.request_fingerprint == fingerprint,
             ReportRun.finished_at.is_(None),
+            ReportRun.deadline_at > finished_at,
         )
         .values(
             status="succeeded",
-            finished_at=datetime.now(timezone.utc),
+            finished_at=finished_at,
             trace_ids_json=json.dumps(trace_ids or [], separators=(",", ":")),
             result_json=result_json,
             result_size_bytes=result_bytes,
