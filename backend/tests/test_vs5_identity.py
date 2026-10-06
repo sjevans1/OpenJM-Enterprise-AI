@@ -43,7 +43,7 @@ def oidc_mode(monkeypatch, idp):
         return idp.jwks()
 
     monkeypatch.setattr(oidc_client, "_fetch_json", fake_fetch)
-    idp._jwks = type(idp._jwks)({})  # drop any cached keys between tests
+    # Drop any cached keys/discovery so each test re-fetches from its own IdP.
     oidc_client._jwks = type(oidc_client._jwks)({})
     oidc_client._discovery = type(oidc_client._discovery)({})
     return idp
@@ -76,7 +76,8 @@ async def tenants(file_db):
             db, tenant_id=TENANT_B, principal_id=account_b.id, role="owner"
         )
         await db.commit()
-    return {"A": "pa", "B": "pb", "orphan": "po"}
+    return {"A": "pa", "B": "pb", "orphan": "po",
+            "keyA": f"{TENANT_A}:pa", "keyB": f"{TENANT_B}:pb"}
 
 
 def auth(token: str, tenant: str | None = None) -> dict:
@@ -167,7 +168,7 @@ async def test_different_tenant_cannot_read_another_tenants_documents(
             Document(
                 id="doc-a",
                 tenant_id=TENANT_A,
-                user_id=tenants["A"],
+                user_id=tenants["keyA"],
                 original_name="acme-secret.txt",
                 stored_path="/tmp/does-not-matter",
                 size_bytes=10,
@@ -285,7 +286,14 @@ async def test_revoked_membership_also_voids_a_live_session(
         )
         await db.commit()
 
-    assert (await client.get("/api/auth/me", headers=auth(session))).status_code == 403
+    # Revoking a membership also revokes every session bound to it, so the
+    # stale session is refused as an unauthenticated credential...
+    revoked = await client.get("/api/auth/me", headers=auth(session))
+    assert revoked.status_code == 401, revoked.text
+    # ...and the raw OIDC token, which is still cryptographically valid, is
+    # refused at the membership check rather than being honoured from a cache.
+    stale_token = await client.get("/api/auth/me", headers=auth(token))
+    assert stale_token.status_code == 403, stale_token.text
 
 
 async def test_oidc_mode_rejects_a_forged_opaque_token(client, oidc_mode, tenants):

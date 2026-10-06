@@ -34,6 +34,13 @@ TENANT_B = "tnt-iso-b"
 SUBJECT_A = "iso-a"
 SUBJECT_B = "iso-b"
 
+# Ownership keys as Principal.user_id derives them (tenant-qualified outside
+# the legacy local tenant).
+ACCOUNT_A = "iso-pa"
+ACCOUNT_B = "iso-pb"
+KEY_A = f"{TENANT_A}:{ACCOUNT_A}"
+KEY_B = f"{TENANT_B}:{ACCOUNT_B}"
+
 
 @pytest.fixture
 def oidc_mode(monkeypatch):
@@ -65,10 +72,10 @@ async def world(file_db):
         )
         await db.flush()
         account_a = await identity_service.get_or_create_principal(
-            db, subject=SUBJECT_A, principal_id="iso-pa"
+            db, subject=SUBJECT_A, principal_id=ACCOUNT_A
         )
         account_b = await identity_service.get_or_create_principal(
-            db, subject=SUBJECT_B, principal_id="iso-pb"
+            db, subject=SUBJECT_B, principal_id=ACCOUNT_B
         )
         await identity_service.add_membership(
             db, tenant_id=TENANT_A, principal_id=account_a.id, role="owner"
@@ -80,7 +87,7 @@ async def world(file_db):
         doc = Document(
             id="iso-doc",
             tenant_id=TENANT_A,
-            user_id="iso-pa",
+            user_id=KEY_A,
             original_name="a-policy.md",
             stored_path="/tmp/iso",
             size_bytes=5,
@@ -91,7 +98,7 @@ async def world(file_db):
         source = DataSource(
             id="iso-src",
             tenant_id=TENANT_A,
-            user_id="iso-pa",
+            user_id=KEY_A,
             name="A Finance",
             engine="sqlite",
             connection_secret="x",
@@ -112,7 +119,7 @@ async def world(file_db):
             authorized_objects_json=json.dumps(["finance"]),
             revenue_currency="USD",
         )
-        conv = Conversation(id="iso-conv", tenant_id=TENANT_A, user_id="iso-pa", title="A chat")
+        conv = Conversation(id="iso-conv", tenant_id=TENANT_A, user_id=KEY_A, title="A chat")
         db.add_all([doc, source, conv])
         await db.flush()
         user_msg = Message(
@@ -141,7 +148,7 @@ async def world(file_db):
         report = SavedReport(
             id="iso-rep",
             tenant_id=TENANT_A,
-            user_id="iso-pa",
+            user_id=KEY_A,
             conversation_id=conv.id,
             message_id=assistant.id,
             title="A report",
@@ -159,7 +166,7 @@ async def world(file_db):
                 id="iso-def",
                 tenant_id=TENANT_A,
                 report_id=report.id,
-                user_id="iso-pa",
+                user_id=KEY_A,
                 version=1,
                 question_text="q",
                 requested_mode="knowledge",
@@ -171,7 +178,7 @@ async def world(file_db):
             ReportRun(
                 id="iso-run",
                 tenant_id=TENANT_A,
-                user_id="iso-pa",
+                user_id=KEY_A,
                 report_id=report.id,
                 definition_id="iso-def",
                 definition_version=1,
@@ -182,14 +189,16 @@ async def world(file_db):
                 started_at=assistant.created_at,
                 deadline_at=assistant.created_at,
                 finished_at=assistant.created_at,
-                result_json=json.dumps({"answer": "a"}),
+                result_json=json.dumps({"answer": "a",
+                "evidence": [{"source_type": "document", "source_id": doc.id,
+                              "title": "A Policy", "passage": "the answer"}]}),
             )
         )
         db.add(
             ExecutionTrace(
                 id="iso-trace",
                 tenant_id=TENANT_A,
-                user_id="iso-pa",
+                user_id=KEY_A,
                 tool_name="knowledge.search",
                 operation_class="read",
                 risk_level="low",
@@ -201,13 +210,13 @@ async def world(file_db):
         db.add(
             AuditRecord(
                 tenant_id=TENANT_A,
-                principal_id="iso-pa",
+                principal_id=KEY_A,
                 action="test.action",
                 decision="allow",
             )
         )
         await db.commit()
-    return {"a": "iso-pa", "b": "iso-pb"}
+    return {"a": ACCOUNT_A, "b": ACCOUNT_B, "key_a": KEY_A, "key_b": KEY_B}
 
 
 def auth(token):
@@ -247,7 +256,8 @@ async def test_run_history_and_definitions_are_tenant_scoped(client, oidc_mode, 
     ).status_code == 404
 
     token_a_ = token_a(oidc_mode)
-    assert (await client.get("/api/reports/runs/iso-run", headers=auth(token_a_))).status_code == 200
+    own_run = await client.get("/api/reports/runs/iso-run", headers=auth(token_a_))
+    assert own_run.status_code == 200, own_run.text
 
 
 async def test_exports_respect_current_authorization(client, oidc_mode, world, file_db):
@@ -258,7 +268,7 @@ async def test_exports_respect_current_authorization(client, oidc_mode, world, f
     # Revoke tenant A's principal from its tenant: the same token must stop
     # exporting, because authorization is re-read per request.
     async with file_db() as db:
-        await identity_service.revoke_membership(db, tenant_id=TENANT_A, principal_id="iso-pa")
+        await identity_service.revoke_membership(db, tenant_id=TENANT_A, principal_id=ACCOUNT_A)
         await db.commit()
 
     blocked = await client.get("/api/reports/iso-rep/exports/html", headers=auth(token_a_))
@@ -296,6 +306,7 @@ async def test_deleted_evidence_cannot_reappear(client, oidc_mode, world, file_d
         document = await db.get(Document, "iso-doc")
         document.lifecycle_state = "deleted"
         document.indexed = False
+        document.deleted_at = document.created_at
         await db.commit()
         rows = (await db.execute(select(Document).where(*retrievable_filter()))).scalars().all()
     assert rows == []
@@ -324,7 +335,7 @@ async def test_audit_reads_are_tenant_scoped(client, oidc_mode, world, file_db):
     from app.services.actions import builtin
 
     principal_b = Principal(
-        principal_id="iso-pb",
+        principal_id=ACCOUNT_B,
         tenant_id=TENANT_B,
         subject=SUBJECT_B,
         role="owner",
@@ -342,7 +353,7 @@ async def test_audit_reads_are_tenant_scoped(client, oidc_mode, world, file_db):
     assert result["count"] == 0, "tenant B must not see tenant A audit rows"
 
     principal_a = Principal(
-        principal_id="iso-pa",
+        principal_id=ACCOUNT_A,
         tenant_id=TENANT_A,
         subject=SUBJECT_A,
         role="owner",

@@ -54,23 +54,29 @@ def test_no_shared_configuration_secrets():
 def test_single_database_url_of_its_own():
     """Exactly one application database setting, and it is OpenJM's own."""
     text = (APP_ROOT / "core" / "config.py").read_text(encoding="utf-8")
-    assert text.count("database_url") >= 1
-    assert "workspace" not in text.lower()
+    assert "database_url" in text
+    # No shared-state settings of any kind are declared.
+    for key in FORBIDDEN_CONFIG:
+        assert key not in text.lower(), f"shared configuration key present: {key}"
+    # And no second product's database or session store is referenced.
+    lowered = text.lower()
+    for forbidden in ("workspace_database", "workspace_session", "workspace_secret"):
+        assert forbidden not in lowered
 
 
-def test_app_imports_and_boots_without_workspace(monkeypatch):
-    """The ASGI app builds with no Workspace environment variables present."""
+async def test_app_imports_and_boots_without_workspace(client, monkeypatch):
+    """The ASGI app boots and serves with no Workspace environment present."""
     for key in list(dict(__import__("os").environ)):
         if "WORKSPACE" in key.upper():
             monkeypatch.delenv(key, raising=False)
 
     from app.main import app
 
-    paths = {route.path for route in app.routes}
-    assert "/api/health" in paths
-    # The identity surface is OpenJM's own.
-    assert any(p.startswith("/api/auth") for p in paths)
-    assert any(p.startswith("/api/actions") for p in paths)
+    assert app.title == "OpenJM Enterprise AI"
+    # The identity and action surfaces are OpenJM's own, and they answer.
+    assert (await client.get("/api/health")).status_code == 200
+    assert (await client.get("/api/auth/config")).status_code == 200
+    assert (await client.get("/api/actions/tools")).status_code == 200
 
 
 async def test_health_reports_product_identity(client):

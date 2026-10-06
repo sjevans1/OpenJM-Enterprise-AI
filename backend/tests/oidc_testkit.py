@@ -30,6 +30,8 @@ def _new_key():
 
 @dataclass
 class TestIdP:
+    # Not a test class: pytest must not try to collect it.
+    __test__ = False
     issuer: str = ISSUER
     audience: str = AUDIENCE
     kid: str = KID

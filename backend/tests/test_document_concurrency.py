@@ -39,28 +39,6 @@ def _doc(document_id="doc-1", state=DOC_STATE_INDEXING, indexed=False, **kw):
 
 
 @pytest.fixture
-async def second_maker(tmp_path):
-    """An independent engine over the same file database (a second process)."""
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{tmp_path / 'second.db'}", connect_args={"timeout": 10}
-    )
-    event.listen(engine.sync_engine, "connect", enable_sqlite_foreign_keys)
-    async with engine.begin() as conn:
-        from app.db import Base
-
-        await conn.run_sync(Base.metadata.create_all)
-    try:
-        yield async_sessionmaker(engine, expire_on_commit=False)
-    finally:
-        await engine.dispose()
-
-
-def sessionmaker_for(engine):
-    """Build an async sessionmaker for an engine created in a test."""
-    return async_sessionmaker(engine, expire_on_commit=False)
-
-
-@pytest.fixture
 async def file_db_two(tmp_path):
     """Two sessionmakers over one file database, each with its own connection."""
     path = tmp_path / "concurrency.db"
@@ -209,18 +187,36 @@ async def test_concurrent_ingest_and_delete_resolves_to_deleted(file_db_two):
     assert document.indexed is False, "a deleted document must never be published"
 
 
-async def test_deleted_document_cannot_be_resurrected(file_db):
-    """The database guard refuses any transition out of the deleted state."""
-    from sqlalchemy.exc import IntegrityError
+@pytest.fixture
+async def migrated_maker(tmp_path):
+    """A sessionmaker over a real *migrated* database.
 
-    async with file_db() as db:
-        doc = _doc(state=DOC_STATE_READY, indexed=True)
-        db.add(doc)
+    The database-level guards are created by migrations, not by
+    ``create_all``, so anything asserting on a trigger must run here.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.migrations_runner import adopt_and_upgrade
+
+    path = tmp_path / "migrated.db"
+    url = f"sqlite+aiosqlite:///{path}"
+    adopt_and_upgrade(url)
+    engine = create_async_engine(url, connect_args={"timeout": 10})
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+async def test_deleted_document_cannot_be_resurrected(migrated_maker):
+    """The database guard refuses any transition out of the deleted state."""
+    async with migrated_maker() as db:
+        db.add(_doc(state=DOC_STATE_READY, indexed=True))
         await db.commit()
         await lifecycle.begin_delete(db, "doc-1")
         await lifecycle.finish_delete(db, "doc-1")
 
-    async with file_db() as db:
+    async with migrated_maker() as db:
         document = await db.get(Document, "doc-1")
         document.lifecycle_state = DOC_STATE_READY
         document.indexed = True
@@ -229,7 +225,7 @@ async def test_deleted_document_cannot_be_resurrected(file_db):
             await db.commit()
         await db.rollback()
 
-    async with file_db() as db:
+    async with migrated_maker() as db:
         document = await db.get(Document, "doc-1")
     assert document.lifecycle_state == DOC_STATE_DELETED
 

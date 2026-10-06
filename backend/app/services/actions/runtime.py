@@ -62,8 +62,28 @@ class ActionError(Exception):
             self.status_code = status
 
 
+def _require(principal: Principal, permission: Permission) -> None:
+    """Permission check that reports through the action error surface."""
+    if not principal.has(permission):
+        raise ActionError(
+            f"Principal {principal.principal_id} lacks required permission "
+            f"'{permission.value}'",
+            code="missing_permission",
+            status=403,
+        )
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalise a stored datetime (SQLite returns naive UTC values)."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _hash(payload: str) -> str:
@@ -194,7 +214,7 @@ async def propose_plan(
             code="actions_disabled",
             status=503,
         )
-    principal.require(Permission.ACTIONS_PLAN)
+    _require(principal, Permission.ACTIONS_PLAN)
     limit = max_steps or settings.action_max_steps
 
     if proposal is None:
@@ -240,7 +260,7 @@ async def propose_plan(
     now = utcnow()
     plan = ActionPlan(
         tenant_id=principal.tenant_id,
-        principal_id=principal.principal_id,
+        principal_id=principal.user_id,
         role=principal.role,
         conversation_id=conversation_id,
         goal_text=goal or "",
@@ -287,7 +307,7 @@ async def approve_step(
     reason: str | None = None,
 ) -> ActionApproval:
     """Approve exactly one step, bound to its current parameters."""
-    principal.require(Permission.ACTIONS_APPROVE)
+    _require(principal, Permission.ACTIONS_APPROVE)
     plan = await load_plan(db, principal, plan_id)
     steps = plan_steps(plan)
     if step_index < 0 or step_index >= len(steps):
@@ -345,7 +365,7 @@ async def reject_step(
     step_index: int,
     reason: str | None = None,
 ) -> ActionApproval:
-    principal.require(Permission.ACTIONS_APPROVE)
+    _require(principal, Permission.ACTIONS_APPROVE)
     plan = await load_plan(db, principal, plan_id)
     steps = plan_steps(plan)
     if step_index < 0 or step_index >= len(steps):
@@ -422,7 +442,8 @@ async def _consume_approval(
     if candidate.action_fingerprint != expected:
         # The parameters changed after approval: the approval no longer applies.
         return None, "approval_does_not_match_action"
-    if candidate.expires_at is not None and candidate.expires_at <= utcnow():
+    expires_at = _as_utc(candidate.expires_at)
+    if expires_at is not None and expires_at <= utcnow():
         return None, "approval_expired"
 
     result = await db.execute(
@@ -609,7 +630,7 @@ async def execute_plan(
             code="actions_disabled",
             status=503,
         )
-    principal.require(Permission.ACTIONS_EXECUTE)
+    _require(principal, Permission.ACTIONS_EXECUTE)
 
     # Tenant context cannot be switched mid-execution.
     ambient = current_principal_or_none()
@@ -630,7 +651,8 @@ async def execute_plan(
                 "steps": [],
             }
 
-        if plan.expires_at is not None and plan.expires_at <= utcnow():
+        plan_expires = _as_utc(plan.expires_at)
+        if plan_expires is not None and plan_expires <= utcnow():
             plan.status = "expired"
             await db.commit()
             raise ActionError("Action plan has expired", code="plan_expired", status=410)

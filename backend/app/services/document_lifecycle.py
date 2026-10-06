@@ -313,8 +313,13 @@ async def recover_stale(db: AsyncSession, *, now: datetime | None = None) -> int
     reclaimed = 0
     for document_id in stale:
         lease = await lease_state(db, document_id)
-        if lease is not None and lease.expires_at > moment:
-            continue
+        if lease is not None:
+            expires = lease.expires_at
+            if expires.tzinfo is None:
+                # SQLite returns naive datetimes; the application always wrote UTC.
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires > moment:
+                continue
         result = await db.execute(
             update(Document)
             .where(

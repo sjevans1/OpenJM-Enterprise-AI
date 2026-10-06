@@ -50,7 +50,7 @@ async def env(file_db):
             DataSource(
                 id="src-1",
                 tenant_id=TENANT,
-                user_id=USER,
+                user_id=f"{TENANT}:{USER}",
                 name="Finance",
                 engine="sqlite",
                 connection_secret="x",
@@ -62,7 +62,7 @@ async def env(file_db):
             DataSource(
                 id="src-other",
                 tenant_id=OTHER_TENANT,
-                user_id="someone-else",
+                user_id=f"{OTHER_TENANT}:someone-else",
                 name="Theirs",
                 engine="sqlite",
                 connection_secret="x",
@@ -176,8 +176,10 @@ async def test_read_tool_cannot_exceed_current_permissions(env):
         await db.commit()
         plan_id = plan.id
 
-    # Downgrade before execution: the fingerprint no longer matches.
-    downgraded = make_principal(role="viewer")
+    # Downgrade before execution: the fingerprint no longer matches. The role
+    # still holds actions:execute, so the refusal is about changed permissions
+    # rather than a missing capability.
+    downgraded = make_principal(role="editor")
     async with maker() as db:
         with pytest.raises(runtime.ActionError) as exc:
             await runtime.execute_plan(db, downgraded, plan_id=plan_id)
@@ -358,6 +360,9 @@ async def test_altered_parameters_invalidate_an_approval(env):
 
 
 async def test_approval_is_single_use(env):
+    """An approval is consumed exactly once, and the effect never duplicates."""
+    from app.models import ActionApproval
+
     maker, principal = env
     async with maker() as db:
         plan = await runtime.propose_plan(
@@ -372,11 +377,30 @@ async def test_approval_is_single_use(env):
         first = await runtime.execute_plan(db, principal, plan_id=plan_id)
         assert first["steps"][0]["status"] == "succeeded"
 
-        # Reset the plan to force a second execution attempt.
+        approval = (
+            await db.execute(
+                select(ActionApproval).where(ActionApproval.plan_id == plan_id)
+            )
+        ).scalars().one()
+        assert approval.status == "consumed"
+        assert approval.consumed_at is not None
+
+        # Force a second attempt against the same (now consumed) approval.
         plan.status = "proposed"
         await db.commit()
         second = await runtime.execute_plan(db, principal, plan_id=plan_id)
-    assert second["steps"][0]["status"] == "refused"
+        executions = (
+            await db.execute(
+                select(ActionExecution).where(ActionExecution.plan_id == plan_id)
+            )
+        ).scalars().all()
+        source = await db.get(DataSource, "src-1")
+
+    # The replay is served from the recorded outcome: the external effect is
+    # applied exactly once and a consumed approval is never honoured again.
+    assert second["steps"][0]["reused"] is True
+    assert len(executions) == 1
+    assert source.revenue_currency == "USD"
 
 
 async def test_read_step_needs_no_approval(env):
@@ -465,7 +489,7 @@ async def test_audit_trail_attributes_every_field(env):
         ).scalars().one()
 
     assert row.tenant_id == TENANT
-    assert row.principal_id == USER
+    assert row.principal_id == f"{TENANT}:{USER}"
     assert row.role == "admin"
     assert row.tool_name == "data_source.set_currency"
     assert row.operation_class == "write"
