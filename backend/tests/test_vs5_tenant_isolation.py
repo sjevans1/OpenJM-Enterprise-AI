@@ -25,7 +25,7 @@ from app.models import (
 )
 from app.services import identity as identity_service
 from app.services.oidc import oidc_client
-from tests.oidc_testkit import AUDIENCE, ISSUER, TestIdP
+from oidc_testkit import AUDIENCE, ISSUER, TestIdP
 
 settings = get_settings()
 
