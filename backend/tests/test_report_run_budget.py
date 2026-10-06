@@ -209,7 +209,7 @@ def test_report_run_budget_defaults():
 
 def test_budget_count_model_allows_8_blocks_9th():
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+        started_at=datetime.now(timezone.utc)
     )
     for _ in range(8):
         budget.count_model()
@@ -220,7 +220,7 @@ def test_budget_count_model_allows_8_blocks_9th():
 
 def test_budget_count_sql_allows_2_blocks_3rd():
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+        started_at=datetime.now(timezone.utc)
     )
     budget.count_sql()
     budget.count_sql()
@@ -231,7 +231,7 @@ def test_budget_count_sql_allows_2_blocks_3rd():
 
 def test_budget_count_knowledge_allows_2_blocks_3rd():
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc)
+        started_at=datetime.now(timezone.utc)
     )
     budget.count_knowledge()
     budget.count_knowledge()

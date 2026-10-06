@@ -76,7 +76,7 @@ public revoke, push, PR or Phase 2 work performed.
 | Batch | State | PR / evidence |
 | --- | --- | --- |
 | VS4-B2C1 | accepted and merged; final-head fast/full and post-merge main gate passed | PR #28; main run 37176830805 |
-| VS4-B2C2 | Phase 1 locally complete; later phases not started | Claim issue comment 5982046257; no PR/push |
+| VS4-B2C2 | Full B2C2 implemented in PR #29; wall-budget correction under final validation, unmerged | Prior accepted head 8948825; correction head requires fast/full CI + real-runtime rerun |
 | VS4-C1 | planned | Not started |
 | VS4-C2 | planned | Not started |
 | VS4-D | planned | Not started |
