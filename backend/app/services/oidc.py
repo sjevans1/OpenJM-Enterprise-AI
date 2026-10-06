@@ -8,6 +8,7 @@ session or secret with any other product.
 Validation is fail-closed. Every one of the following denies the request:
 
 * no configured issuer / audience / JWKS source;
+* a token that does not name the key that signed it;
 * unknown signing key id;
 * signature failure;
 * wrong issuer, wrong audience, or missing audience;
@@ -53,7 +54,11 @@ class OIDCClient:
         self.settings = settings or get_settings()
         self._discovery = _CacheEntry()
         self._jwks = _CacheEntry()
-        self._lock = asyncio.Lock()
+        # One lock per cache. A lock is never held while another is acquired,
+        # and no cache fill re-enters its own lock, so resolving signing keys
+        # through discovery cannot deadlock against the discovery cache.
+        self._discovery_lock = asyncio.Lock()
+        self._jwks_lock = asyncio.Lock()
 
     # -- configuration ----------------------------------------------------
 
@@ -84,17 +89,27 @@ class OIDCClient:
     async def discovery(self) -> dict:
         if not self.settings.oidc_discovery_url:
             return {}
-        async with self._lock:
-            if self._discovery.fresh(self.settings.oidc_jwks_cache_seconds):
-                return self._discovery.value
-            try:
-                document = await self._fetch_json(self.settings.oidc_discovery_url)
-            except Exception as exc:  # noqa: BLE001 - fail closed on any failure
-                raise OIDCValidationError(
-                    "OIDC discovery document is unavailable", code="oidc_discovery_failed"
-                ) from exc
-            self._discovery = _CacheEntry(document, time.monotonic())
-            return document
+        async with self._discovery_lock:
+            return await self._discovery_locked()
+
+    async def _discovery_locked(self) -> dict:
+        """Return the discovery document, fetching it when the cache is stale.
+
+        The caller must already hold ``_discovery_lock``. Keeping the fill in a
+        separate, non-locking helper is what makes it safe for ``jwks()`` to
+        reach discovery while holding nothing.
+        """
+        ttl = self.settings.oidc_jwks_cache_seconds
+        if self._discovery.fresh(ttl):
+            return self._discovery.value
+        try:
+            document = await self._fetch_json(self.settings.oidc_discovery_url)
+        except Exception as exc:  # noqa: BLE001 - fail closed on any failure
+            raise OIDCValidationError(
+                "OIDC discovery document is unavailable", code="oidc_discovery_failed"
+            ) from exc
+        self._discovery = _CacheEntry(document, time.monotonic())
+        return document
 
     async def _jwks_url(self) -> str:
         if self.settings.oidc_jwks_url:
@@ -108,10 +123,19 @@ class OIDCClient:
         return str(url)
 
     async def jwks(self, *, force_refresh: bool = False) -> dict:
-        async with self._lock:
-            if not force_refresh and self._jwks.fresh(self.settings.oidc_jwks_cache_seconds):
+        ttl = self.settings.oidc_jwks_cache_seconds
+        if not force_refresh and self._jwks.fresh(ttl):
+            return self._jwks.value
+
+        # Resolve the URL *before* taking the JWKS lock. Under discovery-only
+        # configuration this reaches discovery(), which takes the discovery
+        # lock, so holding the JWKS lock here would be a nested acquisition.
+        url = await self._jwks_url()
+
+        async with self._jwks_lock:
+            # Another coroutine may have refreshed while this one waited.
+            if not force_refresh and self._jwks.fresh(ttl):
                 return self._jwks.value
-            url = await self._jwks_url()
             try:
                 document = await self._fetch_json(url)
             except OIDCValidationError:
@@ -136,18 +160,24 @@ class OIDCClient:
             raise OIDCValidationError(
                 f"Token algorithm '{algorithm}' is not accepted", code="token_bad_alg"
             )
-        keys = jwks.get("keys") or []
-        for key in keys:
-            if kid is None or key.get("kid") == kid:
-                try:
-                    return jwt.algorithms.get_default_algorithms()[
-                        algorithm
-                    ].from_jwk(key)
-                except Exception as exc:  # noqa: BLE001
-                    raise OIDCValidationError(
-                        "Signing key could not be loaded", code="token_bad_key"
-                    ) from exc
-        raise OIDCValidationError("Token signing key is unknown", code="token_unknown_kid")
+        # A token has to name the key that signed it. There is no justified
+        # single-key exception, so selecting the first published key when the
+        # header carries no key id would be a silent, unverifiable choice.
+        if not isinstance(kid, str) or not kid:
+            raise OIDCValidationError(
+                "Token does not name a signing key", code="token_missing_kid"
+            )
+        key = next(
+            (item for item in (jwks.get("keys") or []) if item.get("kid") == kid), None
+        )
+        if key is None:
+            raise OIDCValidationError("Token signing key is unknown", code="token_unknown_kid")
+        try:
+            return jwt.algorithms.get_default_algorithms()[algorithm].from_jwk(key)
+        except Exception as exc:  # noqa: BLE001
+            raise OIDCValidationError(
+                "Signing key could not be loaded", code="token_bad_key"
+            ) from exc
 
     # -- validation -------------------------------------------------------
 

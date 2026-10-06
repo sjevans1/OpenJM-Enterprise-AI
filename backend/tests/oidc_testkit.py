@@ -85,6 +85,7 @@ class TestIdP:
         not_before: int | None = None,
         key: str = "private",
         kid: str | None = None,
+        with_kid: bool = True,
         algorithm: str = "RS256",
         extra: dict | None = None,
     ) -> str:
@@ -105,7 +106,7 @@ class TestIdP:
         if extra:
             claims.update(extra)
         signing_key = self._pem() if key == "private" else self._pem(self._other)
-        headers = {"kid": kid or self.kid}
+        headers = {"kid": kid or self.kid} if with_kid else {}
         if algorithm == "none":
             return jwt.encode(claims, key="", algorithm="none", headers=headers)
         return jwt.encode(claims, signing_key, algorithm=algorithm, headers=headers)
@@ -128,6 +129,10 @@ class TestIdP:
 
     def unknown_kid(self, subject: str, **kwargs) -> str:
         return self.token(subject, kid="not-published", **kwargs)
+
+    def missing_kid(self, subject: str, **kwargs) -> str:
+        """Signed by the published key, but the header carries no key id."""
+        return self.token(subject, with_kid=False, **kwargs)
 
     def unsigned(self, subject: str, **kwargs) -> str:
         return self.token(subject, algorithm="none", **kwargs)

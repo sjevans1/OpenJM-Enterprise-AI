@@ -53,7 +53,27 @@ session bound to it.
 | `oidc` (production) | A credential is mandatory. Fail closed on anything missing, malformed, expired, ambiguous or revoked. |
 | `dev` (local/test only) | Resolves the configured local principal, still as a real tenant + principal + role read from the database. Gated by `OPENJM_AUTH_ALLOW_DEV_MODE`; it is not a bypass and is unavailable in `oidc` mode. |
 
-### 1.5 Roles
+### 1.5 Signing keys and provider discovery
+
+Two provider configurations are supported, and both are first class:
+
+| Configuration | Key resolution |
+| --- | --- |
+| `OPENJM_OIDC_JWKS_URL` set | keys come from that URL. |
+| only `OPENJM_OIDC_DISCOVERY_URL` set | keys come from the `jwks_uri` in the discovery document. |
+
+Discovery-only configuration is a normal deployment, not a degraded one. The
+discovery and JWKS caches are independent and each is guarded by its own lock,
+and a cache fill never re-enters the lock it holds, so resolving keys through
+discovery cannot deadlock. Each cache has its own TTL and coalesces concurrent
+callers into a single fetch.
+
+A token must name the key that signed it. A token whose header carries no `kid`
+is refused (`token_missing_kid`) rather than being matched against the first
+published key, and an unpublished `kid` is refused (`token_unknown_kid`). There
+is no single-key shortcut.
+
+### 1.6 Roles
 
 | Role | Adds |
 | --- | --- |
@@ -64,7 +84,7 @@ session bound to it.
 
 An unknown or missing role resolves to **no** permissions, never to a default.
 
-### 1.6 Authorization is server-side
+### 1.7 Authorization is server-side
 
 Every route depends on a `require(...)` guard. Authorization is never delegated
 to the UI, and permission failures are recorded as audit `deny` decisions.
