@@ -546,7 +546,16 @@ export default function App() {
       }
     } catch (error) {
       if (sequence === reportExecutionSequence.current) {
-        setReportExecutionError(error instanceof Error ? error.message : 'Unable to load older runs')
+        if (isRevocationError(error)) {
+          const message = error instanceof Error ? error.message : 'Report access was revoked'
+          setActiveRun(null)
+          setActiveReport(null)
+          setReportExecutionError(message)
+          setReportError(message)
+          await loadReports()
+        } else {
+          setReportExecutionError(error instanceof Error ? error.message : 'Unable to load older runs')
+        }
       }
     } finally {
       if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
@@ -577,31 +586,58 @@ export default function App() {
     setConfirmingRun(false)
     setReportExecutionBusy(true)
     setReportExecutionError(null)
+
     try {
-      const detail = await api.submitReportRun(reportId, version, intent.idempotencyKey)
+      let detail: ReportRunDetail
+      try {
+        detail = await api.submitReportRun(reportId, version, intent.idempotencyKey)
+      } catch (error) {
+        if (sequence === reportExecutionSequence.current) {
+          if (isRevocationError(error)) {
+            const message = error instanceof Error ? error.message : 'Report access was revoked'
+            pendingRunIntentRef.current = null
+            setPendingRunIntent(null)
+            setActiveRun(null)
+            setActiveReport(null)
+            setReportExecutionError(message)
+            setReportError(message)
+            await loadReports()
+          } else {
+            // Preserve the exact key only when the submission response itself is uncertain.
+            setReportExecutionError(
+              error instanceof Error
+                ? `${error.message}. If the response was interrupted, retrying below reuses the same run request.`
+                : 'Run response was not confirmed. Retry the same run request.',
+            )
+          }
+        }
+        return
+      }
+
       if (sequence !== reportExecutionSequence.current) return
       setActiveRun(detail)
       pendingRunIntentRef.current = null
       setPendingRunIntent(null)
-      const refreshed = await api.reportRuns(reportId)
-      if (sequence === reportExecutionSequence.current) setReportRuns(refreshed)
-    } catch (error) {
-      if (sequence === reportExecutionSequence.current) {
+
+      try {
+        const refreshed = await api.reportRuns(reportId)
+        if (sequence === reportExecutionSequence.current) setReportRuns(refreshed)
+      } catch (error) {
+        if (sequence !== reportExecutionSequence.current) return
         if (isRevocationError(error)) {
           const message = error instanceof Error ? error.message : 'Report access was revoked'
-          pendingRunIntentRef.current = null
-          setPendingRunIntent(null)
           setActiveRun(null)
           setActiveReport(null)
           setReportExecutionError(message)
           setReportError(message)
           await loadReports()
         } else {
-          // Preserve the exact key for an explicit retry after an uncertain response.
+          // The run response is authoritative; a later history-refresh failure must
+          // never be presented as an uncertain submission or invite key replay.
           setReportExecutionError(
             error instanceof Error
-              ? `${error.message}. If the response was interrupted, retrying below reuses the same run request.`
-              : 'Run response was not confirmed. Retry the same run request.',
+              ? `Run completed, but history could not refresh: ${error.message}`
+              : 'Run completed, but history could not refresh.',
           )
         }
       }

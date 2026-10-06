@@ -96,3 +96,9 @@ bounded history pagination/deduplication, stale-response rejection, server-deriv
 runnable UX, and future-compatible immutable definition selection. Existing B2C2
 strict submission/owner/scope tests remain authoritative; C1 adds a regression
 that the browser cannot set runnable state.
+
+
+2026-10-06 | VS4-C1 reconciliation hardening | Diff review separated an
+authoritative successful run response from a later history-refresh failure so
+the UI cannot invite an unnecessary idempotent replay. History pagination now
+also treats source revocation as a cache-clearing authorization event.

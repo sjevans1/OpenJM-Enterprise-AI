@@ -646,3 +646,84 @@ test('selecting another immutable definition changes the explicit run target wit
   fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
   await waitFor(() => expect(posts).toEqual(['/api/reports/report-a/definitions/1/runs']))
 })
+
+
+test('successful run is not mislabeled uncertain when only history refresh fails', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  let historyReads = 0
+  const run = {
+    id: 'run-success', report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'succeeded', started_at: '2026-10-05T00:01:00Z', finished_at: '2026-10-05T00:01:02Z',
+    failure_category: null, result_size_bytes: 100, trace_count: 1,
+    result: { answer: 'Authoritative fresh answer', evidence: [], structured_result: {}, trace_ids: ['t1'] },
+  }
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') {
+      historyReads += 1
+      return historyReads === 1 ? jsonResponse([]) : Promise.reject(new TypeError('history network failure'))
+    }
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') return jsonResponse(run, 202)
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Run fresh report' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+
+  expect(await screen.findByText('Authoritative fresh answer')).toBeTruthy()
+  expect(await screen.findByText(/Run completed, but history could not refresh/)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Retry same run request' })).toBeNull()
+})
+
+test('revocation discovered while paging history clears all cached report content', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  const firstPage = Array.from({ length: 20 }, (_, index) => ({
+    id: `run-page-${index}`, report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'succeeded', started_at: '2026-10-05T00:00:00Z', finished_at: '2026-10-05T00:00:01Z',
+    failure_category: null, result_size_bytes: 100, trace_count: 1,
+  }))
+  let revoked = false
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse(revoked ? [{ ...reportA, available: false }] : [reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse(firstPage)
+    if (url === '/api/reports/report-a/runs?offset=20&limit=20') {
+      revoked = true
+      return jsonResponse({ detail: 'Report source is no longer available or authorized' }, 409)
+    }
+    throw new Error(`Unexpected request: GET ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  expect(await screen.findByText('20 loaded')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Load older runs' }))
+
+  await waitFor(() => expect(screen.getByText(/source is no longer available or authorized/i)).toBeTruthy())
+  expect(screen.queryByText('Historical confidential answer')).toBeNull()
+  expect(screen.queryByText('Historical policy passage')).toBeNull()
+})
