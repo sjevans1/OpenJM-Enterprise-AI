@@ -6,7 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.deps import require
 from app.core.config import get_settings
+from app.core.context import current_principal
+from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import Conversation, Message
 from app.schemas import (
@@ -59,17 +62,20 @@ async def _owned_conversation(
         .options(selectinload(Conversation.messages))
         .where(
             Conversation.id == conversation_id,
-            Conversation.user_id == settings.dev_user_id,
+            Conversation.user_id == current_principal().user_id,
         )
     )
     return result.scalars().first()
 
 
 @router.get("/conversations", response_model=list[ConversationOut])
-async def list_conversations(db: AsyncSession = Depends(get_db)):
+async def list_conversations(
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.CHAT_USE)),
+):
     result = await db.execute(
         select(Conversation)
-        .where(Conversation.user_id == settings.dev_user_id)
+        .where(Conversation.user_id == current_principal().user_id)
         .order_by(Conversation.updated_at.desc())
     )
     return [
@@ -90,6 +96,7 @@ async def list_conversations(db: AsyncSession = Depends(get_db)):
 async def get_conversation(
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.CHAT_USE)),
 ):
     conversation = await _owned_conversation(db, conversation_id)
     if not conversation:
@@ -108,6 +115,7 @@ async def get_conversation(
 async def chat(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.CHAT_USE)),
 ):
     if request.conversation_id:
         conversation = await _owned_conversation(db, request.conversation_id)
@@ -119,7 +127,7 @@ async def chat(
             if item.role in {"user", "assistant"}
         ]
     else:
-        conversation = Conversation(user_id=settings.dev_user_id)
+        conversation = Conversation(user_id=current_principal().user_id)
         db.add(conversation)
         await db.flush()
         history = []
@@ -127,7 +135,7 @@ async def chat(
     plan = await orchestrator.plan(
         message=request.message,
         db=db,
-        user_id=settings.dev_user_id,
+        user_id=current_principal().user_id,
         conversation_id=conversation.id,
         mode=request.mode,
     )

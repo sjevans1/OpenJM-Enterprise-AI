@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DataSource, Document
+from app.services.document_lifecycle import retrievable_filter
 from app.schemas import Evidence
 from app.services.execution_trace import (
     complete_execution_trace,
@@ -513,8 +514,7 @@ class StructuredQueryTool:
                 select(Document).where(
                     Document.id == grounded_parameter["source_id"],
                     Document.user_id == context.user_id,
-                    Document.status == "ready",
-                    Document.indexed.is_(True),
+                    *retrievable_filter(),
                 )
             )
             if document_result.scalars().first() is None:

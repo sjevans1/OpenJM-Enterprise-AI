@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.context import current_principal
 from app.models import ReportDefinitionVersion, ReportRun, SavedReport, new_id
 
 settings = get_settings()
@@ -262,7 +263,7 @@ async def reserve_report_run(
             select(ReportDefinitionVersion).where(
                 ReportDefinitionVersion.report_id == report_id,
                 ReportDefinitionVersion.version == definition_version,
-                ReportDefinitionVersion.user_id == settings.dev_user_id,
+                ReportDefinitionVersion.user_id == current_principal().user_id,
             )
         )
     ).scalar_one_or_none()
@@ -272,7 +273,7 @@ async def reserve_report_run(
         await db.execute(
             select(SavedReport.id).where(
                 SavedReport.id == report_id,
-                SavedReport.user_id == settings.dev_user_id,
+                SavedReport.user_id == current_principal().user_id,
             )
         )
     ).scalar_one_or_none()
@@ -299,7 +300,7 @@ async def reserve_report_run(
         raise ReportRunConflict("Caller intent does not match the stored definition")
 
     fingerprint = _fingerprint(
-        settings.dev_user_id,
+        current_principal().user_id,
         report_id,
         scoped.id,
         definition_version,
@@ -314,7 +315,7 @@ async def reserve_report_run(
     run_id = new_id()
     insert_stmt = insert(ReportRun).values(
         id=run_id,
-        user_id=settings.dev_user_id,
+        user_id=current_principal().user_id,
         report_id=report_id,
         definition_id=scoped.id,
         definition_version=definition_version,
@@ -339,7 +340,7 @@ async def reserve_report_run(
         existing = (
             await db.execute(
                 select(ReportRun).where(
-                    ReportRun.user_id == settings.dev_user_id,
+                    ReportRun.user_id == current_principal().user_id,
                     ReportRun.idempotency_key == canonical_key,
                 )
             )
@@ -353,7 +354,7 @@ async def reserve_report_run(
             active = (
                 await db.execute(
                     select(ReportRun).where(
-                        ReportRun.user_id == settings.dev_user_id,
+                        ReportRun.user_id == current_principal().user_id,
                         ReportRun.report_id == report_id,
                         ReportRun.definition_id == scoped_def_id,
                         ReportRun.definition_version == definition_version,

@@ -19,6 +19,40 @@ settings = get_settings()
 
 
 @pytest.fixture(autouse=True)
+def _identity_context():
+    """Publish the local development principal for tests.
+
+    VS5 moved identity out of a settings string and into a validated,
+    request-scoped principal. Tests that call the API get one through the
+    dependency; tests that call services directly get the same trusted context
+    here, so no test can accidentally run with an implicit "no identity" state.
+    """
+    from app.core.context import reset_principal, set_principal
+    from app.core.identity import Principal
+    from app.core.permissions import permissions_for_role
+    from app.core.tenancy import (
+        LEGACY_PRINCIPAL_ID,
+        LEGACY_PRINCIPAL_SUBJECT,
+        LEGACY_TENANT_ID,
+    )
+
+    principal = Principal(
+        principal_id=LEGACY_PRINCIPAL_ID,
+        tenant_id=LEGACY_TENANT_ID,
+        subject=LEGACY_PRINCIPAL_SUBJECT,
+        role="owner",
+        membership_id="test-membership",
+        auth_method="local-dev",
+        permissions=permissions_for_role("owner"),
+    )
+    set_principal(principal)
+    try:
+        yield principal
+    finally:
+        reset_principal()
+
+
+@pytest.fixture(autouse=True)
 def _enable_report_runs(monkeypatch):
     """VS4-B2C2 Phase 5: enable report-run execution by default in tests.
 
@@ -62,6 +96,13 @@ async def file_db(tmp_path):
         await conn.run_sync(Base.metadata.create_all)
     await _migrate_add_active_run_index(engine=engine)
     maker = async_sessionmaker(engine, expire_on_commit=False)
+    # Provision the local tenant/principal/membership so the trusted-identity
+    # dependency resolves a real principal from the database, exactly as a
+    # migrated deployment would.
+    from app.services.identity import ensure_local_identity
+
+    async with maker() as db:
+        await ensure_local_identity(db)
     try:
         yield maker
     finally:
@@ -97,6 +138,10 @@ async def session():
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
+    from app.services.identity import ensure_local_identity
+
+    async with maker() as provision:
+        await ensure_local_identity(provision)
     async with maker() as db:
         yield db
     await engine.dispose()

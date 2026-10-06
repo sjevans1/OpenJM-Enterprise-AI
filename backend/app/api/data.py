@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require
 from app.core.config import get_settings
+from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import DataSource
 from app.schemas import (
@@ -48,11 +50,19 @@ def _source_out(source: DataSource) -> DataSourceOut:
     )
 
 
-async def _owned_source(db: AsyncSession, source_id: str) -> DataSource | None:
+async def _owned_source(
+    db: AsyncSession, source_id: str, principal: Principal
+) -> DataSource | None:
+    """Resolve a source only within the caller's tenant *and* ownership.
+
+    A source belonging to another tenant is indistinguishable from a missing
+    one, so a cross-tenant probe cannot enumerate the other tenant's resources.
+    """
     result = await db.execute(
         select(DataSource).where(
             DataSource.id == source_id,
-            DataSource.user_id == settings.dev_user_id,
+            DataSource.tenant_id == principal.tenant_id,
+            DataSource.user_id == principal.user_id,
         )
     )
     return result.scalars().first()
@@ -64,10 +74,16 @@ def _safe_error(exc: Exception, secret: str | None = None) -> str:
 
 
 @router.get("", response_model=list[DataSourceOut])
-async def list_sources(db: AsyncSession = Depends(get_db)):
+async def list_sources(
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_READ)),
+):
     result = await db.execute(
         select(DataSource)
-        .where(DataSource.user_id == settings.dev_user_id)
+        .where(
+            DataSource.tenant_id == principal.tenant_id,
+            DataSource.user_id == principal.user_id,
+        )
         .order_by(DataSource.created_at.desc())
     )
     return [_source_out(source) for source in result.scalars().all()]
@@ -77,6 +93,7 @@ async def list_sources(db: AsyncSession = Depends(get_db)):
 async def create_source(
     request: DataSourceCreate,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
 ):
     try:
         normalized_uri = normalize_connection_uri(request.engine, request.connection_uri)
@@ -85,7 +102,8 @@ async def create_source(
         raise HTTPException(status_code=400, detail=_safe_error(exc)) from exc
 
     source = DataSource(
-        user_id=settings.dev_user_id,
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
         name=request.name.strip(),
         engine=request.engine,
         connection_secret=encrypted,
@@ -100,16 +118,24 @@ async def create_source(
 
 
 @router.get("/{source_id}", response_model=DataSourceOut)
-async def get_source(source_id: str, db: AsyncSession = Depends(get_db)):
-    source = await _owned_source(db, source_id)
+async def get_source(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_READ)),
+):
+    source = await _owned_source(db, source_id, principal)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     return _source_out(source)
 
 
 @router.post("/{source_id}/test", response_model=DataSourceTestResult)
-async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
-    source = await _owned_source(db, source_id)
+async def test_source(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
+):
+    source = await _owned_source(db, source_id, principal)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
 
@@ -146,8 +172,9 @@ async def test_source(source_id: str, db: AsyncSession = Depends(get_db)):
 async def refresh_source_schema(
     source_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
 ):
-    source = await _owned_source(db, source_id)
+    source = await _owned_source(db, source_id, principal)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
 
@@ -181,8 +208,9 @@ async def update_source(
     source_id: str,
     request: DataSourceEnabledUpdate,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
 ):
-    source = await _owned_source(db, source_id)
+    source = await _owned_source(db, source_id, principal)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     source.enabled = request.enabled
@@ -197,9 +225,10 @@ async def update_source_currency(
     source_id: str,
     request: DataSourceCurrencyUpdate,
     db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
 ):
     """Operator-declared transaction currency, never inferred from amounts."""
-    source = await _owned_source(db, source_id)
+    source = await _owned_source(db, source_id, principal)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     source.revenue_currency = request.revenue_currency
@@ -210,8 +239,12 @@ async def update_source_currency(
 
 
 @router.delete("/{source_id}")
-async def delete_source(source_id: str, db: AsyncSession = Depends(get_db)):
-    source = await _owned_source(db, source_id)
+async def delete_source(
+    source_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
+):
+    source = await _owned_source(db, source_id, principal)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
     await db.delete(source)

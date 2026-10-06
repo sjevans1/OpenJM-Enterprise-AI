@@ -62,6 +62,48 @@ class Settings(BaseSettings):
     # isolated acceptance via OPENJM_REPORT_RUNS_ENABLED=true.
     report_runs_enabled: bool = False
 
+    # --- VS5 trusted identity -------------------------------------------------
+    # 'oidc' requires a validated credential on every request and is the
+    # production default. 'dev' resolves a single local principal that is
+    # provisioned as a real tenant membership; it exists for local development
+    # and the offline test suite only, and never bypasses authorization checks.
+    auth_mode: str = "dev"
+    auth_allow_dev_mode: bool = True
+
+    # OIDC / SSO. Values are supplied by the operator; OpenJM owns the client,
+    # session and authorization code and never shares state with Workspace.
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    oidc_discovery_url: str = ""
+    oidc_jwks_cache_seconds: int = 300
+    oidc_clock_skew_seconds: int = 60
+    oidc_algorithms: str = "RS256,ES256"
+    # Maps a validated token to a tenant. 'claim' reads the configured claim
+    # (which may be a slug or an OpenJM tenant id); 'single_membership' accepts
+    # the principal's only active membership and refuses when ambiguous.
+    oidc_tenant_claim: str = "tenant"
+    tenant_resolution: str = "claim"
+
+    session_ttl_seconds: int = 28800
+    # Login is opt-in: without these the OIDC endpoints refuse to start a flow
+    # rather than falling back to an unauthenticated principal.
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = "http://127.0.0.1:5173/auth/callback"
+
+    # --- VS6 bounded action runtime ------------------------------------------
+    actions_enabled: bool = True
+    action_max_steps: int = 6
+    action_budget_seconds: int = 60
+    action_plan_ttl_seconds: int = 900
+    action_approval_ttl_seconds: int = 900
+
+    # --- #6 document lifecycle ------------------------------------------------
+    # A lease bounds how long one process may hold a document. An expired lease
+    # is reclaimable, which is what makes crash recovery deterministic.
+    document_lease_seconds: int = 120
+
     @field_validator("database_url", mode="after")
     @classmethod
     def resolve_relative_sqlite_url(cls, value: str) -> str:

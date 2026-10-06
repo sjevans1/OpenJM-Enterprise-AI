@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    actions,
+    auth,
     chat,
     data,
     knowledge,
@@ -54,6 +56,8 @@ async def health():
 
 
 app.include_router(chat.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(actions.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
 

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import DataSource, Document
+from app.services.document_lifecycle import retrievable_filter
 from app.services.report_scope import ReportSourceScope, ReportScopeError
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
 from app.services.dependent_hybrid import (
@@ -134,8 +135,10 @@ class OpenJMOrchestrator:
     ) -> list[Document]:
         stmt = select(Document).where(
             Document.user_id == user_id,
-            Document.status == "ready",
-            Document.indexed.is_(True),
+            # The single authoritative "may this be read" predicate: ready,
+            # indexed and not deleted. A document that is mid-deletion must
+            # never be surfaced as evidence.
+            *retrievable_filter(),
         )
         if scope is not None:
             stmt = stmt.where(Document.id.in_(scope.require_documents()))

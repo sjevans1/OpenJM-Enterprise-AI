@@ -8,6 +8,7 @@ import {
   FileText,
   FolderOpen,
   Gauge,
+  LogOut,
   MessageSquareText,
   Plus,
   Send,
@@ -33,6 +34,17 @@ import {
   type ReportRunSummary,
   type ReportRunDetail,
 } from './api'
+import {
+  beginLogin,
+  bootstrapAuth,
+  callbackUrl,
+  completeCallback,
+  logout,
+  onAuthLost,
+  type AuthState,
+} from './auth'
+
+const CALLBACK_PATH = '/auth/callback'
 
 type View = 'chat' | 'knowledge' | 'data' | 'reports'
 
@@ -281,6 +293,63 @@ export default function App() {
   const reportExecutionInFlight = useRef(false)
   const pendingRunIntentRef = useRef<ReportRunIntent | null>(null)
   const pendingReportId = useRef<string | null>(null)
+  const [authState, setAuthState] = useState<AuthState>({ status: 'loading' })
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+
+  // Authenticate before anything else: finish a pending OIDC callback, then ask
+  // the server which mode this deployment uses and, in OIDC mode, who we are.
+  // The mode always comes from the server, so a development identity is never
+  // assumed by the browser.
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      try {
+        if (window.location.pathname === CALLBACK_PATH) {
+          await completeCallback(window.location.search)
+          window.history.replaceState({}, '', '/')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAuthError(error instanceof Error ? error.message : 'Sign-in failed')
+        }
+      }
+      const state = await bootstrapAuth()
+      if (!cancelled) setAuthState(state)
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Any 401 (expired or revoked credential) returns the app to the login state.
+  useEffect(
+    () =>
+      onAuthLost(() => {
+        setAuthError('Your session has expired. Sign in again to continue.')
+        void bootstrapAuth().then(setAuthState)
+      }),
+    [],
+  )
+
+  const startLogin = async () => {
+    setAuthBusy(true)
+    setAuthError(null)
+    try {
+      await beginLogin()
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not start sign-in')
+      setAuthBusy(false)
+    }
+  }
+
+  const endSession = async () => {
+    setAuthBusy(true)
+    await logout()
+    setAuthBusy(false)
+    setAuthState(await bootstrapAuth())
+  }
 
   // Persist selected mode across sessions via localStorage.
   useEffect(() => {
@@ -814,6 +883,70 @@ export default function App() {
     return lastAssistant?.execution_class
   }, [messages])
 
+  if (authState.status === 'loading') {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="brand-mark">
+            <BrainCircuit size={20} />
+          </div>
+          <h1>OpenJM Enterprise AI</h1>
+          <p className="auth-muted">Checking your session…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (authState.status === 'error') {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="brand-mark">
+            <BrainCircuit size={20} />
+          </div>
+          <h1>OpenJM Enterprise AI</h1>
+          <p className="auth-error" role="alert">
+            {authState.message}
+          </p>
+          <p className="auth-muted">
+            This deployment could not be reached to determine how it authenticates, so
+            access is refused rather than assumed.
+          </p>
+          <button className="primary-button" onClick={() => void startLogin()} disabled={authBusy}>
+            {authBusy ? 'Starting…' : 'Retry sign-in'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (authState.status === 'unauthenticated') {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="brand-mark">
+            <BrainCircuit size={20} />
+          </div>
+          <h1>OpenJM Enterprise AI</h1>
+          <p className="auth-muted">
+            {authState.config.issuer
+              ? `Sign in with your organisation account (${authState.config.issuer}).`
+              : 'Sign in with your organisation account to continue.'}
+          </p>
+          {authError && (
+            <p className="auth-error" role="alert">
+              {authError}
+            </p>
+          )}
+          <button className="primary-button" onClick={() => void startLogin()} disabled={authBusy}>
+            {authBusy ? 'Redirecting…' : 'Sign in'}
+          </button>
+          <p className="auth-hint">Redirect URI: {callbackUrl()}</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -910,11 +1043,39 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="status-dot" />
-          <div>
-            <strong>Local workspace</strong>
-            <span>Knowledge + structured data enabled</span>
-          </div>
+          {authState.status === 'authenticated' ? (
+            <>
+              <div className="status-dot" />
+              <div className="sidebar-identity">
+                <strong title={authState.principal.email || authState.principal.subject}>
+                  {authState.principal.display_name ||
+                    authState.principal.email ||
+                    authState.principal.subject}
+                </strong>
+                {/* Display only. The server re-checks every permission. */}
+                <span>
+                  {authState.principal.role} · {authState.principal.tenant_id}
+                </span>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => void endSession()}
+                disabled={authBusy}
+                aria-label="Sign out"
+                title="Sign out"
+              >
+                <LogOut size={16} />
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="status-dot" />
+              <div>
+                <strong>Local workspace</strong>
+                <span>Knowledge + structured data enabled</span>
+              </div>
+            </>
+          )}
         </div>
       </aside>
 

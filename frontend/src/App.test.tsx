@@ -55,6 +55,29 @@ function jsonResponse(body: unknown, status = 200) {
   }))
 }
 
+/** The application now reads its authentication mode from the server before
+ * rendering, so every test has to declare the deployment mode. These tests were
+ * written against the development-mode application, where no credential is
+ * required; the identity tests live in auth.test.ts and AuthGate.test.tsx. */
+const DEV_AUTH_CONFIG = {
+  auth_mode: 'dev',
+  oidc_configured: false,
+  authorization_endpoint: null,
+  issuer: null,
+  client_id: null,
+  tenant_header: 'X-OpenJM-Tenant',
+}
+
+function stubFetch(fetchMock: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/auth/config') return jsonResponse(DEV_AUTH_CONFIG)
+      return fetchMock(input, init)
+    }),
+  )
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((resolver) => { resolve = resolver })
@@ -91,7 +114,7 @@ test('revoked report content is cleared after a list refresh', async () => {
     }
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -127,7 +150,7 @@ test('a 409 while reopening never leaves cached snapshot evidence visible', asyn
     }
     throw new Error(`Unexpected request: ${init?.method || 'GET'} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   const reportsNav = await screen.findByRole('button', { name: /Reports/ })
@@ -162,7 +185,7 @@ test('deleting one report does not cancel opening another report', async () => {
     if (url === '/api/reports/report-c') return detailResponse.promise
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -213,7 +236,7 @@ test('preparing a rerun fills a new Chat composer without executing it', async (
     if (url === '/api/chat') throw new Error('Chat must not auto-execute on preflight')
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
   fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
@@ -248,7 +271,7 @@ test('preflight refusal clears stale report instead of putting leaked text in Ch
     }
     throw new Error(`Unexpected request: ${init?.method || 'GET'} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
   fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
@@ -272,7 +295,7 @@ test('opening a report loads definition/history but never executes a run', async
     if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -307,7 +330,7 @@ test('fresh report execution requires confirmation and submits one canonical int
     if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') return jsonResponse(run, 202)
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -355,7 +378,7 @@ test('uncertain run response preserves the same idempotency key for explicit ret
     }
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -385,7 +408,7 @@ test('server-disabled pinned execution is visible but cannot be submitted', asyn
     if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
     throw new Error(`Unexpected request: ${init?.method || 'GET'} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -415,7 +438,7 @@ test('late run response is ignored after navigating away from the report', async
     if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') return runResponse.promise
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   const reportsNav = await screen.findByRole('button', { name: /Reports/ })
@@ -459,7 +482,7 @@ test('revoked run history clears cached snapshot evidence', async () => {
     }
     throw new Error(`Unexpected request: GET ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -494,7 +517,7 @@ test('double confirmation click submits exactly one run intent before rerender',
     }
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -541,7 +564,7 @@ test('terminal failure retry requires confirmation and uses a new idempotency ke
     }
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -585,7 +608,7 @@ test('run history loads older pages without duplicating existing runs', async ()
     if (url === '/api/reports/report-a/runs?offset=20&limit=20') return jsonResponse([runSummary(20), runSummary(0)])
     throw new Error(`Unexpected request: GET ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -630,7 +653,7 @@ test('selecting another immutable definition changes the explicit run target wit
     }
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -676,7 +699,7 @@ test('successful run is not mislabeled uncertain when only history refresh fails
     if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') return jsonResponse(run, 202)
     throw new Error(`Unexpected request: ${method} ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
@@ -715,7 +738,7 @@ test('revocation discovered while paging history clears all cached report conten
     }
     throw new Error(`Unexpected request: GET ${url}`)
   })
-  vi.stubGlobal('fetch', fetchMock)
+  stubFetch(fetchMock)
 
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))

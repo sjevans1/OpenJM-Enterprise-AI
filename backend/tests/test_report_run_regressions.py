@@ -957,7 +957,7 @@ async def _assert_run_schema(path) -> None:
                 row[1] for row in (await conn.exec_driver_sql("PRAGMA table_info(report_runs)")).all()
             }
             assert columns == {
-                "id", "user_id", "report_id", "definition_id", "definition_version",
+                "id", "tenant_id", "user_id", "report_id", "definition_id", "definition_version",
                 "requested_mode", "idempotency_key", "request_fingerprint", "status",
                 "started_at", "deadline_at", "finished_at", "failure_category",
                 "trace_ids_json", "result_json", "result_size_bytes", "result_sha256",
