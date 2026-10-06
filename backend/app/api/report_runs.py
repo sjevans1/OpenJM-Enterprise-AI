@@ -415,13 +415,17 @@ async def _execute_owned_run(
 ) -> ReportRunDetail:
     """Execute one newly owned reservation across two current-authority gates."""
     budget = ReportRunBudget(started_at=started_at)
-    budget.check_wall(datetime.now(timezone.utc))
     try:
+        budget.check_wall(datetime.now(timezone.utc))
         refreshed = await _reload_execution_intent(
             db,
             report_id=report_id,
             definition_version=definition_version,
             definition_id=definition_id,
+        )
+    except BudgetExceeded:
+        return await _fail_owned_run(
+            db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"
         )
     except HTTPException as exc:
         category = "invalid_definition" if exc.status_code == 404 else "authorization"
@@ -543,8 +547,16 @@ async def _execute_owned_run(
         # deliver the generated answer when this reservation no longer runs.
         current = await get_report_run(db, settings.dev_user_id, run_id)
         if current is not None and current.status == "running":
+            deadline = current.deadline_at
+            if deadline is not None and deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            category = (
+                "budget_exceeded"
+                if deadline is not None and deadline <= datetime.now(timezone.utc)
+                else "internal"
+            )
             return await _fail_owned_run(
-                db, run_id=run_id, fingerprint=fingerprint, category="internal"
+                db, run_id=run_id, fingerprint=fingerprint, category=category
             )
         return await _failed_execution_detail(db, run_id)
 
