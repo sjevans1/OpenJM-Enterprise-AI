@@ -13,7 +13,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.tenancy import DOC_STATE_PENDING, LEGACY_TENANT_ID
+from app.core.tenancy import (
+    DOC_STATE_FAILED,
+    DOC_STATE_INDEXING,
+    DOC_STATE_PENDING,
+    DOC_STATE_READY,
+    LEGACY_TENANT_ID,
+)
 from app.db import Base
 
 
@@ -71,6 +77,27 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
+def _derive_lifecycle_state(context) -> str:
+    """Derive the lifecycle state when a caller does not set one.
+
+    ``lifecycle_state`` is the authoritative retrieval gate. Rows written by
+    callers that still set only the legacy ``status``/``indexed`` pair (the
+    VS1-VS4 surfaces, and the migration backfill for pre-VS5 deployments) must
+    not silently land in ``pending``, or a ready document would become
+    unretrievable. Deriving the state here keeps the two representations in
+    agreement at insert time.
+    """
+    params = context.get_current_parameters()
+    status = params.get("status")
+    if status == "ready" and params.get("indexed"):
+        return DOC_STATE_READY
+    if status == "failed":
+        return DOC_STATE_FAILED
+    if status in ("indexing", "processing"):
+        return DOC_STATE_INDEXING
+    return DOC_STATE_PENDING
+
+
 class Document(Base):
     """Knowledge document with an explicit, monotonic lifecycle (#6).
 
@@ -93,7 +120,9 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(32), default="indexing")
     indexed: Mapped[bool] = mapped_column(Boolean, default=False)
     # --- #6 lifecycle hardening ---
-    lifecycle_state: Mapped[str] = mapped_column(String(32), default=DOC_STATE_PENDING)
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(32), default=_derive_lifecycle_state, server_default=DOC_STATE_PENDING
+    )
     lifecycle_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Identifies the ingestion attempt allowed to publish this document. A
     # crashed or superseded attempt holds a stale token and cannot commit.

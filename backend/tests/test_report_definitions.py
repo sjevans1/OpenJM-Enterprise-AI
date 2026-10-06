@@ -48,6 +48,22 @@ async def client(session):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _pin_release_gate_default(monkeypatch):
+    """Pin the report-run release gate to its documented default for this module.
+
+    The gate is environment configurable, so an ambient ``.env`` would otherwise
+    decide the outcome of tests that assert behaviour for the default (off)
+    configuration. The one test that needs it on opts in explicitly with its own
+    monkeypatch, which is applied after this fixture and therefore wins.
+    """
+    monkeypatch.setattr(
+        report_definitions_api,
+        "settings",
+        report_definitions_api.settings.model_copy(update={"report_runs_enabled": False}),
+    )
+
+
 @pytest.fixture
 def valid_schema():
     return json.dumps([{
