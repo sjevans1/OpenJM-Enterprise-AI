@@ -1,9 +1,23 @@
 # VS4 pilot blockers
 
-No unresolved product blocker is active for VS4-B2C2 Phase 1. PR #28 is merged
-and accepted; main `de391e92b510fb38e445e382fab33ee1517a2c12` passed CI run
-37176830805 and `pilot_ci_gate.py --main`. The B2C2 claim is recorded at
-https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/23#issuecomment-5982046257.
+## Active correction gate
+
+VS4-B2C2 PR #29 is not merge-ready until the wall-clock budget correction passes
+all final-head gates. On reviewed head `8948825fd4f4341e5224b9f31048e469781bc31b`,
+`ReportRunBudget.check_wall()` was only invoked at run entry; there was no
+overall remaining-deadline timeout around planning/synthesis and the success
+persistence CAS did not compare `deadline_at`.
+
+Required resolution:
+1. overall planning and synthesis bounded by remaining wall time;
+2. model/Knowledge/SQL boundary checks;
+3. final pre-persist check and database CAS refusing late success;
+4. focused/local regression;
+5. exact-head fast PR CI and full hosted `workflow_dispatch`;
+6. isolated real Gemma/DB-GPT/Chroma/SQLite acceptance rerun.
+
+The prior 30/30 runtime acceptance and 504-pass local suite remain historical
+evidence only. Report-run execution remains disabled by default.
 
 ## Previously active blocker (resolved)
 
