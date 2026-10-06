@@ -4,17 +4,17 @@
 | --- | --- |
 | Repository | sjevans1/OpenJM-Enterprise-AI |
 | Plan revision | vs4-pilot-1 |
-| State | VS4-D integrated acceptance in progress; C2 accepted/merged and post-merge main CI green |
-| Current batch / phase | VS4-D / evidence reconciliation and integrated acceptance |
+| State | VS4-D runtime acceptance complete; final documentation-only review head pending exact-head fast/full CI |
+| Current batch / phase | VS4-D / final review package |
 | Active writer | ChatGPT with narrow Hermes workstation/browser acceptance handoff |
 | Branch | milestone/vs4-d-acceptance |
-| PR | pending |
+| PR | #32 (draft until final exact-head CI) |
 | Starting main SHA | 52e7fd8c4c514538874a6b167b9fb4bd64321806 |
 | Last reviewed SHA | 3b60fc2231dd2c7883f3057576ac771d92f3afc3 (accepted C2 head) |
 | Last verified main CI | 37425676477 green on 52e7fd8c4c514538874a6b167b9fb4bd64321806 |
-| Real-runtime acceptance | B2C2 30/30; C1 35/35 browser/local-model; C2 15/15 browser/export |
-| Review finding | none active; D must prove assembled workflow, synthetic upgrade/recovery and final evidence package |
-| Next action | commit reconciled D acceptance package, open D PR, then run isolated integrated acceptance + upgrade/recovery on exact candidate |
+| Real-runtime acceptance | VS4-D 39/39 integrated assertions; restart digest stable; Phase 3 upgrade/recovery 10/10 |
+| Review finding | none active; Hermes first-pass harness corrections did not modify app code |
+| Next action | validate final documentation-only head with fast + full CI, apply awaiting_review, stop before merge |
 
 ## Batch ledger
 
@@ -24,7 +24,7 @@
 | VS4-B2C2 | accepted/merged | PR #29; full 37414383020; main 37415877675 |
 | VS4-C1 | accepted/merged | PR #30; full 37418485617; main 37420633672 |
 | VS4-C2 | accepted/merged | PR #31; full 37424846415; main 37425676477 |
-| VS4-D | in progress | milestone/vs4-d-acceptance |
+| VS4-D | awaiting final CI/review | PR #32; runtime acceptance comment 6011928489 |
 
 ## Checkpoint protocol
 
@@ -111,3 +111,13 @@ authoritative successful run response from a later history-refresh failure so
 the UI cannot invite an unnecessary idempotent replay. History pagination now
 also treats source revocation as a cache-clearing authorization event.
 
+
+
+2026-10-06 | VS4-D integrated acceptance | frozen runtime head
+`8e2a4db5facecfb03602d3c5128ea802bcf33564` | fast CI 37426623882 green,
+full CI 37431715041 green | isolated assembled workflow 39/39 assertions,
+restart full-state digest stable, synthetic upgrade/recovery 10/10, source DB
+hash unchanged, no application code modified during acceptance. Three first-pass
+assertion failures were acceptance-harness/fixture defects and were corrected
+without app changes. Final documentation-only head requires exact-head fast/full
+CI before awaiting_review.

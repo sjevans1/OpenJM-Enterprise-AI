@@ -1,6 +1,6 @@
 # VS4 Acceptance Report
 
-Status: **IN PROGRESS — VS4-D integrated acceptance pending**  
+Status: **AWAITING REVIEW — VS4-D integrated acceptance complete**  
 Candidate base for VS4-D: `52e7fd8c4c514538874a6b167b9fb4bd64321806`  
 Repository: `sjevans1/OpenJM-Enterprise-AI`
 
@@ -35,40 +35,50 @@ This report reconciles previously accepted VS4 evidence and records the final in
 - Exported HTML escapes untrusted content, is self-contained and blocks remote resources.
 - Workspace is not a dependency and was not modified by VS4.
 
-## 3. VS4-D integrated acceptance matrix — pending
+## 3. VS4-D integrated acceptance matrix — complete
 
-The final candidate must prove on one isolated synthetic instance:
+Final integrated acceptance was executed on frozen D head `8e2a4db5facecfb03602d3c5128ea802bcf33564`. Application/runtime code is byte-identical to accepted C2 main `52e7fd8c4c514538874a6b167b9fb4bd64321806`; D changes documentation only.
 
-- [ ] historical saved snapshot remains unchanged after new runs and restart;
-- [ ] pinned Knowledge run succeeds with citations;
-- [ ] pinned Data run succeeds against read-only SQLite with structured provenance;
-- [ ] pinned independent Hybrid succeeds only when both evidence sides complete;
-- [ ] pinned dependent Hybrid uses current policy parameter/year/currency/operator and equivalent SQL AST;
-- [ ] partial Hybrid, hostile/ambiguous policy and wrong-owner requests fail closed;
-- [ ] duplicate and concurrent same-key submissions create one effective run;
-- [ ] terminal/interrupted runs remain immutable and are not silently re-executed;
-- [ ] restart persistence preserves snapshots, definitions, runs, evidence and history;
-- [ ] CSV/HTML exports work from eligible persisted snapshot/run results only;
-- [ ] deleted/unindexed document, disabled source, changed table grant and permission revocation block current access;
-- [ ] source database remains unchanged/read-only throughout acceptance;
-- [ ] citations, as-of labels, failure/revocation states and export controls are inspected in the real UI.
+Observed environment: Python 3.11.15, Node 22.23.2, real local `gemma-4-12b-local`, local MiniLM embeddings, real Windows Chrome 154 driven over CDP, isolated temp metadata/vector/uploads/key stores, and a synthetic read-only SQLite finance source.
 
-## 4. Upgrade and recovery — pending
+Integrated result: **39/39 assertions passed** across runtime, restart and browser checks.
 
-- [ ] Synthetic pre-VS4/old-schema database upgraded on startup without record loss.
-- [ ] Second startup/upgrade is idempotent.
-- [ ] Conversations/messages/execution traces/saved reports survive.
-- [ ] Expired/crashed running ReportRun is recovered to the defined terminal state without re-execution.
-- [ ] Cleanup removes only test-owned resources.
-- [ ] Document/source disable and recovery procedure is recorded.
-- [ ] No downgrade-by-table-drop and no tests against the real development database.
+- [x] historical saved snapshots remained unchanged after new runs and restart; opening/viewing caused zero run execution;
+- [x] pinned Knowledge run succeeded with pinned document evidence/citations only;
+- [x] pinned Data run succeeded with structured provenance against read-only SQLite;
+- [x] pinned independent Hybrid succeeded with both Knowledge and Structured evidence;
+- [x] pinned dependent Hybrid rederived the current threshold/operator/fiscal-year/currency and executed an AST-equivalent predicate;
+- [x] policy revision from threshold 300 to 500 changed only the new run; the earlier run and snapshot remained byte-identical;
+- [x] partial Hybrid and hostile/conflicting policy failed closed;
+- [x] wrong-owner snapshot/definition/run/history/export reads failed closed with no tool execution;
+- [x] same-key retry and near-concurrent same-key submissions resolved to one effective run;
+- [x] terminal/interrupted runs remained immutable and were not silently re-executed;
+- [x] restart preserved snapshots, definitions, run history, result/evidence/citations and failure state; full-state digest `b35f90860f47fb6e` was identical across restart;
+- [x] CSV/HTML export from eligible persisted results caused zero fresh model/retrieval/SQL work;
+- [x] deleted/unindexed document, disabled source, revoked table grant and permission/source revocation all failed closed without stale UI evidence;
+- [x] the synthetic source database remained unchanged throughout (sha256 `a8ce00c98a9e34f46b4e1a5236d1b3c5351743e5eaa41aff550dd1f204fc9562`);
+- [x] real Chrome inspection confirmed as-of labels, no-query-on-view messaging, pinned version/mode/status/timestamps, citations/evidence, explicit confirmation, exports and revocation clearing.
 
-## 5. Hosted CI — pending final VS4-D head
+Acceptance artifacts were retained only under test-owned scratch paths. No customer data or real development DB was opened.
 
-Required:
-- [ ] exact-head fast PR CI — backend + frontend green;
-- [ ] exact-head `workflow_dispatch suite=full` — full backend + frontend green;
-- [ ] after human-authorized merge only: post-merge full main-push CI green.
+## 4. Upgrade and recovery — complete
+
+- [x] Synthetic old-schema database upgraded on startup without record loss.
+- [x] Second startup/upgrade was idempotent.
+- [x] Conversations/messages/execution traces/saved reports survived unchanged.
+- [x] Additive current columns/tables/triggers were initialized compatibly.
+- [x] Expired/crashed running ReportRun reconciled to `interrupted / deadline_expired` without re-execution.
+- [x] Existing completed runs/snapshots remained unchanged during recovery.
+- [x] Test document/source disable and recovery procedure was recorded.
+- [x] No downgrade-by-table-drop and no test against the real development database.
+
+## 5. Hosted CI
+
+Acceptance execution head `8e2a4db5facecfb03602d3c5128ea802bcf33564`:
+- [x] fast PR CI `37426623882` — backend + frontend green;
+- [x] `workflow_dispatch suite=full` `37431715041` — full backend + frontend green.
+
+Final documentation-only review head must repeat exact-head fast/full CI after this report is finalized. After human-authorized merge only, post-merge full main-push CI must be green before VS4 is recorded accepted.
 
 ## 6. Pilot observations
 
@@ -95,4 +105,8 @@ The VS4 lifecycle pilot included a mandatory real Hermes restart/resume during B
 
 ## 9. Final verdict
 
-**Not yet accepted.** Complete Sections 3–5 on the final VS4-D candidate head, record exact runtime/model/fixture/cleanup evidence, then request human review. No merge or VS5 work before that review.
+**VS4-D runtime acceptance is complete and the batch is ready for final review once the documentation-only final head passes exact-head fast/full hosted CI.**
+
+The assembled VS4 feature set has passed the required isolated integrated runtime, browser, restart, export, authorization, upgrade and recovery checks. This does not remove the retained VS5 identity, issue #6 lifecycle, issue #7 migration, export-recall, or VS6–VS8 limitations.
+
+Do not merge or begin VS5 until human review authorizes merge. After merge, require a green full main-push CI before recording VS4 accepted.
