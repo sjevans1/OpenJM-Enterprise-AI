@@ -163,6 +163,84 @@ export function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
   );
 }
 
+// VS4-C2: bounded export controls. CSV is offered only when a persisted
+// structured result exists; several structured results require an explicit
+// selection. A failed export clears the stale selection.
+export function structuredEvidenceIndices(evidence: Evidence[]): number[] {
+  return evidence
+    .map((item, index) => (item.source_type === 'structured_query' ? index : -1))
+    .filter((index) => index >= 0)
+}
+
+export function ExportControls({
+  structuredIndices,
+  onExport,
+}: {
+  structuredIndices: number[]
+  onExport: (format: 'csv' | 'html', index?: number) => Promise<void>
+}) {
+  const [index, setIndex] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const csvAvailable = structuredIndices.length > 0
+  const needsSelection = structuredIndices.length > 1
+
+  const handleExport = async (format: 'csv' | 'html') => {
+    setBusy(true)
+    setError(null)
+    try {
+      const selected = needsSelection ? structuredIndices[index] : structuredIndices[0]
+      await onExport(format, format === 'csv' ? selected : undefined)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export failed')
+      setIndex(0)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="export-actions" role="group" aria-label="Export this result">
+      <span className="export-heading">Export</span>
+      {needsSelection && (
+        <label className="export-index">
+          Result
+          <select
+            value={index}
+            disabled={busy}
+            onChange={(event) => setIndex(Number(event.target.value))}
+          >
+            {structuredIndices.map((_, position) => (
+              <option key={position} value={position}>{`Result ${position + 1}`}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      <button
+        type="button"
+        className="secondary-action export-csv"
+        disabled={busy || !csvAvailable}
+        onClick={() => handleExport('csv')}
+      >
+        Export CSV
+      </button>
+      <button
+        type="button"
+        className="secondary-action export-html"
+        disabled={busy}
+        onClick={() => handleExport('html')}
+      >
+        Export HTML / print
+      </button>
+      {!csvAvailable && (
+        <span className="export-note">CSV unavailable: no structured rows were persisted.</span>
+      )}
+      {error && <span className="export-error" role="alert">{error}</span>}
+    </div>
+  )
+}
+
 export default function App() {
   const [view, setView] = useState<View>('chat')
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -1333,6 +1411,12 @@ export default function App() {
                               <>
                                 <div className="message-content">{activeRun.result.answer}</div>
                                 <EvidencePanel evidence={activeRun.result.evidence} />
+                                <ExportControls
+                                  structuredIndices={structuredEvidenceIndices(activeRun.result.evidence)}
+                                  onExport={(format, index) =>
+                                    api.exportReportRun(activeReport.id, activeRun.id, format, index)
+                                  }
+                                />
                               </>
                             ) : (
                               <div className="run-terminal-state">
@@ -1348,6 +1432,10 @@ export default function App() {
                       <div className="snapshot-divider"><span>Historical saved snapshot</span></div>
                       <div className="message-content">{activeReport.answer}</div>
                       <EvidencePanel evidence={activeReport.evidence} />
+                      <ExportControls
+                        structuredIndices={structuredEvidenceIndices(activeReport.evidence)}
+                        onExport={(format, index) => api.exportReport(activeReport.id, format, index)}
+                      />
                     </>
                   ) : (
                     <div className="reports-empty">
