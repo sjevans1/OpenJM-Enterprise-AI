@@ -188,6 +188,34 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json()
 }
 
+export type ExportFormat = 'csv' | 'html'
+
+async function downloadExport(url: string, fallbackName: string): Promise<void> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    let message = `Export failed (${response.status})`
+    try {
+      const body = await response.json()
+      message = body.detail || message
+    } catch {
+      // keep generic message
+    }
+    throw new ApiError(message, response.status)
+  }
+  const blob = await response.blob()
+  const disposition = response.headers.get('Content-Disposition') || ''
+  const match = /filename="([^"]+)"/.exec(disposition)
+  const filename = match ? match[1] : fallbackName
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 export const api = {
   reports: () => request<SavedReportSummary[]>('/api/reports'),
   report: (id: string) => request<SavedReportDetail>(`/api/reports/${encodeURIComponent(id)}`),
@@ -226,6 +254,20 @@ export const api = {
     if (!response.ok) throw new Error('Could not delete the saved report')
     // The API intentionally returns 204 No Content.
   },
+
+  exportReport: (id: string, format: ExportFormat, index?: number) =>
+    downloadExport(
+      `/api/reports/${encodeURIComponent(id)}/exports/${format}` +
+        (index === undefined ? '' : `?index=${index}`),
+      `report.${format}`,
+    ),
+
+  exportReportRun: (reportId: string, runId: string, format: ExportFormat, index?: number) =>
+    downloadExport(
+      `/api/reports/${encodeURIComponent(reportId)}/runs/${encodeURIComponent(runId)}/exports/${format}` +
+        (index === undefined ? '' : `?index=${index}`),
+      `run.${format}`,
+    ),
 
   conversations: () => request<Conversation[]>('/api/conversations'),
 

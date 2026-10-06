@@ -763,3 +763,10 @@ button { cursor: pointer; }
 .definition-selector { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; }
 .definition-selector > span { color: #71858c; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .definition-selector select { min-width: 180px; border: 1px solid #c8d8dc; border-radius: 8px; background: white; color: #38545d; padding: 7px 9px; font-size: 11px; }
+
+.export-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid #e2eaec; }
+.export-heading { color: #71858c; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.export-index { display: flex; align-items: center; gap: 6px; color: #71858c; font-size: 10px; }
+.export-index select { border: 1px solid #c8d8dc; border-radius: 8px; background: white; color: #38545d; padding: 6px 8px; font-size: 11px; }
+.export-note { color: #8a9aa0; font-size: 10px; }
+.export-error { color: #a3402f; font-size: 10px; font-weight: 600; }
