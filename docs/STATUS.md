@@ -4,19 +4,19 @@
 | --- | --- |
 | Repository | sjevans1/OpenJM-Enterprise-AI |
 | Plan revision | vs4-pilot-1 |
-| State | VS4-B2C2 correction pass after reviewer finding; PR #29 open, unmerged |
-| Current batch / phase | VS4-B2C2 / release-gate correction |
-| Active writer | ChatGPT correction pass on existing Hermes branch |
-| Branch | milestone/vs4-b2c2-manual-execution |
-| PR | #29 |
-| Starting main SHA | de391e92b510fb38e445e382fab33ee1517a2c12 |
-| Last reviewed SHA | 8948825fd4f4341e5224b9f31048e469781bc31b |
-| Last verified PR CI | Fast PR run 37408679705 green on 8948825; exact correction-head CI pending |
-| Real-runtime acceptance | 30/30 accepted on 8948825 with real Gemma + isolated temp DB/vector/uploads/key; rerun required after wall-budget correction |
-| Local regression | 504 passed, 19 subtests passed on 8948825 |
-| Review finding | 600-second wall budget was checked only at run entry |
-| Correction | Overall planning/synthesis deadlines, external-boundary checks, pre-persist wall check, and deadline-aware success CAS |
-| Next action | Final correction-head tests, fast CI, full hosted workflow_dispatch, then real-runtime acceptance rerun and review |
+| State | VS4-C1 in progress on draft PR #30 after accepted B2C2 merge and green post-merge main CI |
+| Current batch / phase | VS4-C1 / manual report controls, history and failure states |
+| Active writer | ChatGPT on milestone/vs4-c1-report-run-ui |
+| Branch | milestone/vs4-c1-report-run-ui |
+| PR | #30 (draft) |
+| Starting main SHA | dfbddd2308d2730409ae525bcef955cf9bbf3238 |
+| Last reviewed SHA | dfbddd2308d2730409ae525bcef955cf9bbf3238 (accepted B2C2 merge on main) |
+| Last verified PR CI | C1 first-head run 37416566854 green on d456fd0d (backend + frontend) |
+| Real-runtime acceptance | B2C2 final-head 3590f2cc accepted 30/30; C1 controlled browser/local-model flow still pending |
+| Local regression | C1 relies on hosted deterministic CI during implementation; final controlled browser evidence pending |
+| Review finding | none active; C1 behavior hardening underway |
+| Correction | not applicable; current work is C1 product implementation |
+| Next action | Complete C1 behavior/security tests, final fast/full CI, controlled browser + real-model evidence, then stop for review |
 
 ## Checkpoint protocol
 
@@ -76,8 +76,8 @@ public revoke, push, PR or Phase 2 work performed.
 | Batch | State | PR / evidence |
 | --- | --- | --- |
 | VS4-B2C1 | accepted and merged; final-head fast/full and post-merge main gate passed | PR #28; main run 37176830805 |
-| VS4-B2C2 | Full B2C2 implemented in PR #29; wall-budget correction under final validation, unmerged | Prior accepted head 8948825; correction head requires fast/full CI + real-runtime rerun |
-| VS4-C1 | planned | Not started |
+| VS4-B2C2 | accepted and merged; full hosted CI + exact-head 30/30 real-runtime acceptance + green main regression | PR #29; merge dfbddd23; main run 37415877675 |
+| VS4-C1 | in progress | Draft PR #30; first CI run 37416566854 green |
 | VS4-C2 | planned | Not started |
 | VS4-D | planned | Not started |
 

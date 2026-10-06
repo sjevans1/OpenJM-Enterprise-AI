@@ -163,6 +163,16 @@ export type ReportRunDetail = ReportRunSummary & {
   result: ReportRunResult | null
 }
 
+export class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
@@ -173,7 +183,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // keep generic message
     }
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
   return response.json()
 }

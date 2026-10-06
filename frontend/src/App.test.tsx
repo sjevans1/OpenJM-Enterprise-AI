@@ -367,3 +367,105 @@ test('uncertain run response preserves the same idempotency key for explicit ret
   await waitFor(() => expect(bodies).toHaveLength(2))
   expect(JSON.parse(bodies[0]).idempotency_key).toBe(JSON.parse(bodies[1]).idempotency_key)
 })
+
+
+test('server-disabled pinned execution is visible but cannot be submitted', async () => {
+  const definition = {
+    id: 'definition-disabled', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: false,
+  }
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    throw new Error(`Unexpected request: ${init?.method || 'GET'} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  const runButton = await screen.findByRole('button', { name: 'Run fresh report' })
+  expect((runButton as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText(/Manual execution is not enabled/)).toBeTruthy()
+  expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/definitions/1/runs'))).toHaveLength(0)
+})
+
+test('late run response is ignored after navigating away from the report', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  const runResponse = deferred<Response>()
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') return runResponse.promise
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  const reportsNav = await screen.findByRole('button', { name: /Reports/ })
+  fireEvent.click(reportsNav)
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Run fresh report' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+  fireEvent.click(reportsNav)
+
+  await act(async () => {
+    runResponse.resolve(new Response(JSON.stringify({
+      id: 'late-run', report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+      status: 'succeeded', started_at: '2026-10-05T00:01:00Z', finished_at: '2026-10-05T00:01:02Z',
+      failure_category: null, result_size_bytes: 100, trace_count: 1,
+      result: { answer: 'LATE CONFIDENTIAL RESULT', evidence: [], structured_result: {}, trace_ids: ['t1'] },
+    }), { status: 202, headers: { 'Content-Type': 'application/json' } }))
+    await Promise.resolve()
+  })
+
+  expect(screen.queryByText('LATE CONFIDENTIAL RESULT')).toBeNull()
+  expect(screen.queryByText('Historical confidential answer')).toBeNull()
+})
+
+test('revoked run history clears cached snapshot evidence', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  let revoked = false
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse(revoked ? [{ ...reportA, available: false }] : [reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') {
+      revoked = true
+      return jsonResponse({ detail: 'Report source is no longer available or authorized' }, 409)
+    }
+    throw new Error(`Unexpected request: GET ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+
+  await waitFor(() => expect(screen.getByText(/source is no longer available or authorized/i)).toBeTruthy())
+  expect(screen.queryByText('Historical confidential answer')).toBeNull()
+  expect(screen.queryByText('Historical policy passage')).toBeNull()
+})

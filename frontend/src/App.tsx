@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import {
   api,
+  ApiError,
   type Conversation,
   type DataSourceRecord,
   type DocumentRecord,
@@ -434,6 +435,12 @@ export default function App() {
     }
   }
 
+  const isRevocationError = (error: unknown) => (
+    error instanceof ApiError
+    && error.status === 409
+    && /unavailable|authorized|revoked|scope|grant/i.test(error.message)
+  )
+
   const clearReportExecution = () => {
     reportExecutionSequence.current += 1
     setReportDefinitions([])
@@ -466,6 +473,10 @@ export default function App() {
       setReportExecutionError(
         error instanceof Error ? error.message : 'Live report execution information is unavailable',
       )
+      if (isRevocationError(error)) {
+        setActiveReport(null)
+        await loadReports()
+      }
     }
   }
 
@@ -482,6 +493,10 @@ export default function App() {
     } catch (error) {
       if (sequence === reportExecutionSequence.current) {
         setReportExecutionError(error instanceof Error ? error.message : 'Unable to create pinned definition')
+        if (isRevocationError(error)) {
+          setActiveReport(null)
+          await loadReports()
+        }
       }
     } finally {
       if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
@@ -499,6 +514,10 @@ export default function App() {
       if (sequence === reportExecutionSequence.current) {
         setActiveRun(null)
         setReportExecutionError(error instanceof Error ? error.message : 'Report run is unavailable')
+        if (isRevocationError(error)) {
+          setActiveReport(null)
+          await loadReports()
+        }
       }
     } finally {
       if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
@@ -554,11 +573,19 @@ export default function App() {
       if (sequence === reportExecutionSequence.current) setReportRuns(refreshed)
     } catch (error) {
       if (sequence === reportExecutionSequence.current) {
-        setReportExecutionError(
-          error instanceof Error
-            ? `${error.message}. If the response was interrupted, retrying below reuses the same run request.`
-            : 'Run response was not confirmed. Retry the same run request.',
-        )
+        if (isRevocationError(error)) {
+          setPendingRunIntent(null)
+          setActiveRun(null)
+          setActiveReport(null)
+          setReportExecutionError(error instanceof Error ? error.message : 'Report access was revoked')
+          await loadReports()
+        } else {
+          setReportExecutionError(
+            error instanceof Error
+              ? `${error.message}. If the response was interrupted, retrying below reuses the same run request.`
+              : 'Run response was not confirmed. Retry the same run request.',
+          )
+        }
       }
     } finally {
       if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
