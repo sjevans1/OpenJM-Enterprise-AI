@@ -1,3 +1,5 @@
+import { authorizedFetch } from './auth'
+
 export type ExecutionMode = 'chat' | 'knowledge' | 'data' | 'hybrid'
 
 export type Evidence = {
@@ -174,7 +176,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const response = await authorizedFetch(url, init)
   if (!response.ok) {
     let message = `Request failed (${response.status})`
     try {
@@ -191,7 +193,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export type ExportFormat = 'csv' | 'html'
 
 async function downloadExport(url: string, fallbackName: string): Promise<void> {
-  const response = await fetch(url)
+  const response = await authorizedFetch(url)
   if (!response.ok) {
     let message = `Export failed (${response.status})`
     try {
@@ -250,7 +252,9 @@ export const api = {
       body: JSON.stringify({ message_id: messageId }),
     }),
   deleteReport: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/reports/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    const response = await authorizedFetch(`/api/reports/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
     if (!response.ok) throw new Error('Could not delete the saved report')
     // The API intentionally returns 204 No Content.
   },

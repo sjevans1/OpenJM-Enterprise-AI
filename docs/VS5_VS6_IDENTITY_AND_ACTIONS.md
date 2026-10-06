@@ -230,3 +230,50 @@ result, timestamps and status.
 
 All pre-existing VS1–VS4 routes keep their paths and payloads; they now require
 a credential and are tenant- and owner-scoped.
+
+## 7. Browser authentication
+
+The SPA completes the same OpenJM-native flow the API exposes, and holds only
+the OpenJM session credential the backend mints.
+
+### 7.1 Flow
+
+| Step | Call | Notes |
+| --- | --- | --- |
+| Discover | `GET /api/auth/config` | public; reports `auth_mode`, `oidc_configured`, `authorization_endpoint`, `issuer`, `client_id`. No secret is returned. |
+| Authorize | provider authorization endpoint | the SPA sends `response_type=code` with PKCE `S256`, `state`, and its own `redirect_uri`. |
+| Callback | `POST /api/auth/oidc/callback` | the SPA verifies `state`, then exchanges `code` + `code_verifier`. The server returns an OpenJM session. |
+| Use | any protected route | `Authorization: Bearer <openjm session>`. |
+| Verify | `GET /api/auth/me` | server-resolved principal; also how a revoked session is detected on load. |
+| Log out | `POST /api/auth/logout` | revokes server side; the SPA clears local state regardless of the response. |
+
+A provider token can also be used directly as a bearer credential, or exchanged
+through `POST /api/auth/token/exchange`. Both were exercised in live acceptance.
+
+### 7.2 Credential handling
+
+The session lives in `sessionStorage`, not `localStorage`. The backend issues a
+bearer token rather than an httpOnly cookie, so the credential has to be
+readable by this origin; per-tab storage keeps it out of long-lived persistence.
+It is removed on logout, on any 401, and on a local expiry check that fires
+slightly before the server's own expiry to avoid a race.
+
+### 7.3 Authentication outcomes
+
+* `401` means the credential is gone (expired or revoked). Local state is
+  cleared and the application returns to the sign-in screen.
+* `403` is an authorization outcome, not an authentication one. The session is
+  retained, because a valid principal that lacks a permission is still
+  authenticated.
+* `state` mismatch on the callback aborts the exchange without contacting the
+  token endpoint.
+
+### 7.4 Fail closed
+
+The deployment's mode always comes from the server. A development identity is
+used only when the server reports development mode. An unreachable or
+unparseable `/api/auth/config`, or an OIDC deployment with incomplete
+configuration, produces a refused state rather than a workspace with no
+identity. The SPA never derives a tenant, role or permission claim from its own
+storage, and sends no tenant or role header: every protected decision is re-made
+by the server from its membership database.

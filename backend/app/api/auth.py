@@ -65,12 +65,23 @@ class PrincipalOut(BaseModel):
 async def auth_config():
     """Public discovery for the UI: how this deployment authenticates.
 
-    Nothing secret is exposed, and no principal is created by reading this.
+    Nothing secret is exposed, and no principal is created by reading this. The
+    authorization endpoint is read from the provider's discovery document so the
+    SPA does not have to hardcode provider topology; it is absent rather than
+    failing when the provider cannot be reached.
     """
+    authorization_endpoint: str | None = None
+    if oidc_client.configured:
+        try:
+            document = await oidc_client.discovery()
+            value = document.get("authorization_endpoint")
+            authorization_endpoint = value if isinstance(value, str) else None
+        except Exception:  # noqa: BLE001 - discovery is best effort for the UI
+            authorization_endpoint = None
     return {
         "auth_mode": settings.auth_mode,
         "oidc_configured": oidc_client.configured,
-        "authorization_endpoint": None,
+        "authorization_endpoint": authorization_endpoint,
         "issuer": settings.oidc_issuer or None,
         "client_id": settings.oidc_client_id or None,
         "tenant_header": "X-OpenJM-Tenant",
