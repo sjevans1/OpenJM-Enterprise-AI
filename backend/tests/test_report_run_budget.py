@@ -303,7 +303,7 @@ async def test_model_gateway_counts_attempts_with_budget(monkeypatch):
     """Each chat() call with a budget increments the model counter."""
     gateway, calls = _make_gateway(monkeypatch, [_body("Answer.")] * 3)
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime.now(timezone.utc),
         max_model_http_attempts=8,
     )
     for _ in range(3):
@@ -317,7 +317,7 @@ async def test_model_gateway_budget_blocks_after_cap(monkeypatch):
     """The 9th model HTTP attempt with budget raises BudgetExceeded."""
     gateway, calls = _make_gateway(monkeypatch, [_body("Answer.")] * 8)
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime.now(timezone.utc),
         max_model_http_attempts=8,
     )
     for _ in range(8):
@@ -705,7 +705,7 @@ async def test_sql_cap_enforced_in_tools(file_db, monkeypatch):
     await _set_definition_mode(file_db, fixture, "knowledge")
 
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime.now(timezone.utc),
         max_sql_executions=2,
     )
 
@@ -729,7 +729,7 @@ async def test_knowledge_cap_enforced_in_tools(file_db, monkeypatch):
     await _set_definition_mode(file_db, fixture, "knowledge")
 
     budget = ReportRunBudget(
-        started_at=datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime.now(timezone.utc),
         max_knowledge_retrievals=2,
     )
 
