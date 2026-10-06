@@ -1103,3 +1103,75 @@ async def test_two_users_do_not_leak_user_specific_evidence(
     assert allowed_d == set()
     assert denials_d["r1"] == "access_revoked"
 
+
+
+async def test_reconciliation_restores_a_quarantined_resource(
+    file_db, connector, provider, knowledge
+):
+    """A quarantined resource returns once a sweep can re-establish it.
+
+    Regression: run_reconciliation only re-ingested a resource whose external
+    revision had changed, and restore_resource had no caller anywhere, so a
+    quarantined resource with an unchanged revision stayed quarantined forever.
+    Withdrawn evidence could therefore never come back even after access was
+    provable again, which is the restoration requirement of the VS7 contract.
+    """
+    await _seed(file_db)
+    instance_id = await _make_instance(file_db, TENANT_A, name="restore-sweep")
+    provider.put("rs-1", text="policy text", revision="1")
+
+    async with file_db() as db:
+        instance = await _instance(db, instance_id)
+        await _run_initial(db, instance)
+
+        resource = await _resource(db, instance_id, "rs-1")
+        await ingest_service.quarantine_resource(
+            db, resource=resource, reason="access_revoked"
+        )
+        await db.commit()
+        assert (await _resource(db, instance_id, "rs-1")).lifecycle_state == "quarantined"
+
+        # The external revision is unchanged, so only a restoration-aware sweep
+        # can bring this back.
+        instance = await _instance(db, instance_id)
+        await sync_service.run_reconciliation(db, instance=instance, actor="test")
+        await db.commit()
+
+        restored = await _resource(db, instance_id, "rs-1")
+        assert restored.lifecycle_state == "active", (
+            "reconciliation must restore quarantined content"
+        )
+        assert restored.quarantine_reason is None
+        # Restoration proves the service credential can still read it. It must
+        # not assert that any particular user may see it.
+        assert restored.permission_state == "unknown"
+        document = await _document(db, restored)
+        assert document.indexed is True
+        assert document.deleted_at is None
+
+
+async def test_quarantine_is_cleared_only_by_a_sweep_that_sees_the_resource(
+    file_db, connector, provider, knowledge
+):
+    """A resource absent from the sweep is not silently restored."""
+    await _seed(file_db)
+    instance_id = await _make_instance(file_db, TENANT_A, name="absent-sweep")
+    provider.put("rs-1", text="policy text", revision="1")
+
+    async with file_db() as db:
+        instance = await _instance(db, instance_id)
+        await _run_initial(db, instance)
+
+        resource = await _resource(db, instance_id, "rs-1")
+        await ingest_service.quarantine_resource(
+            db, resource=resource, reason="access_revoked"
+        )
+        await db.commit()
+
+        provider.remove("rs-1")
+        instance = await _instance(db, instance_id)
+        await sync_service.run_reconciliation(db, instance=instance, actor="test")
+        await db.commit()
+
+        after = await _resource(db, instance_id, "rs-1")
+        assert after.lifecycle_state == "deleted", "an absent resource must not be resurrected"

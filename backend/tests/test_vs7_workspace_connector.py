@@ -705,3 +705,37 @@ async def test_permission_check_denies_when_payload_has_no_allowed_key(transport
         make_ctx(), external_user_id="user-uuid-1", external_id="p1"
     )
     assert allowed is False
+
+
+async def test_reconcile_scan_reports_completion_through_has_more(transport):
+    """A final page must be reported as complete, not as one more cursor.
+
+    Regression: the provider always returns a cursor string and signals
+    completion with has_more. Returning that cursor verbatim told the sync
+    engine the sweep never finished, so the deletion pass for absent resources
+    never ran and a deleted external resource was never marked deleted.
+    """
+    transport.responder = lambda path, params: {
+        "resources": [{"id": "rs-1", "kind": "page", "parent_id": None, "updated_at": None}],
+        "next_cursor": "cursor-on-the-final-page",
+        "has_more": False,
+    }
+    refs, next_cursor = await workspace.workspace_connector.reconcile_scan(
+        make_ctx(), limit=10, cursor=None
+    )
+    assert [ref.external_id for ref in refs] == ["rs-1"]
+    assert next_cursor is None, "a final page must signal completion with a null cursor"
+
+
+async def test_reconcile_scan_keeps_the_cursor_while_more_pages_remain(transport):
+    """While has_more is true the cursor must be preserved for resumption."""
+    transport.responder = lambda path, params: {
+        "resources": [{"id": "rs-1", "kind": "page", "parent_id": None, "updated_at": None}],
+        "next_cursor": "page-2",
+        "has_more": True,
+    }
+    refs, next_cursor = await workspace.workspace_connector.reconcile_scan(
+        make_ctx(), limit=10, cursor=None
+    )
+    assert [ref.external_id for ref in refs] == ["rs-1"]
+    assert next_cursor == "page-2"

@@ -33,8 +33,9 @@ from app.models import (
     ConnectorCursor,
     ConnectorInstance,
     ConnectorSyncRun,
-    ExternalResource,
     EXTERNAL_STATE_DELETED,
+    EXTERNAL_STATE_QUARANTINED,
+    ExternalResource,
 )
 from app.services.connectors.base import (
     ConnectorAuthUnavailable,
@@ -45,6 +46,7 @@ from app.services.connectors.base import (
 from app.services.connectors.ingest import (
     load_resource,
     mark_resource_deleted,
+    restore_resource,
     upsert_resource,
 )
 from app.services.connectors.service import (
@@ -493,6 +495,27 @@ async def run_reconciliation(
                         content=content,
                     )
                     counters.created += 1
+                elif existing.lifecycle_state == EXTERNAL_STATE_QUARANTINED:
+                    # A quarantined resource is retried on every sweep. Its
+                    # external revision is unchanged, so a revision-only
+                    # comparison would skip it forever and cached content that
+                    # was withdrawn when authorization could not be proven could
+                    # never come back. Restoration re-ingests, which is what
+                    # makes the resource retrievable again; who may actually see
+                    # it is still decided per principal at retrieval time.
+                    content = await connector.fetch_resource(ctx, ref.external_id)
+                    target = existing
+                    restored = await restore_resource(
+                        db,
+                        connector_instance_id=instance.id,
+                        tenant_id=instance.tenant_id,
+                        resource=existing,
+                        content=content,
+                    )
+                    if restored:
+                        counters.updated += 1
+                    else:
+                        counters.skipped += 1
                 elif existing.external_revision != ref.external_revision:
                     # A stale revision means an event was missed.
                     content = await connector.fetch_resource(ctx, ref.external_id)

@@ -392,7 +392,16 @@ class WorkspaceConnector(Connector):
             for entry in raw_resources
             if isinstance(entry, dict) and entry.get("id") is not None
         ]
-        return refs, payload.get("next_cursor")
+        # ``next_cursor`` is a required string in the provider contract and
+        # ``has_more`` is the completion signal. Reporting a cursor on the final
+        # page would tell the engine the sweep never finishes, and because the
+        # deletion pass only runs after a complete sweep, deletions would never
+        # be applied. Completion is therefore expressed as a null cursor.
+        has_more = bool(payload.get("has_more"))
+        next_cursor = payload.get("next_cursor")
+        if not has_more:
+            next_cursor = None
+        return refs, next_cursor
 
     # -- current-user authorization ---------------------------------------
 

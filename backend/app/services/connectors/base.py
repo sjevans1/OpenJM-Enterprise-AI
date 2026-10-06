@@ -253,6 +253,14 @@ class Connector(ABC):
     ) -> tuple[list[ExternalResourceRef], str | None]:
         """Walk current provider state to repair drift.
 
+        Return ``next_cursor=None`` when the sweep is complete, and only when it
+        is complete. The engine uses that null to decide whether absence is
+        meaningful: a resource missing from an incomplete sweep proves nothing,
+        so deletions are applied only after a full pass. A provider whose
+        pagination reports completion through a ``has_more`` flag rather than
+        through a null cursor must translate it, or deletions will never be
+        applied.
+
         Defaults to :meth:`list_resources`, which is correct for any provider
         whose enumeration is already current-state based.
         """

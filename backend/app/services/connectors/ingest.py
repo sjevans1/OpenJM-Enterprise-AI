@@ -377,7 +377,11 @@ async def restore_resource(
     resource.lifecycle_state = EXTERNAL_STATE_ACTIVE
     resource.quarantine_reason = None
     resource.quarantined_at = None
-    resource.permission_state = EXTERNAL_PERMISSION_ALLOWED
+    # Restoration proves the resource is still fetchable by the connector's
+    # service credential. It does NOT prove any particular user may see it, so
+    # the permission state is deliberately reset to unknown rather than claimed
+    # as allowed. Per-principal authorization is re-derived at retrieval time.
+    resource.permission_state = EXTERNAL_PERMISSION_UNKNOWN
     resource.content_hash = content.content_hash()
     resource.provenance_json = json.dumps(
         {
