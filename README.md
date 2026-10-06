@@ -34,15 +34,9 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 ## Repository workflow
 
-`main` is the baseline. Vertical Slice 1 is merged.
+`main` is the accepted baseline through **VS4-C2**. VS1–VS3 and the VS4 Saved Reports implementation (immutable snapshots, governed pinned runs/history, and bounded CSV/HTML exports) are merged. **VS4-D integrated acceptance/closure is the active batch.**
 
-Current implementation work is on:
-
-```text
-build/vertical-slice-2-structured-data
-```
-
-Vertical Slice 2 adds governed read-only relational data access. See `docs/VERTICAL_SLICE_2.md` and `docs/ACCEPTANCE.md` before implementation or merge.
+See `docs/PRODUCT_ROADMAP.md`, `docs/VS4_ACCEPTANCE_REPORT.md`, and the canonical batch plans under `docs/plan/` before new implementation or release claims.
 
 ## Windows quick start
 
@@ -87,12 +81,12 @@ If Hermes will perform the local setup, hand it `HERMES_LOCAL_SETUP_PROMPT.md`. 
 
 ## Local development
 
-### 1. Clone and switch to the build branch
+### 1. Clone and switch to the accepted main branch
 
 ```bash
 git clone https://github.com/sjevans1/OpenJM-Enterprise-AI.git
 cd OpenJM-Enterprise-AI
-git switch build/vertical-slice-2-structured-data
+git switch main
 ```
 
 ### 2. Configure the backend
@@ -202,11 +196,13 @@ python scripts/structured_chat_acceptance.py
 
 OpenJM exposes only implemented product workflows:
 
-- **Chat** — persistent conversations with GENERAL, KNOWLEDGE and STRUCTURED routing.
+- **Chat** — persistent conversations with explicit Chat, Knowledge, Data and Hybrid modes.
 - **Knowledge** — governed document upload/index state and evidence-backed retrieval.
 - **Data** — encrypted source registration, connection testing, schema discovery and governed read-only structured access.
 
-**Reports, Automations and Administration** remain future capabilities until their implementation phases.
+- **Reports** — permission-checked historical snapshots, explicitly confirmed source-pinned fresh runs with immutable history, and governed bounded CSV/HTML exports.
+
+**Automations and Administration remain future capabilities.** VS4-D is validating the assembled Reports workflow; production multi-user identity remains VS5.
 
 There is no primary Jobs screen and no raw MMR/relevance debugging workflow in the user product.
 
@@ -217,6 +213,8 @@ See:
 - `docs/ARCHITECTURE.md`
 - `docs/ACCEPTANCE.md`
 - `docs/VERTICAL_SLICE_2.md`
+- `docs/PRODUCT_ROADMAP.md`
+- `docs/VS4_ACCEPTANCE_REPORT.md`
 
 ## Build rules
 
