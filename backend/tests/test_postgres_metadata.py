@@ -26,15 +26,11 @@ from app.migrations_runner import (
 
 pgserver = pytest.importorskip("pgserver", reason="pgserver not installed")
 
-PG_ROOT = "/home/sjeva/.hermes/cache/scratch/openjm_pg_test"
-
-
 @pytest.fixture(scope="module")
-def postgres():
-    shutil.rmtree(PG_ROOT, ignore_errors=True)
-    os.makedirs(PG_ROOT, exist_ok=True)
+def postgres(tmp_path_factory):
+    root = tmp_path_factory.mktemp("pgdata")
     try:
-        server = pgserver.get_server(PG_ROOT)
+        server = pgserver.get_server(str(root))
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"PostgreSQL could not be started in this environment: {exc}")
     try:
