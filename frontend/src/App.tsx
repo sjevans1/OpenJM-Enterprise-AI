@@ -36,6 +36,12 @@ import {
 
 type View = 'chat' | 'knowledge' | 'data' | 'reports'
 
+type ReportRunIntent = {
+  reportId: string
+  version: number
+  idempotencyKey: string
+}
+
 const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
   { value: 'chat', label: 'Chat' },
   { value: 'knowledge', label: 'Knowledge' },
@@ -186,11 +192,7 @@ export default function App() {
   const [reportExecutionError, setReportExecutionError] = useState<string | null>(null)
   const [reportExecutionBusy, setReportExecutionBusy] = useState(false)
   const [confirmingRun, setConfirmingRun] = useState(false)
-  const [pendingRunIntent, setPendingRunIntent] = useState<{
-    reportId: string
-    version: number
-    idempotencyKey: string
-  } | null>(null)
+  const [pendingRunIntent, setPendingRunIntent] = useState<ReportRunIntent | null>(null)
   const [rerunNotice, setRerunNotice] = useState(false)
   const [selectedMode, setSelectedMode] = useState<ExecutionMode>('chat')
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
@@ -198,6 +200,8 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const reportOpenSequence = useRef(0)
   const reportExecutionSequence = useRef(0)
+  const reportExecutionInFlight = useRef(false)
+  const pendingRunIntentRef = useRef<ReportRunIntent | null>(null)
   const pendingReportId = useRef<string | null>(null)
 
   // Persist selected mode across sessions via localStorage.
@@ -448,6 +452,8 @@ export default function App() {
     setReportRuns([])
     setActiveRun(null)
     setReportExecutionError(null)
+    reportExecutionInFlight.current = false
+    pendingRunIntentRef.current = null
     setReportExecutionBusy(false)
     setConfirmingRun(false)
     setPendingRunIntent(null)
@@ -548,11 +554,11 @@ export default function App() {
   }
 
   const submitPinnedRun = async (reusePending = false) => {
-    if (!activeReport || !activeDefinition || reportExecutionBusy) return
+    if (!activeReport || !activeDefinition || reportExecutionInFlight.current) return
     const reportId = activeReport.id
     const version = activeDefinition.version
-    const existing = pendingRunIntent
-    const intent = (
+    const existing = pendingRunIntentRef.current
+    const intent: ReportRunIntent = (
       reusePending
       && existing
       && existing.reportId === reportId
@@ -563,6 +569,10 @@ export default function App() {
       idempotencyKey: crypto.randomUUID(),
     }
     const sequence = reportExecutionSequence.current
+
+    // Refs close the pre-rerender double-click window. State is for rendering.
+    reportExecutionInFlight.current = true
+    pendingRunIntentRef.current = intent
     setPendingRunIntent(intent)
     setConfirmingRun(false)
     setReportExecutionBusy(true)
@@ -571,6 +581,7 @@ export default function App() {
       const detail = await api.submitReportRun(reportId, version, intent.idempotencyKey)
       if (sequence !== reportExecutionSequence.current) return
       setActiveRun(detail)
+      pendingRunIntentRef.current = null
       setPendingRunIntent(null)
       const refreshed = await api.reportRuns(reportId)
       if (sequence === reportExecutionSequence.current) setReportRuns(refreshed)
@@ -578,6 +589,7 @@ export default function App() {
       if (sequence === reportExecutionSequence.current) {
         if (isRevocationError(error)) {
           const message = error instanceof Error ? error.message : 'Report access was revoked'
+          pendingRunIntentRef.current = null
           setPendingRunIntent(null)
           setActiveRun(null)
           setActiveReport(null)
@@ -585,6 +597,7 @@ export default function App() {
           setReportError(message)
           await loadReports()
         } else {
+          // Preserve the exact key for an explicit retry after an uncertain response.
           setReportExecutionError(
             error instanceof Error
               ? `${error.message}. If the response was interrupted, retrying below reuses the same run request.`
@@ -593,7 +606,10 @@ export default function App() {
         }
       }
     } finally {
-      if (sequence === reportExecutionSequence.current) setReportExecutionBusy(false)
+      if (sequence === reportExecutionSequence.current) {
+        reportExecutionInFlight.current = false
+        setReportExecutionBusy(false)
+      }
     }
   }
 

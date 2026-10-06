@@ -469,3 +469,128 @@ test('revoked run history clears cached snapshot evidence', async () => {
   expect(screen.queryByText('Historical confidential answer')).toBeNull()
   expect(screen.queryByText('Historical policy passage')).toBeNull()
 })
+
+
+test('double confirmation click submits exactly one run intent before rerender', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  const deferredRun = deferred<Response>()
+  const bodies: string[] = []
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') {
+      bodies.push(String(init?.body))
+      return deferredRun.promise
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Run fresh report' }))
+  const confirm = screen.getByRole('button', { name: 'Confirm and run' })
+  fireEvent.click(confirm)
+  fireEvent.click(confirm)
+
+  await waitFor(() => expect(bodies).toHaveLength(1))
+  deferredRun.resolve(new Response(JSON.stringify({
+    id: 'run-double', report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'failed', started_at: '2026-10-05T00:01:00Z', finished_at: '2026-10-05T00:01:01Z',
+    failure_category: 'model', result_size_bytes: null, trace_count: 0, result: null,
+  }), { status: 202, headers: { 'Content-Type': 'application/json' } }))
+})
+
+test('terminal failure retry requires confirmation and uses a new idempotency key', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  const bodies: string[] = []
+  let attempt = 0
+  const failedRun = (id: string) => ({
+    id, report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'failed', started_at: '2026-10-05T00:01:00Z', finished_at: '2026-10-05T00:01:01Z',
+    failure_category: 'model', result_size_bytes: null, trace_count: 0, result: null,
+  })
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method || 'GET'
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse([])
+    if (url === '/api/reports/report-a/definitions/1/runs' && method === 'POST') {
+      bodies.push(String(init?.body))
+      attempt += 1
+      return jsonResponse(failedRun(`failed-${attempt}`), 202)
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Run fresh report' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+  await screen.findByText(/This run has no deliverable result/)
+
+  // A terminal failure never auto-retries; a new intent requires another confirmation.
+  expect(bodies).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Run fresh report' }))
+  expect(bodies).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and run' }))
+  await waitFor(() => expect(bodies).toHaveLength(2))
+
+  expect(JSON.parse(bodies[0]).idempotency_key).not.toBe(JSON.parse(bodies[1]).idempotency_key)
+})
+
+test('run history loads older pages without duplicating existing runs', async () => {
+  const definition = {
+    id: 'definition-a', report_id: 'report-a', version: 1,
+    question: 'Pinned question', mode: 'hybrid',
+    pinned_document_ids: ['document-a'], pinned_source_tables: { 'source-a': ['revenue'] },
+    created_at: '2026-10-05T00:00:00Z', executes_queries: false, runnable: true,
+  }
+  const runSummary = (index: number) => ({
+    id: `run-${index}`, report_id: 'report-a', definition_version: 1, requested_mode: 'hybrid',
+    status: 'succeeded', started_at: `2026-10-05T00:${String(index).padStart(2, '0')}:00Z`,
+    finished_at: `2026-10-05T00:${String(index).padStart(2, '0')}:01Z`,
+    failure_category: null, result_size_bytes: 100, trace_count: 1,
+  })
+  const firstPage = Array.from({ length: 20 }, (_, index) => runSummary(index))
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (['/api/conversations', '/api/knowledge/documents', '/api/data/sources'].includes(url)) return jsonResponse([])
+    if (url === '/api/reports') return jsonResponse([reportA])
+    if (url === '/api/reports/report-a') return jsonResponse(reportDetail)
+    if (url === '/api/reports/report-a/definitions') return jsonResponse([definition])
+    if (url === '/api/reports/report-a/runs?offset=0&limit=20') return jsonResponse(firstPage)
+    if (url === '/api/reports/report-a/runs?offset=20&limit=20') return jsonResponse([runSummary(20), runSummary(0)])
+    throw new Error(`Unexpected request: GET ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /Reports/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  expect(await screen.findByText('20 loaded')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Load older runs' }))
+  expect(await screen.findByText('21 loaded')).toBeTruthy()
+})
