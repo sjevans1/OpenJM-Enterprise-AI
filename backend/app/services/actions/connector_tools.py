@@ -47,6 +47,7 @@ from app.services.connectors.service import (
     build_context,
     get_implementation,
     resolve_instance,
+    resolve_operation,
     spec_for,
 )
 
@@ -263,9 +264,12 @@ async def _connector_invoke(db: AsyncSession, arguments: dict) -> dict:
         return _refuse("connector_disabled")
 
     try:
-        spec = spec_for(instance)
-        declared = spec.operation(operation)
+        spec, declared = resolve_operation(instance, operation)
     except ConnectorError as exc:
+        # Includes the unregistered_operation refusal: resolve_operation
+        # normalises the core registry error into a ConnectorError so the safe
+        # category survives into the run record instead of degrading to a
+        # generic tool_error inside the runtime.
         return _refuse(exc.code)
 
     if not declared.is_write:

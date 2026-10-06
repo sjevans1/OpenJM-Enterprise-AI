@@ -133,6 +133,24 @@ def spec_for(instance: ConnectorInstance):
         raise ConnectorError(str(exc), code="unknown_connector_type") from exc
 
 
+def resolve_operation(instance: ConnectorInstance, operation: str):
+    """Resolve a declared operation, normalising registry errors into ConnectorError.
+
+    :class:`~app.core.connectors.ConnectorRegistryError` deliberately lives in the
+    dependency-free core module and is therefore not a ``ConnectorError``. Every
+    service-layer caller must still see one uniform refusal type, because a raw
+    registry error escaping a tool handler gets recorded by the VS6 runtime as a
+    generic ``tool_error`` instead of the specific ``unregistered_operation``
+    category, which loses the safe audit attribution even though the call is
+    still refused. This helper is the single place that conversion happens.
+    """
+    spec = spec_for(instance)
+    try:
+        return spec, spec.operation(operation)
+    except ConnectorRegistryError as exc:
+        raise ConnectorError(str(exc), code="unregistered_operation") from exc
+
+
 async def resolve_credential(
     db: AsyncSession, instance: ConnectorInstance
 ) -> ConnectorCredential:
@@ -612,6 +630,7 @@ __all__ = [
     "registered_implementations",
     "resolve_credential",
     "resolve_instance",
+    "resolve_operation",
     "resource_namespace",
     "revoke_credential",
     "rotate_credential",

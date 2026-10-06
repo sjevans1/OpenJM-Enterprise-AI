@@ -515,4 +515,130 @@ export const api = {
     request<{ deleted: boolean; source_id: string }>(`/api/data/sources/${id}`, {
       method: 'DELETE',
     }),
+
+  // VS7 governed connectors. Every call is tenant-scoped and permission-guarded
+  // on the server; the browser only presents the result.
+  connectorTypes: () =>
+    request<{ types: ConnectorTypeSpec[] }>('/api/connectors/types'),
+
+  connectors: () =>
+    request<{ connectors: ConnectorInstance[] }>('/api/connectors'),
+
+  connector: (id: string) =>
+    request<ConnectorInstance>(`/api/connectors/${encodeURIComponent(id)}`),
+
+  createConnector: (payload: ConnectorCreate) =>
+    request<ConnectorInstance>('/api/connectors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  testConnector: (id: string) =>
+    request<ConnectorTestResult>(`/api/connectors/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }),
+
+  setConnectorEnabled: (id: string, enabled: boolean) =>
+    request<ConnectorInstance>(
+      `/api/connectors/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`,
+      { method: 'POST' },
+    ),
+
+  rotateConnectorCredential: (id: string, credential: Record<string, string>, label?: string) =>
+    request<{ rotated: boolean; credential_id: string; version: number; connector: ConnectorInstance }>(
+      `/api/connectors/${encodeURIComponent(id)}/credentials/rotate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential, label: label || null }),
+      },
+    ),
+
+  revokeConnectorCredential: (id: string) =>
+    request<{ revoked: boolean; connector: ConnectorInstance }>(
+      `/api/connectors/${encodeURIComponent(id)}/credentials/revoke`,
+      { method: 'POST' },
+    ),
+
+  disconnectConnector: (id: string, purge: boolean) =>
+    request<{ quarantined: number; connector: ConnectorInstance }>(
+      `/api/connectors/${encodeURIComponent(id)}/disconnect`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purge }),
+      },
+    ),
+
+  syncConnector: (id: string, runType: string, limit?: number) =>
+    request<ConnectorRun>(`/api/connectors/${encodeURIComponent(id)}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_type: runType, limit: limit ?? null }),
+    }),
+
+  connectorRuns: (id: string) =>
+    request<{ runs: ConnectorRun[] }>(`/api/connectors/${encodeURIComponent(id)}/runs`),
+
+  connectorResources: (id: string) =>
+    request<{ resources: ConnectorResource[] }>(
+      `/api/connectors/${encodeURIComponent(id)}/resources`,
+    ),
+
+  connectorMappings: (id: string) =>
+    request<{ mappings: ConnectorMapping[] }>(
+      `/api/connectors/${encodeURIComponent(id)}/mappings`,
+    ),
+
+  createConnectorMapping: (id: string, principalId: string, externalUserId: string) =>
+    request<ConnectorMapping>(`/api/connectors/${encodeURIComponent(id)}/mappings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ principal_id: principalId, external_user_id: externalUserId }),
+    }),
+
+  deleteConnectorMapping: (id: string, mappingId: string) =>
+    request<{ revoked: boolean; id: string }>(
+      `/api/connectors/${encodeURIComponent(id)}/mappings/${encodeURIComponent(mappingId)}`,
+      { method: 'DELETE' },
+    ),
+
+  // VS7 operations: schedules and notification channels. The operation
+  // vocabulary is closed on the server, so the UI only ever offers what the
+  // scheduler has registered.
+  scheduleOperations: () =>
+    request<{ operations: string[] }>('/api/operations/schedules/operations'),
+
+  schedules: () =>
+    request<{ schedules: Schedule[] }>('/api/operations/schedules'),
+
+  createSchedule: (payload: ScheduleCreate) =>
+    request<Schedule>('/api/operations/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  setScheduleState: (id: string, enabled: boolean, status?: string) =>
+    request<Schedule>(`/api/operations/schedules/${encodeURIComponent(id)}/state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, status: status ?? null }),
+    }),
+
+  notificationChannels: () =>
+    request<{ channel_types: string[]; channels: NotificationChannel[] }>(
+      '/api/operations/notification-channels',
+    ),
+
+  createNotificationChannel: (name: string, channelType: string, config?: Record<string, unknown>) =>
+    request<NotificationChannel>('/api/operations/notification-channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, channel_type: channelType, config: config ?? {} }),
+    }),
+
+  notifications: () =>
+    request<{ notifications: NotificationRecord[] }>('/api/operations/notifications'),
 }
