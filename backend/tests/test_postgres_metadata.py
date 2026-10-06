@@ -221,12 +221,16 @@ async def test_postgres_identity_layer_round_trip(postgres, pg_url):
             )
             await db.commit()
 
-        # Revocation is durable and immediate on PostgreSQL too.
+        # Revocation is durable and immediate on PostgreSQL too. Revoking a
+        # membership also revokes the sessions bound to it, so the session is
+        # refused as an unauthenticated credential.
         async with maker() as db:
-            from app.core.identity import TenantScopeError
+            from app.core.identity import AuthenticationError, IdentityError
 
-            with pytest.raises(TenantScopeError):
+            with pytest.raises(IdentityError) as excinfo:
                 await identity_service.resolve_session(db, session_token)
+            assert isinstance(excinfo.value, AuthenticationError)
+            assert excinfo.value.code == "session_revoked"
 
         async with maker() as db:
             legacy = await identity_service.principal_for_account(

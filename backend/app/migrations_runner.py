@@ -25,6 +25,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
+from app.migrations_schema import BASELINE_TABLE_NAMES, baseline_metadata
+
 logger = logging.getLogger(__name__)
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -34,19 +36,6 @@ BASELINE_REVISION = "0001_vs4_baseline"
 
 # Tables the baseline revision creates. Their presence means the database is a
 # real VS1-VS4 deployment (not an empty file).
-_BASELINE_TABLES = frozenset(
-    {
-        "conversations",
-        "messages",
-        "documents",
-        "data_sources",
-        "execution_traces",
-        "saved_reports",
-        "report_definition_versions",
-        "report_runs",
-    }
-)
-
 
 def sync_url_for(database_url: str) -> str:
     """Map the application's async URL onto the matching sync driver.
@@ -77,10 +66,34 @@ def _existing_tables(sync_url: str) -> set[str]:
         engine.dispose()
 
 
-def _baseline_present(tables: set[str]) -> bool:
-    # A partially-created database (a crash mid-bootstrap) must not be stamped:
-    # let Alembic create whatever is missing from scratch instead.
-    return _BASELINE_TABLES.issubset(tables)
+def _adoption_candidate(tables: set[str]) -> bool:
+    """Does this look like a real pre-migration deployment?
+
+    The marker is the core ``conversations`` table together with the absence of
+    a recorded revision. Individual baseline tables may legitimately be missing:
+    a deployment predating VS4-B2C1 has no ``report_runs``.
+    """
+    return "conversations" in tables
+
+
+def _create_missing_baseline_tables(sync_url: str, tables: set[str]) -> list[str]:
+    """Create any baseline table the database does not already have.
+
+    Uses the shared baseline metadata, *not* the ORM metadata: the ORM reflects
+    the current schema including the columns the later revisions add, and
+    creating those here would collide with `0002`/`0003`.
+    """
+    missing = [name for name in sorted(BASELINE_TABLE_NAMES) if name not in tables]
+    if not missing:
+        return []
+    engine = create_engine(sync_url, future=True)
+    try:
+        with engine.begin() as connection:
+            for name in missing:
+                baseline_metadata.tables[name].create(bind=connection, checkfirst=True)
+    finally:
+        engine.dispose()
+    return missing
 
 
 def adopt_and_upgrade(database_url: str) -> dict:
@@ -93,17 +106,25 @@ def adopt_and_upgrade(database_url: str) -> dict:
     tables = _existing_tables(sync_url)
     recorded = current_revision_from_tables(sync_url, tables)
     adopted = False
+    created: list[str] = []
 
-    # Adopt any database that carries the baseline tables but no recorded
-    # revision: the classic pre-migration deployment (no alembic_version table
-    # at all) and the partially-stamped case (table present, no version row).
-    if recorded is None and _baseline_present(tables):
-        logger.info("Adopting pre-migration database: stamping baseline revision")
+    if recorded is None and _adoption_candidate(tables):
+        # Adopt: complete the baseline shape first, then stamp, then let the
+        # later revisions run. No row is rewritten or deleted.
+        created = _create_missing_baseline_tables(sync_url, tables)
+        logger.info(
+            "Adopting pre-migration database: stamping baseline revision%s",
+            f" (created missing baseline tables: {created})" if created else "",
+        )
         command.stamp(config, BASELINE_REVISION)
         adopted = True
 
     command.upgrade(config, "head")
-    return {"adopted_baseline": adopted, "adopted_tables": sorted(tables)}
+    return {
+        "adopted_baseline": adopted,
+        "created_baseline_tables": created,
+        "existing_tables": sorted(tables),
+    }
 
 
 def current_revision_from_tables(sync_url: str, tables: set[str]) -> str | None:

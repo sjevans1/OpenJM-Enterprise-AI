@@ -20,6 +20,7 @@ import sqlalchemy as sa
 from alembic import op
 
 from app.core.tenancy import LEGACY_TENANT_ID, LEGACY_TENANT_NAME, LEGACY_TENANT_SLUG
+from app.migrations_util import has_column, has_index, has_table
 
 revision = "0002_vs5_identity"
 down_revision = "0001_vs4_baseline"
@@ -39,18 +40,37 @@ _TENANT_OWNED = (
 
 
 def upgrade() -> None:
-    for table in _TENANT_OWNED:
-        op.add_column(
-            table,
-            sa.Column(
-                "tenant_id",
-                sa.String(36),
-                nullable=False,
-                server_default=LEGACY_TENANT_ID,
-            ),
-        )
-        op.create_index(f"ix_{table}_tenant_id", table, ["tenant_id"])
+    bind = op.get_bind()
+    _add_tenant_scope(bind)
+    _create_identity_tables(bind)
+    _seed_local_tenant(bind)
 
+
+def _add_tenant_scope(bind) -> None:
+    """Add the tenant scope to every owned table, skipping what already exists.
+
+    A database created by the previous bootstrap's ``create_all`` already has
+    these columns, so this must be a no-op there rather than a duplicate-column
+    error.
+    """
+    for table in _TENANT_OWNED:
+        if not has_column(bind, table, "tenant_id"):
+            op.add_column(
+                table,
+                sa.Column(
+                    "tenant_id",
+                    sa.String(36),
+                    nullable=False,
+                    server_default=LEGACY_TENANT_ID,
+                ),
+            )
+        if has_table(bind, table) and not has_index(bind, table, f"ix_{table}_tenant_id"):
+            op.create_index(f"ix_{table}_tenant_id", table, ["tenant_id"])
+
+
+def _create_identity_tables(bind) -> None:
+    if has_table(bind, "tenants"):
+        return
     op.create_table(
         "tenants",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -154,11 +174,18 @@ def upgrade() -> None:
     op.create_index("ix_audit_records_principal_id", "audit_records", ["principal_id"])
     op.create_index("ix_audit_records_action", "audit_records", ["action"])
 
-    # Adopt the local development tenant so a previously single-user deployment
-    # keeps working, now through a real tenant + membership rather than a bare
-    # settings string. Idempotent: the slug is unique.
-    conn = op.get_bind()
-    conn.execute(
+
+
+def _seed_local_tenant(bind) -> None:
+    """Adopt the local development tenant, exactly once."""
+    if not has_table(bind, "tenants"):
+        return
+    existing = bind.execute(
+        sa.text("SELECT id FROM tenants WHERE id = :id"), {"id": LEGACY_TENANT_ID}
+    ).first()
+    if existing is not None:
+        return
+    bind.execute(
         sa.text(
             "INSERT INTO tenants (id, slug, name, status, created_at) "
             "VALUES (:id, :slug, :name, 'active', :now)"

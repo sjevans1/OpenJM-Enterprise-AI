@@ -37,12 +37,13 @@ class Base(DeclarativeBase):
 
 _REPORT_RUN_IMMUTABILITY_TRIGGERS_SQL = [
     """CREATE TRIGGER trg_report_runs_protect_identity
-BEFORE UPDATE OF user_id, report_id, definition_id, definition_version,
+BEFORE UPDATE OF tenant_id, user_id, report_id, definition_id, definition_version,
 requested_mode, idempotency_key, request_fingerprint, started_at, deadline_at
 ON report_runs FOR EACH ROW
 BEGIN
     SELECT RAISE(ABORT, 'report run identity fields are immutable')
-    WHERE NEW.user_id IS NOT OLD.user_id
+    WHERE  NEW.user_id IS NOT OLD.user_id
+        OR NEW.tenant_id IS NOT OLD.tenant_id
        OR NEW.report_id IS NOT OLD.report_id
        OR NEW.definition_id IS NOT OLD.definition_id
        OR NEW.definition_version IS NOT OLD.definition_version
@@ -103,7 +104,11 @@ async def init_db() -> None:
     from app.migrations_runner import adopt_and_upgrade
     from app.services.identity import ensure_local_identity
 
-    result = await asyncio.to_thread(adopt_and_upgrade, settings.database_url)
+    # Migrate the database this process is actually bound to, not a separately
+    # configured URL: the engine is the single source of truth, so a test or an
+    # embedding application that replaces it migrates the right database.
+    database_url = engine.url.render_as_string(hide_password=False)
+    result = await asyncio.to_thread(adopt_and_upgrade, database_url)
     if result.get("adopted_baseline"):
         logger.info("Application database adopted at baseline revision")
 

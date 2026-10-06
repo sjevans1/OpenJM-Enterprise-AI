@@ -15,6 +15,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from app.migrations_util import has_table
+
 revision = "0004_action_runtime"
 down_revision = "0003_document_lifecycle"
 branch_labels = None
@@ -22,6 +24,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if has_table(bind, 'action_plans'):
+        return
     op.create_table(
         "action_plans",
         sa.Column("id", sa.String(36), primary_key=True),

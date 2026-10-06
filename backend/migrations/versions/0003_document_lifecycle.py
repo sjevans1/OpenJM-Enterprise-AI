@@ -22,6 +22,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from app.migrations_util import add_column_if_missing, has_index
+
 revision = "0003_document_lifecycle"
 down_revision = "0002_vs5_identity"
 branch_labels = None
@@ -29,26 +31,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "documents",
-        sa.Column(
-            "lifecycle_state", sa.String(32), nullable=False, server_default="pending"
-        ),
-    )
-    op.add_column(
-        "documents",
+    bind = op.get_bind()
+    for column in (
+        sa.Column("lifecycle_state", sa.String(32), nullable=False, server_default="pending"),
         sa.Column("lifecycle_version", sa.Integer(), nullable=False, server_default="0"),
-    )
-    op.add_column("documents", sa.Column("ingest_token", sa.String(36), nullable=True))
-    op.add_column(
-        "documents", sa.Column("indexed_at", sa.DateTime(timezone=True), nullable=True)
-    )
-    op.add_column(
-        "documents", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True)
-    )
-    op.create_index(
-        "ix_documents_lifecycle_state", "documents", ["lifecycle_state"]
-    )
+        sa.Column("ingest_token", sa.String(36), nullable=True),
+        sa.Column("indexed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+    ):
+        add_column_if_missing(bind, "documents", column)
+    if not has_index(bind, "documents", "ix_documents_lifecycle_state"):
+        op.create_index("ix_documents_lifecycle_state", "documents", ["lifecycle_state"])
 
     conn = op.get_bind()
     conn.execute(
