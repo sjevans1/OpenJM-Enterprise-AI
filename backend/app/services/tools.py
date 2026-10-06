@@ -287,6 +287,8 @@ class KnowledgeSearchTool:
             ),
             neighbor_max_chunks=knowledge_engine.settings.rag_neighbor_max_chunks,
         )
+        if context.budget is not None:
+            context.budget.check_wall(datetime.now(timezone.utc))
         normalized = [
             item.model_copy(
                 update={
@@ -546,6 +548,8 @@ class StructuredQueryTool:
                 source, sql, scoped_tables=scoped_tables
             )
         )
+        if context.budget is not None:
+            context.budget.check_wall(datetime.now(timezone.utc))
         preview_rows = [list(row) for row in query_result.rows[:20]]
         passage = json.dumps(
             {
