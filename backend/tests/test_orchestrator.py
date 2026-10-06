@@ -145,7 +145,7 @@ async def test_retrieved_evidence_routes_to_knowledge(session, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_structured_plan_routes_through_governed_tool(session, monkeypatch):
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -210,7 +210,7 @@ async def test_structured_planner_failure_returns_safe_no_execution_answer(
     session,
     monkeypatch,
 ):
-    async def fail_plan(message, db, user_id):
+    async def fail_plan(message, db, user_id, **kwargs):
         raise orchestrator_module.StructuredPlannerError("bad model output")
 
     monkeypatch.setattr(
@@ -235,7 +235,7 @@ async def test_structured_planner_failure_returns_safe_no_execution_answer(
 
 @pytest.mark.asyncio
 async def test_structured_schema_decline_fails_closed(session, monkeypatch):
-    async def decline_plan(message, db, user_id):
+    async def decline_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=None,

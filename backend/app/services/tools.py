@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from time import perf_counter
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -19,9 +19,12 @@ from app.services.execution_trace import (
 from app.services.knowledge import knowledge_engine
 from app.services.structured_executor import execute_structured_query
 from app.services.report_scope import (
-    ReportSourceScope, ReportScopeError, source_scope_still_authorized,
+    ReportSourceScope,
+    ReportScopeError,
+    source_scope_still_authorized,
 )
 from app.services.structured_planner import StructuredPlan, StructuredPlanner
+from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 
 class ToolError(RuntimeError):
@@ -67,6 +70,7 @@ class ToolContext:
     model_name: str | None = None
     db: AsyncSession | None = None
     report_scope: ReportSourceScope | None = None
+    budget: Optional[ReportRunBudget] = None
 
 
 @dataclass
@@ -74,6 +78,9 @@ class ToolResult:
     evidence: list[Evidence] = field(default_factory=list)
     output: dict[str, Any] = field(default_factory=dict)
     trace_metadata: dict[str, Any] = field(default_factory=dict)
+    # IDs are populated only by the registry after a successful governed
+    # invocation. Callers can therefore bind audit rows without timing scans.
+    trace_ids: list[str] = field(default_factory=list)
 
 
 class Tool(Protocol):
@@ -83,8 +90,7 @@ class Tool(Protocol):
         self,
         context: ToolContext,
         payload: dict[str, Any],
-    ) -> ToolResult:
-        ...
+    ) -> ToolResult: ...
 
 
 def _with_evidence_id(evidence: Evidence) -> Evidence:
@@ -139,9 +145,7 @@ class ToolRegistry:
         trace = None
         started = perf_counter()
         planned_sql = (
-            str(payload.get("sql"))
-            if isinstance(payload.get("sql"), str)
-            else None
+            str(payload.get("sql")) if isinstance(payload.get("sql"), str) else None
         )
 
         if context.db is not None:
@@ -220,6 +224,7 @@ class ToolRegistry:
                     }
                 },
             )
+            result.trace_ids.append(trace.id)
 
         return result
 
@@ -245,6 +250,8 @@ class KnowledgeSearchTool:
             raise ToolInputError("knowledge.search requires a non-empty query")
         if context.db is None:
             raise ToolInputError("knowledge.search requires a database session")
+        if context.budget is not None:
+            context.budget.count_knowledge()
 
         statement = select(Document).where(
             Document.user_id == context.user_id,
@@ -255,15 +262,21 @@ class KnowledgeSearchTool:
             try:
                 document_ids = context.report_scope.require_documents()
             except ReportScopeError as exc:
-                raise ToolPermissionError("Report does not permit Knowledge retrieval") from exc
+                raise ToolPermissionError(
+                    "Report does not permit Knowledge retrieval"
+                ) from exc
             statement = statement.where(Document.id.in_(document_ids))
         documents = (
-            await context.db.execute(statement.order_by(Document.created_at.desc()))
-        ).scalars().all()
+            (await context.db.execute(statement.order_by(Document.created_at.desc())))
+            .scalars()
+            .all()
+        )
         if context.report_scope is not None and (
             {doc.id for doc in documents} != context.report_scope.document_ids
         ):
-            raise ToolPermissionError("Pinned Knowledge document is no longer authorized")
+            raise ToolPermissionError(
+                "Pinned Knowledge document is no longer authorized"
+            )
         refs = [(item.id, item.original_name) for item in documents]
         authorized_source_ids = {document_id for document_id, _ in refs}
         evidence = await knowledge_engine.retrieve(
@@ -274,6 +287,8 @@ class KnowledgeSearchTool:
             ),
             neighbor_max_chunks=knowledge_engine.settings.rag_neighbor_max_chunks,
         )
+        if context.budget is not None:
+            context.budget.check_wall(datetime.now(timezone.utc))
         normalized = [
             item.model_copy(
                 update={
@@ -315,7 +330,9 @@ class KnowledgeSearchTool:
                     or not isinstance(equivalent.get("source_id"), str)
                     or not equivalent["source_id"]
                 ):
-                    raise ToolPermissionError("Knowledge evidence provenance is invalid")
+                    raise ToolPermissionError(
+                        "Knowledge evidence provenance is invalid"
+                    )
                 equivalent_source_ids.add(equivalent["source_id"])
             if (
                 item.source_id not in authorized_source_ids
@@ -400,9 +417,10 @@ class StructuredQueryTool:
         ):
             raise ToolInputError("grounded_parameter identity is invalid")
         raw_value = value.get("value")
-        if not isinstance(raw_value, str) or re.fullmatch(
-            r"\d+(?:\.\d{1,2})?", raw_value
-        ) is None:
+        if (
+            not isinstance(raw_value, str)
+            or re.fullmatch(r"\d+(?:\.\d{1,2})?", raw_value) is None
+        ):
             raise ToolInputError(
                 "grounded_parameter value must be a canonical decimal string"
             )
@@ -453,6 +471,8 @@ class StructuredQueryTool:
     ) -> ToolResult:
         if context.db is None:
             raise ToolInputError("structured.query requires a database session")
+        if context.budget is not None:
+            context.budget.count_sql()
 
         source_id = payload.get("source_id")
         sql = payload.get("sql")
@@ -466,7 +486,9 @@ class StructuredQueryTool:
             try:
                 scoped_tables = context.report_scope.tables_for(source_id)
             except ReportScopeError as exc:
-                raise ToolPermissionError("Report does not permit this data source") from exc
+                raise ToolPermissionError(
+                    "Report does not permit this data source"
+                ) from exc
             if grounded_parameter is not None and (
                 grounded_parameter["source_id"] not in context.report_scope.document_ids
             ):
@@ -526,6 +548,8 @@ class StructuredQueryTool:
                 source, sql, scoped_tables=scoped_tables
             )
         )
+        if context.budget is not None:
+            context.budget.check_wall(datetime.now(timezone.utc))
         preview_rows = [list(row) for row in query_result.rows[:20]]
         passage = json.dumps(
             {

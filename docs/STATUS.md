@@ -1,25 +1,22 @@
 # VS4 pilot checkpoint
 
-|| Field | Current value |
-| --- | --- | --- |
-|| Repository | sjevans1/OpenJM-Enterprise-AI |
-|| Plan revision | vs4-pilot-1 |
-|| State | Second review corrections implemented and verified; awaiting_ci after final-head fast + full hosted CI |
-|| Current batch / phase | VS4-B2C1 / PR #28 second correction pass: run-specific authorization, real repeated startup, resume evidence |
-|| Active writer | Hermes |
-|| Branch | milestone/vs4-b2c1-run-history |
-|| PR | #28, open draft and reused; no duplicate PR |
-|| Starting main SHA | 208d329735348ac4cee7b7adfe9a62037bc5b7c2 |
-Last reviewed SHA | 372d45eb39cb893e9e7ac11557d652ae51bb2c0a |
-| Current PR head | c04c0bf305848aa86c9e8a05335e7277c99aa2d7 (committed + pushed; matches live PR #28) |
-| Last verified product CI | Fast PR run 37144377763 succeeded on c04c0bf; full dispatch 37145053442 (suite=full) Backend + Frontend succeeded |
-|| Setup CI | PR #27 merged; main gate passed |
-|| Current failure fingerprint / repair count | none / 0 |
-|| Total code-repair attempts in active batch | 0 |
-|| Service retries | 1 transient GitHub API/network retry, recovered without redispatch |
-|| Local verification | 83 focused report/definition tests passed; 39 regression cases collected; focused Ruff critical checks passed |
-|| Next batch | VS4-B2C2 planned but intentionally paused |
-|| Next action | Commit and push intended code/tests/docs, wait for fast CI, dispatch new full CI, run exact-head pilot gate, publish PR evidence, mark ready and stop |
+| Field | Current value |
+| --- | --- |
+| Repository | sjevans1/OpenJM-Enterprise-AI |
+| Plan revision | vs4-pilot-1 |
+| State | VS4-B2C2 correction pass after reviewer finding; PR #29 open, unmerged |
+| Current batch / phase | VS4-B2C2 / release-gate correction |
+| Active writer | ChatGPT correction pass on existing Hermes branch |
+| Branch | milestone/vs4-b2c2-manual-execution |
+| PR | #29 |
+| Starting main SHA | de391e92b510fb38e445e382fab33ee1517a2c12 |
+| Last reviewed SHA | 8948825fd4f4341e5224b9f31048e469781bc31b |
+| Last verified PR CI | Fast PR run 37408679705 green on 8948825; exact correction-head CI pending |
+| Real-runtime acceptance | 30/30 accepted on 8948825 with real Gemma + isolated temp DB/vector/uploads/key; rerun required after wall-budget correction |
+| Local regression | 504 passed, 19 subtests passed on 8948825 |
+| Review finding | 600-second wall budget was checked only at run entry |
+| Correction | Overall planning/synthesis deadlines, external-boundary checks, pre-persist wall check, and deadline-aware success CAS |
+| Next action | Final correction-head tests, fast CI, full hosted workflow_dispatch, then real-runtime acceptance rerun and review |
 
 ## Checkpoint protocol
 
@@ -63,12 +60,23 @@ startup acceptance and resume-evidence findings reproduced and corrected | 0 fai
 code repairs | local result: 83 focused tests and Ruff passed | final-head fast/full
 CI and pilot gate still pending after the intended commit.
 
+2026-10-04 | B2C1 live reconciliation | PR #28 merged and accepted; main advanced
+to `de391e92b510fb38e445e382fab33ee1517a2c12`; main CI run 37176830805 green;
+`python scripts/pilot_ci_gate.py --main` accepted | B2C2 claim recorded at
+https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/23#issuecomment-5982046257 |
+counters began and remain at zero.
+
+2026-10-04 | VS4-B2C2 Phase 1 | strict explicit submission route, trusted exact
+definition resolution, reservation/replay authorization and focused HTTP regressions
+implemented | 102 focused tests and Ruff critical checks passed | no execution,
+public revoke, push, PR or Phase 2 work performed.
+
 ## Batch ledger
 
 | Batch | State | PR / evidence |
 | --- | --- | --- |
-| VS4-B2C1 | awaiting_review CI dispatched; final-head fast + full passes pending human review | PR #28 |
-| VS4-B2C2 | planned | Not started; intentionally blocked until B2C1 acceptance |
+| VS4-B2C1 | accepted and merged; final-head fast/full and post-merge main gate passed | PR #28; main run 37176830805 |
+| VS4-B2C2 | Full B2C2 implemented in PR #29; wall-budget correction under final validation, unmerged | Prior accepted head 8948825; correction head requires fast/full CI + real-runtime rerun |
 | VS4-C1 | planned | Not started |
 | VS4-C2 | planned | Not started |
 | VS4-D | planned | Not started |

@@ -1,4 +1,59 @@
-# VS4-B2C1 PR #28 final correction evidence
+# VS4 pilot review evidence
+
+## VS4-B2C2 final-review correction checkpoint
+
+PR #29 is open on `milestone/vs4-b2c2-manual-execution`. Hermes final pre-review
+head `8948825fd4f4341e5224b9f31048e469781bc31b` passed fast hosted CI run
+37408679705, local regression (504 passed, 19 subtests), and isolated real
+Gemma acceptance (30/30 checks).
+
+Review found one release blocker: the 600-second wall budget was checked only
+at run entry, so a sequence of otherwise permitted external calls could finish
+after the deadline and still persist success. The exact-head full hosted
+`suite=full` dispatch required by `docs/plan/VS4_B2C2.md` was also absent.
+
+The correction pass adds:
+- an absolute remaining-wall-time helper and wall checks on report counters;
+- overall `asyncio.wait_for` bounds around planning and final synthesis;
+- post-I/O wall checks on model, Knowledge retrieval, and structured query paths;
+- a final pre-persist wall check;
+- `deadline_at > finished_at` in the success compare-and-set;
+- deterministic timeout/late-success regression coverage.
+
+No C1, Workspace, background scheduling, release-flag activation, or other
+feature expansion is part of this correction. Final acceptance still requires
+correction-head local regression, fast PR CI, full hosted CI, and real-runtime
+acceptance before merge review.
+
+## Prior review evidence
+
+## VS4-B2C2 Phase 1 local checkpoint
+
+Starting main is `de391e92b510fb38e445e382fab33ee1517a2c12`. PR #28 is merged
+and accepted; main CI run 37176830805 is green and `python
+scripts/pilot_ci_gate.py --main` accepted. The active claim is
+https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/23#issuecomment-5982046257.
+
+Phase 1 adds only `POST /api/reports/{report_id}/definitions/{version}/runs`.
+The strict request contains one canonical string `idempotency_key`; malformed,
+missing and extra fields return 422. The server resolves the exact definition ID
+through the owned report, loads the validated trusted question/mode/scope with
+the required `definition_id`, derives canonical pins, and reuses the B2C1
+reservation service. New reservations and replays consistently return 202 with
+the existing authorized `ReportRunDetail`. Replays pass through `_detail` again,
+reserve no second row, and perform no execution. Different intent under the same
+key returns a bounded 409; unknown/foreign report or version returns 404. A new
+Phase-1 reservation remains `running` with no result. Public revoke remains absent.
+
+Local evidence: `/home/sjeva/openjm-enterprise-ai/backend/.venv/bin/python -m
+pytest -q tests/test_report_run_submission_api.py tests/test_report_run_regressions.py
+tests/test_report_runs.py tests/test_report_runs_api.py tests/test_report_definitions.py
+--maxfail=3` returned `102 passed in 15.92s`. The matching focused Ruff critical
+check returned `All checks passed!`. Active-batch repair, total-repair and service
+retry counters are all zero. No Phase 2 execution, public revoke, frontend,
+provider, Workspace, push or PR work was performed.
+
+## Historical VS4-B2C1 PR #28 final correction evidence
 
 ## Outcome and scope
 Batch / issue / plan revision: VS4-B2C1 second correction pass. Issue #23. Plan `vs4-pilot-1`. Branch `milestone/vs4-b2c1-run-history`. Existing draft PR: https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/28.

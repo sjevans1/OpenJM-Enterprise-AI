@@ -443,7 +443,7 @@ async def test_interrupted_run_rejects_same_token(file_db):
 async def test_finalize_success_then_rejects_again(file_db):
     fixture = await seed_definition(file_db)
     async with file_db() as db:
-        clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+        clock = _Clock(datetime.now(timezone.utc))
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000010",
@@ -502,7 +502,7 @@ async def test_finalize_failure_records_category(file_db):
 async def test_oversized_result_fails_finalization(file_db):
     fixture = await seed_definition(file_db)
     async with file_db() as db:
-        clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+        clock = _Clock(datetime.now(timezone.utc))
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000012",

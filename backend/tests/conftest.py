@@ -12,10 +12,25 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
-from app.db import Base, enable_sqlite_foreign_keys, get_db
+from app.db import Base, enable_sqlite_foreign_keys, get_db, _migrate_add_active_run_index
 from app.main import app
 
 settings = get_settings()
+
+
+@pytest.fixture(autouse=True)
+def _enable_report_runs(monkeypatch):
+    """VS4-B2C2 Phase 5: enable report-run execution by default in tests.
+
+    The release gate defaults to False (424); tests that exercise the
+    POST /runs path need it True. Individual tests may override via their
+    own monkeypatch.setattr on report_runs_api.settings.
+    """
+    import app.api.report_runs as _rr_api
+    monkeypatch.setattr(
+        _rr_api, "settings",
+        _rr_api.settings.model_copy(update={"report_runs_enabled": True}),
+    )
 
 
 def _pragmas(dbapi_connection, _record):
@@ -45,6 +60,7 @@ async def file_db(tmp_path):
     event.listen(engine.sync_engine, "connect", _pragmas)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await _migrate_add_active_run_index(engine=engine)
     maker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         yield maker

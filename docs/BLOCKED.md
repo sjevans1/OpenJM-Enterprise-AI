@@ -1,7 +1,23 @@
 # VS4 pilot blockers
 
-No unresolved product blocker recorded at setup. Human review of the setup PR is
-a normal workflow boundary. Hermes has not been launched on the workstation.
+## Active correction gate
+
+VS4-B2C2 PR #29 is not merge-ready until the wall-clock budget correction passes
+all final-head gates. On reviewed head `8948825fd4f4341e5224b9f31048e469781bc31b`,
+`ReportRunBudget.check_wall()` was only invoked at run entry; there was no
+overall remaining-deadline timeout around planning/synthesis and the success
+persistence CAS did not compare `deadline_at`.
+
+Required resolution:
+1. overall planning and synthesis bounded by remaining wall time;
+2. model/Knowledge/SQL boundary checks;
+3. final pre-persist check and database CAS refusing late success;
+4. focused/local regression;
+5. exact-head fast PR CI and full hosted `workflow_dispatch`;
+6. isolated real Gemma/DB-GPT/Chroma/SQLite acceptance rerun.
+
+The prior 30/30 runtime acceptance and 504-pass local suite remain historical
+evidence only. Report-run execution remains disabled by default.
 
 ## Previously active blocker (resolved)
 
@@ -21,8 +37,8 @@ accepted=true against main `208d329735348ac4cee7b7adfe9a62037bc5b7c2`, run 36983
 - Main's branch API reported `protected: false` on 2026-10-02. CI evidence and
   the no-merge rule are not a claim that server-side merge restrictions exist.
   Repository administration is outside Hermes's authority; do not change it.
-- This environment cannot establish the user's WSL Gemma runtime acceptance.
-  That is a planned local gate in B2C2/C1/D, not a simulated pass.
+- Real Gemma runtime acceptance remains a later B2C2 release-gate requirement;
+  it is not part of Phase 1 and has not been simulated or claimed.
 - PR #5 and PR #13 remain historical open work. Preserve them. If their files
   overlap the current batch, report that conflict rather than replacing work.
 

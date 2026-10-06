@@ -321,7 +321,7 @@ async def run_dependent(
     events: list[str] = []
     captured: dict = {}
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         events.append("structured.plan")
         captured["planner_message"] = message
         if planner_without_plan:
@@ -551,7 +551,7 @@ async def test_independent_hybrid_still_runs_each_source_once(
     events: list[str] = []
     contexts = []
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(

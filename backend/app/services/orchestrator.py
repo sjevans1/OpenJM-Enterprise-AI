@@ -30,6 +30,7 @@ from app.services.tools import (
     ToolError,
     tool_registry,
 )
+from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 from typing import Optional, Union
 
@@ -81,6 +82,8 @@ class ExecutionPlan:
     evidence: list[Evidence] = field(default_factory=list)
     direct_answer: str | None = None
     requested_mode: ExecutionMode = "chat"
+    structured_result: dict | None = None
+    trace_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -90,27 +93,29 @@ class HybridDecomposition:
     original_message: str
 
 
-
 # --------------------------------------------------------------------------- #
 # Grounded Parameter Contract                                                 #
 # --------------------------------------------------------------------------- #
 
+
 @dataclass(frozen=True)
 class GroundedParameter:
     """A parameter extracted from Knowledge Evidence and validated for use in Structured queries."""
+
     name: str
     value: Union[str, int, float]
     type: str  # e.g., "threshold", "limit", "date"
     evidence_id: str
     source_id: str
     operator: Optional[str] = None  # e.g., ">", "<", "=", ">=", "<="
-    unit: Optional[str] = None      # e.g., "USD", "units", "days"
+    unit: Optional[str] = None  # e.g., "USD", "units", "days"
     currency: Optional[str] = None  # policy-declared currency (USD/JMD) provenance
     field: str = "revenue"
     period: str = "unspecified"
     fiscal_year: int | None = None
     citation: str | None = None
     matching_text: str | None = None
+
 
 class OpenJMOrchestrator:
     """Routes an explicit user-selected execution mode into the governed
@@ -136,9 +141,7 @@ class OpenJMOrchestrator:
             stmt = stmt.where(Document.id.in_(scope.require_documents()))
         result = await db.execute(stmt.order_by(Document.created_at.desc()))
         documents = list(result.scalars().all())
-        if scope is not None and {
-            item.id for item in documents
-        } != scope.document_ids:
+        if scope is not None and {item.id for item in documents} != scope.document_ids:
             raise ReportScopeError("Pinned Knowledge document is no longer available")
         return documents
 
@@ -166,6 +169,7 @@ class OpenJMOrchestrator:
         request_id: str | None = None,
         trace_route: str = "structured",
         scope: ReportSourceScope | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Run the governed Structured planner + query for one message.
 
@@ -175,8 +179,11 @@ class OpenJMOrchestrator:
         """
         try:
             decision: StructuredPlanningResult = await structured_planner.plan(
-                message, db, user_id,
+                message,
+                db,
+                user_id,
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
         except StructuredPlannerError:
             return ExecutionPlan(
@@ -227,6 +234,7 @@ class OpenJMOrchestrator:
             model_name=settings.model_name,
             db=db,
             report_scope=scope,
+            budget=budget,
         )
         try:
             result = await tool_registry.execute(
@@ -248,6 +256,8 @@ class OpenJMOrchestrator:
                 ),
                 requested_mode=requested_mode,
             )
+        except BudgetExceeded:
+            raise
         except Exception:
             return ExecutionPlan(
                 execution_class="structured",
@@ -265,7 +275,29 @@ class OpenJMOrchestrator:
             system_prompt=self._structured_system_prompt(result.evidence),
             evidence=result.evidence,
             requested_mode=requested_mode,
+            structured_result=self._structured_result(result),
+            trace_ids=result.trace_ids,
         )
+
+    @staticmethod
+    def _structured_result(result) -> dict | None:
+        """Link authoritative tool output to its single structured Evidence."""
+        if len(result.evidence) != 1:
+            return None
+        evidence = result.evidence[0]
+        sql = evidence.metadata.get("sql") or evidence.provenance.get("executed_sql")
+        if (
+            evidence.source_type != "structured_query"
+            or not evidence.evidence_id
+            or not sql
+        ):
+            return None
+        return {
+            "source_id": evidence.source_id,
+            "evidence_id": evidence.evidence_id,
+            "sql": sql,
+            **result.output,
+        }
 
     # ------------------------------------------------------------------
     # Knowledge path (Knowledge mode + Hybrid knowledge side)
@@ -281,8 +313,9 @@ class OpenJMOrchestrator:
         request_id: str | None = None,
         trace_route: str = "knowledge",
         scope: ReportSourceScope | None = None,
-    ) -> tuple[list[Evidence], str | None]:
-        """Run knowledge.search. Returns (evidence, direct_answer).
+        budget: ReportRunBudget | None = None,
+    ) -> tuple[list[Evidence], str | None, list[str]]:
+        """Run knowledge.search. Returns evidence, direct answer, and trace IDs.
 
         Handles catalog-pattern questions by returning a document list as
         direct_answer (no vector search). Otherwise runs the governed
@@ -300,25 +333,18 @@ class OpenJMOrchestrator:
                     source_id=doc.id,
                     title=doc.original_name,
                     passage=(
-                        f"{doc.original_name} is indexed and available "
-                        f"to this user."
+                        f"{doc.original_name} is indexed and available to this user."
                     ),
                     score=1.0,
                 )
                 for doc in documents
             ]
             if documents:
-                names = "\n".join(
-                    f"- {doc.original_name}" for doc in documents
-                )
-                answer = (
-                    f"I currently have access to these indexed documents:\n{names}"
-                )
+                names = "\n".join(f"- {doc.original_name}" for doc in documents)
+                answer = f"I currently have access to these indexed documents:\n{names}"
             else:
-                answer = (
-                    "There are currently no indexed documents available to you."
-                )
-            return evidence, answer
+                answer = "There are currently no indexed documents available to you."
+            return evidence, answer, []
 
         knowledge_result = await tool_registry.execute(
             "knowledge.search",
@@ -332,10 +358,11 @@ class OpenJMOrchestrator:
                 model_name=settings.model_name,
                 db=db,
                 report_scope=scope,
+                budget=budget,
             ),
             {"query": message},
         )
-        return knowledge_result.evidence, None
+        return knowledge_result.evidence, None, knowledge_result.trace_ids
 
     # ------------------------------------------------------------------
     # Hybrid decomposition
@@ -370,12 +397,8 @@ class OpenJMOrchestrator:
 
         for part in parts:
             lowered = " ".join(part.lower().split())
-            has_structured_cue = any(
-                cue in lowered for cue in STRUCTURED_CUES
-            )
-            is_structured_candidate = structured_planner.is_candidate(
-                part, sources
-            )
+            has_structured_cue = any(cue in lowered for cue in STRUCTURED_CUES)
+            is_structured_candidate = structured_planner.is_candidate(part, sources)
             if has_structured_cue or is_structured_candidate:
                 structured_parts.append(part)
             else:
@@ -408,6 +431,8 @@ class OpenJMOrchestrator:
         conversation_id: str | None = None,
         mode: ExecutionMode = "chat",
         scope: ReportSourceScope | None = None,
+        request_id: str | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Route with optional server-validated report scope, never from Chat input."""
         execution_class = MODE_TO_EXECUTION_CLASS.get(mode, "general")
@@ -432,8 +457,14 @@ class OpenJMOrchestrator:
             )
 
         if execution_class == "knowledge":
-            evidence, direct_answer = await self._execute_knowledge_search(
-                message, db, user_id, conversation_id, "knowledge",
+            evidence, direct_answer, trace_ids = await self._execute_knowledge_search(
+                message,
+                db,
+                user_id,
+                conversation_id,
+                "knowledge",
+                request_id=request_id,
+                budget=budget,
                 **({"scope": scope} if scope is not None else {}),
             )
             return ExecutionPlan(
@@ -442,20 +473,33 @@ class OpenJMOrchestrator:
                 evidence=evidence,
                 direct_answer=direct_answer,
                 requested_mode="knowledge",
+                trace_ids=trace_ids,
             )
 
         if execution_class == "structured":
             return await self._execute_structured_plan(
-                message, db, user_id, conversation_id, "data",
+                message,
+                db,
+                user_id,
+                conversation_id,
+                "data",
+                request_id=request_id,
+                budget=budget,
                 **({"scope": scope} if scope is not None else {}),
             )
 
         if execution_class == "hybrid":
-            # Genuinely dependent (policy-derived predicate) questions route to
+            # Genuinely dependent (policy-derived) questions route to
             # the fail-closed dependent path. Independent multi-part Hybrid
             # questions keep using the proven independent dual-source path.
             return await self._plan_hybrid(
-                message, db, user_id, conversation_id, "hybrid",
+                message,
+                db,
+                user_id,
+                conversation_id,
+                "hybrid",
+                request_id=request_id,
+                budget=budget,
                 **({"scope": scope} if scope is not None else {}),
             )
 
@@ -476,6 +520,8 @@ class OpenJMOrchestrator:
         prefetched_knowledge_evidence: list[Evidence] | None = None,
         prefetched_knowledge_error: str | None = None,
         scope: ReportSourceScope | None = None,
+        request_id: str | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Independent dual-source execution for Hybrid mode.
 
@@ -486,14 +532,20 @@ class OpenJMOrchestrator:
         5. Handle partial success: return grounded evidence from whichever
            source succeeded, explain the failure of the other.
         """
-        request_id = str(uuid4())
+        request_id = request_id or str(uuid4())
         # A dependent (policy-derived) hybrid question must not degrade into an
         # independent Structured execution. Route it through the fail-closed
         # dependent gate; independent questions keep the proven path below.
         if is_dependent_revenue_request(message):
             return await self._plan_dependent_hybrid(
-                message, db, user_id, conversation_id, requested_mode, request_id,
+                message,
+                db,
+                user_id,
+                conversation_id,
+                requested_mode,
+                request_id,
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
 
         sources = await self._structured_sources(
@@ -505,10 +557,15 @@ class OpenJMOrchestrator:
         knowledge_query = " and ".join(decomposition.knowledge_queries)
         knowledge_evidence = prefetched_knowledge_evidence
         knowledge_error = prefetched_knowledge_error
+        knowledge_trace_ids: list[str] = []
         if knowledge_evidence is None:
             knowledge_evidence = []
             try:
-                knowledge_evidence, _ = await self._execute_knowledge_search(
+                (
+                    knowledge_evidence,
+                    _,
+                    knowledge_trace_ids,
+                ) = await self._execute_knowledge_search(
                     knowledge_query,
                     db,
                     user_id,
@@ -517,9 +574,12 @@ class OpenJMOrchestrator:
                     request_id,
                     "hybrid",
                     **({"scope": scope} if scope is not None else {}),
+                    budget=budget,
                 )
             except ToolError as exc:
                 knowledge_error = str(exc)
+            except BudgetExceeded:
+                raise
             except Exception:
                 knowledge_error = "Knowledge retrieval failed."
 
@@ -540,6 +600,7 @@ class OpenJMOrchestrator:
             request_id,
             "hybrid",
             **({"scope": scope} if scope is not None else {}),
+            budget=budget,
         )
         if structured_plan.evidence:
             structured_evidence = structured_plan.evidence
@@ -558,6 +619,8 @@ class OpenJMOrchestrator:
                 ),
                 evidence=combined,
                 requested_mode="hybrid",
+                structured_result=structured_plan.structured_result,
+                trace_ids=[*knowledge_trace_ids, *structured_plan.trace_ids],
             )
 
         if knowledge_evidence and not structured_evidence:
@@ -705,8 +768,6 @@ class OpenJMOrchestrator:
 
         return base
 
-
-
     # ------------------------------------------------------------------
     # Dependent Hybrid: Knowledge-to-Structured parameter grounding
     # ------------------------------------------------------------------
@@ -756,7 +817,6 @@ class OpenJMOrchestrator:
             matching_text=param_dict["matching_text"],
         )
 
-
     # ------------------------------------------------------------------
     # Dependent Hybrid Planning
     # ------------------------------------------------------------------
@@ -770,6 +830,7 @@ class OpenJMOrchestrator:
         requested_mode: ExecutionMode,
         request_id: str,
         scope: ReportSourceScope | None = None,
+        budget: ReportRunBudget | None = None,
     ) -> ExecutionPlan:
         """Fail-closed dependent hybrid: Knowledge -> Grounded Parameter -> Structured.
 
@@ -785,8 +846,13 @@ class OpenJMOrchestrator:
         # --- Knowledge execution ---
         knowledge_evidence: list[Evidence] = []
         knowledge_error: str | None = None
+        knowledge_trace_ids: list[str] = []
         try:
-            knowledge_evidence, _ = await self._execute_knowledge_search(
+            (
+                knowledge_evidence,
+                _,
+                knowledge_trace_ids,
+            ) = await self._execute_knowledge_search(
                 message,
                 db,
                 user_id,
@@ -795,6 +861,7 @@ class OpenJMOrchestrator:
                 request_id,
                 "hybrid",
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
         except ToolError:
             knowledge_error = "Knowledge retrieval could not be completed safely."
@@ -810,9 +877,12 @@ class OpenJMOrchestrator:
             reason = (
                 "I could not safely establish the policy-derived parameter "
                 "for this request from the authorized Knowledge evidence. "
-                + (f"Knowledge retrieval note: {knowledge_error}" if knowledge_error
-                   else "No authorized policy threshold was found or it was ambiguous, "
-                        "conflicting, or in an unverifiable currency.")
+                + (
+                    f"Knowledge retrieval note: {knowledge_error}"
+                    if knowledge_error
+                    else "No authorized policy threshold was found or it was ambiguous, "
+                    "conflicting, or in an unverifiable currency."
+                )
             )
             return ExecutionPlan(
                 execution_class="hybrid",
@@ -840,6 +910,7 @@ class OpenJMOrchestrator:
                 db,
                 user_id,
                 **({"scope": scope} if scope is not None else {}),
+                budget=budget,
             )
         except StructuredPlannerError:
             return ExecutionPlan(
@@ -922,9 +993,7 @@ class OpenJMOrchestrator:
         sources = await self._structured_sources(
             db, user_id, **({"scope": scope} if scope is not None else {})
         )
-        matching = [
-            source for source in sources if source.id == proposal.source_id
-        ]
+        matching = [source for source in sources if source.id == proposal.source_id]
         if len(matching) != 1:
             return ExecutionPlan(
                 execution_class="hybrid",
@@ -990,6 +1059,7 @@ class OpenJMOrchestrator:
             model_name=settings.model_name,
             db=db,
             report_scope=scope,
+            budget=budget,
         )
         try:
             result = await tool_registry.execute(
@@ -1069,6 +1139,9 @@ class OpenJMOrchestrator:
             ),
             evidence=combined_evidence,
             requested_mode="hybrid",
+            structured_result=self._structured_result(result),
+            trace_ids=[*knowledge_trace_ids, *result.trace_ids],
         )
+
 
 orchestrator = OpenJMOrchestrator()

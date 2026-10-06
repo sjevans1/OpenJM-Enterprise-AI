@@ -94,6 +94,7 @@ async def init_db() -> None:
     # Additive, idempotent upgrades preserve all rows from older deployments.
     await _migrate_add_requested_mode(conn=None)
     await _migrate_add_revenue_currency()
+    await _migrate_add_active_run_index()
     await _recover_stale_report_runs()
 
 
@@ -139,6 +140,39 @@ async def _migrate_add_revenue_currency() -> None:
             await conn.exec_driver_sql(
                 "ALTER TABLE data_sources ADD COLUMN revenue_currency VARCHAR(3) NULL"
             )
+
+
+_ACTIVE_RUN_INDEX_SQL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS "
+    "uq_report_run_active_per_definition "
+    "ON report_runs (user_id, report_id, definition_id, definition_version) "
+    "WHERE status = 'running'"
+)
+
+
+async def _migrate_add_active_run_index(*, engine=None) -> None:
+    """Idempotently create the one-active-run-per-definition partial unique index.
+
+    Allows at most one 'running' row per (user_id, report_id, definition_id,
+    definition_version).  Terminal rows do not participate, so a finalised
+    run does not block a new submission for the same definition.
+    Safe to call repeatedly; uses ``IF NOT EXISTS`` at the SQL level.
+    Skipped for non-SQLite targets unless a specific engine is supplied,
+    and when the report_runs table does not exist yet.
+    """
+    target_engine = engine if engine is not None else _production_engine()
+    if not settings.database_url.startswith("sqlite") and engine is None:
+        return
+    if not target_engine.url.database or target_engine.url.database == ":memory:":
+        return
+    async with target_engine.begin() as conn:
+        table = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='report_runs'"
+        )
+        if table.first() is None:
+            return
+        await conn.exec_driver_sql(_ACTIVE_RUN_INDEX_SQL)
 
 
 async def _recover_stale_report_runs(*, engine=None) -> int:

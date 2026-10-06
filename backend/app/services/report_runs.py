@@ -21,11 +21,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models import ReportDefinitionVersion, ReportRun, SavedReport
+from app.models import ReportDefinitionVersion, ReportRun, SavedReport, new_id
 
 settings = get_settings()
 
-RUN_DEADLINE_SECONDS = 1800
+RUN_DEADLINE_SECONDS = 600
 MAX_ANSWER_CHARS = 24000
 MAX_ANSWER_BYTES = 65536
 MAX_EVIDENCE_ITEMS = 24
@@ -53,6 +53,96 @@ ALLOWED_FAILURE_CATEGORIES = frozenset(
 
 class ReportRunConflict(RuntimeError):
     """A reservation token collides with a different intent."""
+
+
+class BudgetExceeded(RuntimeError):
+    """A per-run budget limit (model attempts, SQL, knowledge, wall clock)
+    was reached.  Raised only on the report-execution path when a budget
+    context is supplied; ordinary Chat passes ``budget=None`` and never
+    raises this."""
+
+
+from dataclasses import dataclass, field
+from typing import Optional as _Optional
+
+
+@dataclass
+class ReportRunBudget:
+    """Explicit, opt-in per-run budget/limit context for the report path.
+
+    Passed explicitly through ``_execute_owned_run`` → ``orchestrator.plan``
+    → model gateway / tools.  When ``None`` (ordinary Chat) no limits are
+    enforced and no global mutable state is touched.
+    """
+
+    started_at: datetime
+    max_model_http_attempts: int = 8
+    max_output_tokens: int = 2048
+    max_sql_executions: int = 2
+    max_knowledge_retrievals: int = 2
+    wall_deadline_seconds: int = RUN_DEADLINE_SECONDS
+    # live counters (mutated only on the report path)
+    model_attempts: int = field(default=0)
+    sql_executions: int = field(default=0)
+    knowledge_retrievals: int = field(default=0)
+
+    def count_model(self) -> None:
+        self.check_wall(datetime.now(timezone.utc))
+        self.model_attempts += 1
+        if self.model_attempts > self.max_model_http_attempts:
+            raise BudgetExceeded(
+                f"model HTTP attempts ({self.model_attempts}) exceed "
+                f"limit ({self.max_model_http_attempts})"
+            )
+
+    def count_sql(self) -> None:
+        self.check_wall(datetime.now(timezone.utc))
+        self.sql_executions += 1
+        if self.sql_executions > self.max_sql_executions:
+            raise BudgetExceeded(
+                f"SQL executions ({self.sql_executions}) exceed "
+                f"limit ({self.max_sql_executions})"
+            )
+
+    def count_knowledge(self) -> None:
+        self.check_wall(datetime.now(timezone.utc))
+        self.knowledge_retrievals += 1
+        if self.knowledge_retrievals > self.max_knowledge_retrievals:
+            raise BudgetExceeded(
+                f"knowledge retrievals ({self.knowledge_retrievals}) exceed "
+                f"limit ({self.max_knowledge_retrievals})"
+            )
+
+    def check_wall(self, now: datetime) -> None:
+        elapsed = (now - self.started_at).total_seconds()
+        if elapsed > self.wall_deadline_seconds:
+            raise BudgetExceeded(
+                f"wall-clock deadline exceeded ({elapsed:.1f}s > "
+                f"{self.wall_deadline_seconds}s)"
+            )
+
+    def remaining_seconds(self, now: datetime | None = None) -> float:
+        current = now or datetime.now(timezone.utc)
+        elapsed = (current - self.started_at).total_seconds()
+        remaining = self.wall_deadline_seconds - elapsed
+        if remaining <= 0:
+            raise BudgetExceeded(
+                f"wall-clock deadline exceeded ({elapsed:.1f}s >= "
+                f"{self.wall_deadline_seconds}s)"
+            )
+        return remaining
+
+    def enforce_max_tokens(self, max_tokens: _Optional[int]) -> _Optional[int]:
+        if max_tokens is None:
+            return self.max_output_tokens
+        return min(max_tokens, self.max_output_tokens)
+
+    def is_exhausted(self) -> bool:
+        return (
+            self.model_attempts >= self.max_model_http_attempts
+            or self.sql_executions >= self.max_sql_executions
+            or self.knowledge_retrievals >= self.max_knowledge_retrievals
+        )
 
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -220,7 +310,10 @@ async def reserve_report_run(
     )
 
     deadline = now + timedelta(seconds=RUN_DEADLINE_SECONDS)
+    scoped_def_id = scoped.id
+    run_id = new_id()
     insert_stmt = insert(ReportRun).values(
+        id=run_id,
         user_id=settings.dev_user_id,
         report_id=report_id,
         definition_id=scoped.id,
@@ -239,7 +332,7 @@ async def reserve_report_run(
         result_sha256=None,
     )
     try:
-        result = await db.execute(insert_stmt.returning(ReportRun.id))
+        await db.execute(insert_stmt)
         await db.commit()
     except IntegrityError:
         await db.rollback()
@@ -252,12 +345,36 @@ async def reserve_report_run(
             )
         ).scalar_one_or_none()
         if existing is None:
+            # The unique constraint that fired is NOT the idempotency-key
+            # constraint (uq_report_run_owner_key).  It is the one-active-run
+            # partial unique index (uq_report_run_active_per_definition):
+            # a *different* idempotency key was submitted while a run for
+            # this exact definition is still 'running'.
+            active = (
+                await db.execute(
+                    select(ReportRun).where(
+                        ReportRun.user_id == settings.dev_user_id,
+                        ReportRun.report_id == report_id,
+                        ReportRun.definition_id == scoped_def_id,
+                        ReportRun.definition_version == definition_version,
+                        ReportRun.status == "running",
+                        ReportRun.finished_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if active is not None:
+                raise ReportRunConflict(
+                    "A run for this definition is already in progress"
+                ) from None
             raise ReportRunConflict("Reservation conflict") from None
         if existing.request_fingerprint != fingerprint:
             raise ReportRunConflict("Same key, different intent")
         return existing, False
-    run_id = result.scalar_one()
     run = await db.get(ReportRun, run_id)
+    # SQLite DateTime(timezone=True) may round-trip as naive; restore the
+    # authoritative tz-aware started_at that was used for the INSERT.
+    if run.started_at is None or run.started_at.tzinfo is None:
+        run.started_at = now
     return run, True
 
 
@@ -286,6 +403,7 @@ async def finalize_success(
     result_json = json.dumps(aggregate, separators=(",", ":"), ensure_ascii=False)
     result_bytes = len(result_json.encode("utf-8"))
     result_sha = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+    finished_at = datetime.now(timezone.utc)
     result = await db.execute(
         update(ReportRun)
         .where(
@@ -294,10 +412,11 @@ async def finalize_success(
             ReportRun.status == "running",
             ReportRun.request_fingerprint == fingerprint,
             ReportRun.finished_at.is_(None),
+            ReportRun.deadline_at > finished_at,
         )
         .values(
             status="succeeded",
-            finished_at=datetime.now(timezone.utc),
+            finished_at=finished_at,
             trace_ids_json=json.dumps(trace_ids or [], separators=(",", ":")),
             result_json=result_json,
             result_size_bytes=result_bytes,

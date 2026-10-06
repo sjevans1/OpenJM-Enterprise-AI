@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     structured_timeout_seconds: int = 20
 
     dev_user_id: str = "local-admin"
+    # VS4-B2C2 Phase 5: default-off release gate for report-run execution.
+    # The POST /runs endpoint returns 424 when False. Enable only in
+    # isolated acceptance via OPENJM_REPORT_RUNS_ENABLED=true.
+    report_runs_enabled: bool = False
 
     @field_validator("database_url", mode="after")
     @classmethod

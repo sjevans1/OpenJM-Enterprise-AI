@@ -219,7 +219,7 @@ async def test_data_mode_routes_structured(session, monkeypatch):
     """mode=data routes STRUCTURED."""
     captured = {}
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -270,7 +270,7 @@ async def test_data_mode_with_sales_data_still_structured(session, monkeypatch):
     """'According to the sales data, what is Blue Mountain Cafe's total revenue?' remains STRUCTURED."""
     captured = {}
 
-    async def fake_plan(message, db, user_id):
+    async def fake_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=StructuredPlan(
@@ -316,7 +316,7 @@ async def test_data_mode_with_sales_data_still_structured(session, monkeypatch):
 @pytest.mark.asyncio
 async def test_data_mode_fail_closed_when_no_schema_support(session, monkeypatch):
     """Data mode fails closed when the authorized schema cannot support the answer."""
-    async def decline_plan(message, db, user_id):
+    async def decline_plan(message, db, user_id, **kwargs):
         return StructuredPlanningResult(
             candidate=True,
             plan=None,

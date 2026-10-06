@@ -128,6 +128,7 @@ async def test_registered_tool_normalizes_evidence_id_and_trace(session):
     traces = (await session.execute(select(ExecutionTrace))).scalars().all()
     assert len(traces) == 1
     trace = traces[0]
+    assert result.trace_ids == [trace.id]
     assert trace.tool_name == "test.read"
     assert trace.operation_class == "READ"
     assert trace.risk_level == "LOW"
@@ -244,12 +245,17 @@ async def test_structured_tool_returns_normalized_evidence_and_trace(
     assert evidence.processing_location == "local"
 
     trace = (
-        await session.execute(
-            select(ExecutionTrace).where(
-                ExecutionTrace.tool_name == "structured.query"
+        (
+            await session.execute(
+                select(ExecutionTrace).where(
+                    ExecutionTrace.tool_name == "structured.query"
+                )
             )
         )
-    ).scalars().one()
+        .scalars()
+        .one()
+    )
+    assert result.trace_ids == [trace.id]
     assert trace.status == "succeeded"
     assert trace.source_id == "structured-source"
     assert trace.route == "structured"

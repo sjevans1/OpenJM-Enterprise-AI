@@ -72,7 +72,7 @@ def _make_engine(path):
 
 async def _succeeded_run(maker, fixture, key: str, *, evidence=None) -> str:
     """Reserve + finalize a run against the seeded (authorized) fixture."""
-    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    clock = _Clock(datetime.now(timezone.utc))
     async with maker() as db:
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
@@ -510,22 +510,25 @@ async def test_startup_recovery_persists_interruption(file_db, tmp_path):
 
 @pytest.mark.asyncio
 async def test_repeated_startup_recovery_is_idempotent(file_db, tmp_path):
-    fixture = await seed_definition(file_db)
+    # Two definitions: the expired and live runs must not share the
+    # one-active-run-per-definition partial unique index.
+    fixture1 = await seed_definition(file_db)
+    fixture2 = await seed_definition(file_db)
     async with file_db() as db:
         expired, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db, report_id=fixture1["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000221",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
-            pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"],
+            requested_mode=fixture1["requested_mode"], question=fixture1["question"],
+            pinned_document_ids=fixture1["pinned_document_ids"],
+            pinned_source_tables=fixture1["pinned_source_tables"],
             now=datetime(2026, 10, 2, 8, 0, 0, tzinfo=timezone.utc),
         )
         live, _ = await reserve_report_run(
-            db=db, report_id=fixture["report_id"], definition_version=1,
+            db=db, report_id=fixture2["report_id"], definition_version=1,
             idempotency_key="00000000-0000-4000-8000-000000000222",
-            requested_mode=fixture["requested_mode"], question=fixture["question"],
-            pinned_document_ids=fixture["pinned_document_ids"],
-            pinned_source_tables=fixture["pinned_source_tables"],
+            requested_mode=fixture2["requested_mode"], question=fixture2["question"],
+            pinned_document_ids=fixture2["pinned_document_ids"],
+            pinned_source_tables=fixture2["pinned_source_tables"],
             # real wall clock: deadline is in the actual future, so recovery
             # must leave this run running.
             now=None,
@@ -719,7 +722,7 @@ async def test_large_valid_result_reads_back(client, file_db):
     """A persisted result between the old 65,536 read cap and the 131,072
     write bound (69,172 bytes) must read back without 422."""
     fixture = await seed_definition(file_db)
-    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    clock = _Clock(datetime.now(timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
@@ -1107,6 +1110,11 @@ async def test_synthetic_pre_b2c1_upgrade_preserves_data(tmp_path, monkeypatch):
                 pinned_source_tables=fixture["pinned_source_tables"],
                 now=datetime(2026, 10, 2, 8, 0, 0, tzinfo=timezone.utc),
             )
+            await db.commit()
+        # Recovery marks the expired run 'interrupted' (terminal), clearing
+        # the one-active-run slot so the live run can be reserved.
+        await _recover_stale_report_runs(engine=startup_engine)
+        async with startup_maker() as db:
             live, _ = await reserve_report_run(
                 db=db, report_id=fixture["report_id"], definition_version=1,
                 idempotency_key="00000000-0000-4000-8000-000000000284",
@@ -1115,7 +1123,7 @@ async def test_synthetic_pre_b2c1_upgrade_preserves_data(tmp_path, monkeypatch):
                 pinned_source_tables=fixture["pinned_source_tables"], now=None,
             )
             await db.commit()
-            expired_id, live_id = expired.id, live.id
+        expired_id, live_id = expired.id, live.id
 
         await db_module.init_db()
         assert await _legacy_snapshot(path) == before
