@@ -368,3 +368,107 @@ async def test_audit_reads_are_tenant_scoped(client, oidc_mode, world, file_db):
     finally:
         set_principal(None)
     assert own["count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# RAG / vector retrieval input isolation
+# ---------------------------------------------------------------------------
+
+
+async def test_vector_retrieval_input_is_tenant_scoped(world, file_db):
+    """Vector evidence is keyed by authorized document ids.
+
+    The retrieval call receives an explicit list of documents resolved from a
+    tenant-scoped query, so if that query cannot return another tenant's
+    document the vector store has nothing to leak. This asserts the query.
+    """
+    from app.models import Document
+    from app.services.orchestrator import orchestrator
+
+    async with file_db() as db:
+        # A second tenant's document, ready and indexed, same shape as A's.
+        db.add(
+            Document(
+                id="iso-doc-b",
+                tenant_id=TENANT_B,
+                user_id=KEY_B,
+                original_name="b-policy.md",
+                stored_path="/tmp/iso-b",
+                size_bytes=5,
+                status="ready",
+                indexed=True,
+                lifecycle_state="ready",
+            )
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        a_docs = await orchestrator._ready_documents(db, KEY_A)
+        b_docs = await orchestrator._ready_documents(db, KEY_B)
+
+    assert {d.id for d in a_docs} == {"iso-doc"}, "tenant A must only see its own document"
+    assert {d.id for d in b_docs} == {"iso-doc-b"}, "tenant B must only see its own document"
+
+
+async def test_mid_deletion_document_is_not_retrievable(world, file_db):
+    """A document that is being deleted must stop being evidence immediately."""
+    from app.models import Document
+    from app.services import document_lifecycle as lifecycle
+    from app.services.orchestrator import orchestrator
+
+    async with file_db() as db:
+        assert {d.id for d in await orchestrator._ready_documents(db, KEY_A)} == {"iso-doc"}
+        # begin_delete clears the ingest token but deliberately leaves
+        # status/indexed untouched until the vectors are actually gone.
+        assert await lifecycle.begin_delete(db, "iso-doc") is True
+
+    async with file_db() as db:
+        remaining = await orchestrator._ready_documents(db, KEY_A)
+
+    assert remaining == [], "a mid-deletion document must not be retrievable"
+
+
+async def test_disabled_source_is_excluded_from_structured_execution(world, file_db):
+    """Revoking a source removes it from the set the planner may use."""
+    from app.models import DataSource
+    from app.services.structured_planner import structured_planner
+
+    async with file_db() as db:
+        available = await structured_planner._sources(db, KEY_A)
+        assert {s.id for s in available} == {"iso-src"}
+
+    async with file_db() as db:
+        source = await db.get(DataSource, "iso-src")
+        source.enabled = False
+        await db.commit()
+
+    async with file_db() as db:
+        after = await structured_planner._sources(db, KEY_A)
+    assert after == [], "a disabled source must not be available for execution"
+
+
+async def test_another_tenants_source_is_never_available(world, file_db):
+    from app.models import DataSource
+    from app.services.structured_planner import structured_planner
+
+    async with file_db() as db:
+        db.add(
+            DataSource(
+                id="iso-src-b",
+                tenant_id=TENANT_B,
+                user_id=KEY_B,
+                name="B Finance",
+                engine="sqlite",
+                connection_secret="x",
+                status="connected",
+                enabled=True,
+                schema_json=json.dumps([]),
+            )
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        b_sources = await structured_planner._sources(db, KEY_B)
+        a_sources = await structured_planner._sources(db, KEY_A)
+    assert {s.id for s in b_sources} == {"iso-src-b"}
+    assert {s.id for s in a_sources} == {"iso-src"}
