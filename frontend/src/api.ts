@@ -126,6 +126,53 @@ export type ReportRerunPreview = {
   executes_queries: false
 }
 
+export type ReportDefinition = {
+  id: string
+  report_id: string
+  version: number
+  question: string
+  mode: 'knowledge' | 'data' | 'hybrid'
+  pinned_document_ids: string[]
+  pinned_source_tables: Record<string, string[]>
+  created_at: string
+  executes_queries: false
+  runnable: boolean
+}
+
+export type ReportRunResult = {
+  answer: string | null
+  evidence: Evidence[]
+  structured_result: Record<string, unknown>
+  trace_ids: string[]
+}
+
+export type ReportRunSummary = {
+  id: string
+  report_id: string
+  definition_version: number
+  requested_mode: string
+  status: string
+  started_at: string
+  finished_at?: string | null
+  failure_category?: string | null
+  result_size_bytes?: number | null
+  trace_count: number
+}
+
+export type ReportRunDetail = ReportRunSummary & {
+  result: ReportRunResult | null
+}
+
+export class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
@@ -136,7 +183,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // keep generic message
     }
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
   return response.json()
 }
@@ -145,6 +192,29 @@ export const api = {
   reports: () => request<SavedReportSummary[]>('/api/reports'),
   report: (id: string) => request<SavedReportDetail>(`/api/reports/${encodeURIComponent(id)}`),
   reportRerunPreview: (id: string) => request<ReportRerunPreview>(`/api/reports/${encodeURIComponent(id)}/rerun-preview`),
+  reportDefinitions: (id: string) =>
+    request<ReportDefinition[]>(`/api/reports/${encodeURIComponent(id)}/definitions`),
+  createReportDefinition: (id: string) =>
+    request<ReportDefinition>(`/api/reports/${encodeURIComponent(id)}/definitions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+  reportRuns: (id: string, offset = 0, limit = 20) =>
+    request<ReportRunSummary[]>(
+      `/api/reports/${encodeURIComponent(id)}/runs?offset=${offset}&limit=${limit}`,
+    ),
+  reportRun: (runId: string) =>
+    request<ReportRunDetail>(`/api/reports/runs/${encodeURIComponent(runId)}`),
+  submitReportRun: (id: string, version: number, idempotencyKey: string) =>
+    request<ReportRunDetail>(
+      `/api/reports/${encodeURIComponent(id)}/definitions/${version}/runs`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idempotency_key: idempotencyKey }),
+      },
+    ),
   saveReport: (messageId: string) =>
     request<SavedReportDetail>('/api/reports', {
       method: 'POST',

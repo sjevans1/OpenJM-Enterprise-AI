@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api import report_definitions as report_definitions_api
 from app.db import Base, enable_sqlite_foreign_keys, get_db
 from app.main import app
 from app.models import (
@@ -361,3 +362,32 @@ async def test_existing_sqlite_schema_upgrade_adds_only_definition_table():
             assert (await db.execute(select(ReportDefinitionVersion))).scalars().all() == []
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_definition_runnable_is_derived_only_from_server_release_gate(
+    client, session, valid_schema, monkeypatch
+):
+    """C1 may display runnable state, but the browser cannot grant execution."""
+    _user, assistant, _doc, _source = await seed(session, valid_schema=valid_schema)
+    report_id = await create(client, assistant)
+
+    disabled = await client.post(f"/api/reports/{report_id}/definitions", json={})
+    assert disabled.status_code == 201
+    assert disabled.json()["runnable"] is False
+
+    monkeypatch.setattr(
+        report_definitions_api,
+        "settings",
+        report_definitions_api.settings.model_copy(update={"report_runs_enabled": True}),
+    )
+    enabled = await client.get(f"/api/reports/{report_id}/definitions/1")
+    assert enabled.status_code == 200
+    assert enabled.json()["runnable"] is True
+
+    # The definition request still accepts no client execution/runnable override.
+    override = await client.post(
+        f"/api/reports/{report_id}/definitions",
+        json={"runnable": True},
+    )
+    assert override.status_code == 422
