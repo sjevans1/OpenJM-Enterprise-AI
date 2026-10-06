@@ -722,7 +722,7 @@ async def test_large_valid_result_reads_back(client, file_db):
     """A persisted result between the old 65,536 read cap and the 131,072
     write bound (69,172 bytes) must read back without 422."""
     fixture = await seed_definition(file_db)
-    clock = _Clock(datetime(2026, 10, 2, 9, 0, 0, tzinfo=timezone.utc))
+    clock = _Clock(datetime.now(timezone.utc))
     async with file_db() as db:
         run, _ = await reserve_report_run(
             db=db, report_id=fixture["report_id"], definition_version=1,
