@@ -843,10 +843,57 @@ async def grant_platform_operator(
     return grants
 
 
+LAST_TRUST_ROOT_MESSAGE = (
+    "The final active operators:admin grant cannot be revoked; another active, "
+    "unexpired operators:admin grant must exist first"
+)
+
+
+async def _assert_trust_root_survives(
+    db: AsyncSession, *, rows_to_revoke: list[PlatformOperator]
+) -> None:
+    """Refuse a revocation that would remove the final effective trust root.
+
+    ``operators:admin`` is the only capability that can grant or revoke platform
+    operators, and bootstrap is deliberately one time and never a backdoor, so
+    removing the last effective grant would lock the platform out permanently. A
+    grant that is already revoked, or whose expiry has passed, is not authority
+    and therefore does not satisfy this guard.
+    """
+    if not any(
+        row.capability == PlatformCapability.OPERATORS_ADMIN.value
+        for row in rows_to_revoke
+    ):
+        return
+
+    revoking = {row.id for row in rows_to_revoke}
+    moment = utcnow()
+    rows = (
+        await db.execute(
+            select(PlatformOperator.id, PlatformOperator.expires_at).where(
+                PlatformOperator.capability == PlatformCapability.OPERATORS_ADMIN.value,
+                PlatformOperator.status == "active",
+            )
+        )
+    ).all()
+    for row_id, expires_at in rows:
+        if row_id in revoking:
+            continue
+        expires = _as_utc(expires_at)
+        if expires is not None and expires <= moment:
+            continue
+        return
+    raise AuthorizationError(LAST_TRUST_ROOT_MESSAGE, code="last_platform_trust_root")
+
+
 async def revoke_platform_operator(
     db: AsyncSession, *, principal_id: str, capability=None
 ) -> int:
-    """Revoke one capability, or every capability when none is named."""
+    """Revoke one capability, or every capability when none is named.
+
+    The final effective ``operators:admin`` trust root is protected: see
+    :func:`_assert_trust_root_survives`.
+    """
     query = select(PlatformOperator).where(
         PlatformOperator.principal_id == principal_id,
         PlatformOperator.status == "active",
@@ -858,6 +905,7 @@ async def revoke_platform_operator(
         query = query.where(PlatformOperator.capability == value)
 
     rows = (await db.execute(query)).scalars().all()
+    await _assert_trust_root_survives(db, rows_to_revoke=list(rows))
     for row in rows:
         row.status = "revoked"
         row.revoked_at = utcnow()

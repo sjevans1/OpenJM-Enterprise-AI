@@ -309,8 +309,8 @@ async def revoke_operator(
         revoked = await access_governance.revoke_platform_operator(
             db, principal_id=principal_id, capability=capability
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - mapped to HTTP below
+        raise _http_for(exc) from exc
     await db.commit()
     return {"revoked": revoked}
 

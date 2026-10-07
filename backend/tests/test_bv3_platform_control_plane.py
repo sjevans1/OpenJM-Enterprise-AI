@@ -207,13 +207,26 @@ async def test_operator_grant_and_revoke_apply_on_next_request(client, file_db):
     await _grant_local_operator(file_db, PlatformCapability.OPERATORS_ADMIN)
     assert (await client.get("/api/platform/operators")).status_code == 200
 
+    # A non-trust capability grant and revoke are visible on the next request.
+    await _grant_local_operator(file_db, PlatformCapability.METADATA_READ)
+    assert (await client.get("/api/platform/tenants")).status_code == 200
+
     async with file_db() as db:
         await governance.revoke_platform_operator(
-            db, principal_id=LEGACY_PRINCIPAL_ID, capability=PlatformCapability.OPERATORS_ADMIN
+            db, principal_id=LEGACY_PRINCIPAL_ID, capability=PlatformCapability.METADATA_READ
         )
         await db.commit()
 
-    assert (await client.get("/api/platform/operators")).status_code == 403
+    assert (await client.get("/api/platform/tenants")).status_code == 403
+
+    # The operators:admin trust root is protected; the guard itself is covered in
+    # the trust-root section below.
+    async with file_db() as db:
+        with pytest.raises(AuthorizationError):
+            await governance.revoke_platform_operator(
+                db, principal_id=LEGACY_PRINCIPAL_ID, capability=PlatformCapability.OPERATORS_ADMIN
+            )
+    assert (await client.get("/api/platform/operators")).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -402,3 +415,176 @@ def test_migration_0012_adds_support_delegations(tmp_path):
     finally:
         engine.dispose()
     assert "support_delegations" in tables
+
+
+# ---------------------------------------------------------------------------
+# PR #52 review correction: protect the final operators:admin trust root
+# ---------------------------------------------------------------------------
+
+
+async def _platform_account(db, subject: str, principal_id: str):
+    return await identity_service.get_or_create_principal(
+        db, subject=subject, principal_id=principal_id
+    )
+
+
+async def test_sole_operators_admin_cannot_revoke_its_own_capability(file_db):
+    async with file_db() as db:
+        await _platform_account(db, "oidc|sole-op", "op-sole")
+        await governance.grant_platform_operator(
+            db, principal_id="op-sole", capabilities=[PlatformCapability.OPERATORS_ADMIN]
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        with pytest.raises(AuthorizationError) as excinfo:
+            await governance.revoke_platform_operator(
+                db, principal_id="op-sole", capability=PlatformCapability.OPERATORS_ADMIN
+            )
+
+    assert excinfo.value.code == "last_platform_trust_root"
+
+    # The grant survives the refused revocation.
+    async with file_db() as db:
+        remaining = await governance.platform_capabilities_for(db, principal_id="op-sole")
+    assert PlatformCapability.OPERATORS_ADMIN in remaining
+
+
+async def test_sole_operators_admin_cannot_bulk_revoke_itself(file_db):
+    async with file_db() as db:
+        await _platform_account(db, "oidc|bulk-op", "op-bulk")
+        await governance.grant_platform_operator(
+            db,
+            principal_id="op-bulk",
+            capabilities=[PlatformCapability.METADATA_READ, PlatformCapability.OPERATORS_ADMIN],
+        )
+        await db.commit()
+
+    # No capability named: every active grant of the target is in scope, so the
+    # trust root would be removed and the whole revocation is refused.
+    async with file_db() as db:
+        with pytest.raises(AuthorizationError):
+            await governance.revoke_platform_operator(db, principal_id="op-bulk")
+
+    async with file_db() as db:
+        caps = await governance.platform_capabilities_for(db, principal_id="op-bulk")
+    assert {
+        PlatformCapability.METADATA_READ,
+        PlatformCapability.OPERATORS_ADMIN,
+    } <= caps
+
+
+async def test_revocation_succeeds_when_another_active_operators_admin_exists(file_db):
+    async with file_db() as db:
+        await _platform_account(db, "oidc|op-a", "op-a")
+        await _platform_account(db, "oidc|op-b", "op-b")
+        await governance.grant_platform_operator(
+            db, principal_id="op-a", capabilities=[PlatformCapability.OPERATORS_ADMIN]
+        )
+        await governance.grant_platform_operator(
+            db, principal_id="op-b", capabilities=[PlatformCapability.OPERATORS_ADMIN]
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        revoked = await governance.revoke_platform_operator(
+            db, principal_id="op-a", capability=PlatformCapability.OPERATORS_ADMIN
+        )
+        await db.commit()
+    assert revoked == 1
+
+    async with file_db() as db:
+        assert await governance.platform_capabilities_for(db, principal_id="op-a") == frozenset()
+        holder = await governance.platform_capabilities_for(db, principal_id="op-b")
+    assert PlatformCapability.OPERATORS_ADMIN in holder
+
+
+async def test_expired_second_operators_admin_does_not_satisfy_the_guard(file_db):
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with file_db() as db:
+        await _platform_account(db, "oidc|op-exp-a", "op-exp-a")
+        await _platform_account(db, "oidc|op-exp-b", "op-exp-b")
+        await governance.grant_platform_operator(
+            db, principal_id="op-exp-a", capabilities=[PlatformCapability.OPERATORS_ADMIN]
+        )
+        await governance.grant_platform_operator(
+            db,
+            principal_id="op-exp-b",
+            capabilities=[PlatformCapability.OPERATORS_ADMIN],
+            expires_at=past,
+        )
+        await db.commit()
+
+    # op-exp-b holds an active row, but its expiry has passed, so it is not
+    # authority and cannot license revoking the only effective grant.
+    async with file_db() as db:
+        with pytest.raises(AuthorizationError):
+            await governance.revoke_platform_operator(
+                db, principal_id="op-exp-a", capability=PlatformCapability.OPERATORS_ADMIN
+            )
+
+
+async def test_other_capabilities_remain_independently_revocable(file_db):
+    async with file_db() as db:
+        await _platform_account(db, "oidc|op-mix", "op-mix")
+        await governance.grant_platform_operator(
+            db,
+            principal_id="op-mix",
+            capabilities=[PlatformCapability.METADATA_READ, PlatformCapability.OPERATORS_ADMIN],
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        revoked = await governance.revoke_platform_operator(
+            db, principal_id="op-mix", capability=PlatformCapability.METADATA_READ
+        )
+        await db.commit()
+    assert revoked == 1
+
+    async with file_db() as db:
+        caps = await governance.platform_capabilities_for(db, principal_id="op-mix")
+    assert caps == frozenset({PlatformCapability.OPERATORS_ADMIN})
+
+
+async def test_revoke_route_protects_the_trust_root_with_403(client, file_db):
+    await _grant_local_operator(file_db, PlatformCapability.OPERATORS_ADMIN)
+
+    refused = await client.delete(
+        f"/api/platform/operators/{LEGACY_PRINCIPAL_ID}"
+        f"?capability={PlatformCapability.OPERATORS_ADMIN.value}"
+    )
+    assert refused.status_code == 403, refused.text
+
+    # A non-trust capability on the same principal is still revocable.
+    await _grant_local_operator(file_db, PlatformCapability.METADATA_READ)
+    allowed = await client.delete(
+        f"/api/platform/operators/{LEGACY_PRINCIPAL_ID}"
+        f"?capability={PlatformCapability.METADATA_READ.value}"
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["revoked"] == 1
+
+
+async def test_bootstrap_is_not_an_emergency_backdoor(file_db):
+    """A lapsed trust root keeps bootstrap closed.
+
+    Recovery from a platform lock-out must be a deliberate human operation, so
+    bootstrap's guard stays stricter than the authority check: any active row,
+    expired or not, keeps it shut.
+    """
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with file_db() as db:
+        await _platform_account(db, "oidc|op-lapsed", "op-lapsed")
+        await governance.grant_platform_operator(
+            db,
+            principal_id="op-lapsed",
+            capabilities=[PlatformCapability.OPERATORS_ADMIN],
+            expires_at=past,
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        with pytest.raises(BootstrapError):
+            await platform_bootstrap.bootstrap_first_operator(
+                db, subject="oidc|someone-else"
+            )
