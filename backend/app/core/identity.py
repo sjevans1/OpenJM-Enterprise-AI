@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from app.core.permissions import Permission, permissions_for_role
+from app.core.platform import PlatformCapability
 from app.core.tenancy import LEGACY_TENANT_ID
 
 
@@ -83,6 +84,15 @@ class Principal:
     email: str | None = None
     display_name: str | None = None
     permissions: frozenset[Permission] = field(default_factory=frozenset)
+    # BV1-A access context, resolved from the database on every request. These
+    # are data-side scopes (which governed information the principal may reach)
+    # and are kept separate from ``permissions`` (what the principal may do).
+    department_ids: frozenset[str] = field(default_factory=frozenset)
+    group_ids: frozenset[str] = field(default_factory=frozenset)
+    steward_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    # Platform (control-plane) capabilities, always an explicit grant and never
+    # derived from the tenant role.
+    platform_capabilities: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def user_id(self) -> str:
@@ -136,6 +146,51 @@ class Principal:
 
     def permission_strings(self) -> frozenset[str]:
         return frozenset(p.value for p in self.permissions)
+
+    # ------------------------------------------------------------------
+    # BV1-A: data-scope and platform-capability helpers
+    # ------------------------------------------------------------------
+
+    def in_group(self, group_id: str) -> bool:
+        return str(group_id) in self.group_ids
+
+    def in_department(self, department_id: str) -> bool:
+        return str(department_id) in self.department_ids
+
+    def is_steward_for(self, scope_type: str, scope_id: str) -> bool:
+        return (str(scope_type), str(scope_id)) in self.steward_scopes
+
+    def is_steward_anywhere(self) -> bool:
+        return bool(self.steward_scopes)
+
+    def has_platform(self, capability: PlatformCapability | str) -> bool:
+        value = (
+            capability.value
+            if isinstance(capability, PlatformCapability)
+            else str(capability)
+        )
+        return value in self.platform_capabilities
+
+    def require_platform(self, *capabilities: PlatformCapability | str) -> None:
+        """Fail closed unless every requested platform capability is granted.
+
+        Tenant role permissions are deliberately not consulted: a tenant owner
+        without an explicit platform grant holds no platform authority.
+        """
+        for capability in capabilities:
+            if not self.has_platform(capability):
+                name = (
+                    capability.value
+                    if isinstance(capability, PlatformCapability)
+                    else str(capability)
+                )
+                raise AuthorizationError(
+                    f"Principal {self.principal_id} lacks platform capability '{name}'",
+                    code="missing_platform_capability",
+                )
+
+    def platform_capability_strings(self) -> frozenset[str]:
+        return frozenset(self.platform_capabilities)
 
 
 def build_permissions(role: str | None) -> frozenset[Permission]:

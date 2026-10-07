@@ -50,6 +50,11 @@ class CallbackRequest(BaseModel):
     redirect_uri: str | None = Field(default=None, max_length=1024)
 
 
+class StewardScopeOut(BaseModel):
+    scope_type: str
+    scope_id: str
+
+
 class PrincipalOut(BaseModel):
     principal_id: str
     tenant_id: str
@@ -59,6 +64,13 @@ class PrincipalOut(BaseModel):
     email: str | None = None
     display_name: str | None = None
     permissions: list[str]
+    # BV1-A: the caller's own data-side scopes and platform capabilities. These
+    # are the principal's own context, so returning them lets permission-aware
+    # navigation be built without exposing another principal's authority.
+    department_ids: list[str] = Field(default_factory=list)
+    group_ids: list[str] = Field(default_factory=list)
+    steward_scopes: list[StewardScopeOut] = Field(default_factory=list)
+    platform_capabilities: list[str] = Field(default_factory=list)
 
 
 @router.get("/config")
@@ -99,6 +111,13 @@ async def whoami(principal: Principal = Depends(get_principal)):
         email=principal.email,
         display_name=principal.display_name,
         permissions=sorted(principal.permission_strings()),
+        department_ids=sorted(principal.department_ids),
+        group_ids=sorted(principal.group_ids),
+        steward_scopes=[
+            StewardScopeOut(scope_type=scope_type, scope_id=scope_id)
+            for scope_type, scope_id in sorted(principal.steward_scopes)
+        ],
+        platform_capabilities=sorted(principal.platform_capability_strings()),
     )
 
 

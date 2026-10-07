@@ -453,6 +453,190 @@ class AuditRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# BV1-A: authorization and information-governance foundation
+# ---------------------------------------------------------------------------
+
+
+class Department(Base):
+    """A client-defined business domain (HR, Finance, Operations, ...).
+
+    Tenant-scoped, and referenced by id rather than by display name or email
+    string. Departments are the grouping layer a data steward's delegated
+    authority and, from BV1-B/C, a source's policy are expressed against.
+    """
+
+    __tablename__ = "departments"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "slug", name="uq_department_tenant_slug"),
+        CheckConstraint("status IN ('active','archived')", name="ck_department_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class AccessGroup(Base):
+    """A client-defined authorization group inside one tenant.
+
+    The unit source policy is granted to from BV1-B/C onwards. A group may belong
+    to a department or stand alone as a cross-cutting group. The class is named
+    ``AccessGroup`` (table ``access_groups``) to keep the authorization meaning
+    explicit rather than an arbitrary grouping.
+    """
+
+    __tablename__ = "access_groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "slug", name="uq_access_group_tenant_slug"),
+        CheckConstraint("status IN ('active','archived')", name="ck_access_group_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    department_id: Mapped[str | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class GroupMembership(Base):
+    """Grants one principal membership of one group inside one tenant.
+
+    Re-reading this row on every request is what makes group membership and its
+    revocation take effect on the next authorized operation, with no cache to
+    expire.
+    """
+
+    __tablename__ = "group_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "group_id", "principal_id", name="uq_group_membership_principal"
+        ),
+        CheckConstraint("status IN ('active','revoked')", name="ck_group_membership_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    group_id: Mapped[str] = mapped_column(
+        ForeignKey("access_groups.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principal_accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+# The capability vocabulary and its DB check constraint must never drift; this
+# tuple is the single literal list shared by the model and the 0008 migration.
+PLATFORM_OPERATOR_CAPABILITIES_SQL = (
+    "('platform:metadata:read','platform:tenants:admin',"
+    "'platform:operators:admin','platform:content:support')"
+)
+
+
+class PlatformOperator(Base):
+    """One explicit platform capability granted to one principal account.
+
+    Platform authority is never derived from a tenant role. ``capability`` is one
+    of :class:`app.core.platform.PlatformCapability`; ``expires_at`` allows a
+    support grant to be time bound while metadata grants stay open ended.
+    """
+
+    __tablename__ = "platform_operators"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id", "capability", name="uq_platform_operator_capability"
+        ),
+        CheckConstraint(
+            f"capability IN {PLATFORM_OPERATOR_CAPABILITIES_SQL}",
+            name="ck_platform_operator_capability",
+        ),
+        CheckConstraint("status IN ('active','revoked')", name="ck_platform_operator_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principal_accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    capability: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    granted_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class DataSteward(Base):
+    """A delegated data-steward capability over one tenant-scoped scope.
+
+    ``scope_type`` is one of ``tenant``/``department``/``group`` and ``scope_id``
+    is the id of that scope (the tenant id itself for a tenant-wide steward).
+    Stewardship governs source curation; it is not a tenant role and does not
+    grant platform authority.
+    """
+
+    __tablename__ = "data_stewards"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "principal_id",
+            "scope_type",
+            "scope_id",
+            name="uq_data_steward_scope",
+        ),
+        CheckConstraint(
+            "scope_type IN ('tenant','department','group')", name="ck_data_steward_scope_type"
+        ),
+        CheckConstraint("status IN ('active','revoked')", name="ck_data_steward_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principal_accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    granted_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+# ---------------------------------------------------------------------------
 # VS6 — bounded action / agent runtime
 # ---------------------------------------------------------------------------
 
