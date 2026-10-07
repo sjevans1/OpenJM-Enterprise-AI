@@ -165,9 +165,17 @@ async def test_new_reservation_executes_exact_validated_intent_without_chat_rows
                 {"role": "system", "content": "Use only the governed report evidence."},
                 {"role": "user", "content": fixture["question"]},
             ],
-            {"max_tokens": 2048, "budget": ANY},
+            {
+                "max_tokens": 2048,
+                "budget": ANY,
+                "db": ANY,
+                "usage_context": ANY,
+            },
         )
     ]
+    # M1: the report-execution model call is attributed to this run.
+    assert gateway.calls[0][1]["usage_context"].request_id == f"report-run:{body['id']}"
+    assert gateway.calls[0][1]["usage_context"].tenant_id
     async with file_db() as db:
         assert (
             await db.scalar(select(func.count()).select_from(Conversation))
