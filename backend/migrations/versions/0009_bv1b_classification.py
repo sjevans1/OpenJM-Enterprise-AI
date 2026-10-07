@@ -1,6 +1,6 @@
 """BV1-B governed Knowledge source classification.
 
-Revision ID: 0009_bv1b_document_classification
+Revision ID: 0009_bv1b_classification
 Revises: 0008_bv1_authorization
 Create Date: 2026-10-07
 
@@ -25,7 +25,7 @@ from alembic import op
 from app.core.governance import DEFAULT_SOURCE_CLASSIFICATION
 from app.migrations_util import has_column, has_index, has_table
 
-revision = "0009_bv1b_document_classification"
+revision = "0009_bv1b_classification"
 down_revision = "0008_bv1_authorization"
 branch_labels = None
 depends_on = None

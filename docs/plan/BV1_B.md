@@ -66,7 +66,7 @@ foreign allowed groups are rejected.
 
 ## Migration
 
-`0009_bv1b_document_classification`: additive, idempotent per step,
+`0009_bv1b_classification`: additive, idempotent per step,
 rollback-aware. Existing rows receive `internal` / `tenant_visible=true` (no
 access change). SQLite cannot ALTER-ADD a constraint column for the department,
 so `department_id` is a plain column validated in the application.

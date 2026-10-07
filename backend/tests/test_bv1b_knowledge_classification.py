@@ -477,7 +477,7 @@ def test_revision_0009_adds_columns_idempotently_and_downgrades(tmp_path):
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'bv1b.db'}"
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0009_bv1b_document_classification"
+    assert current_revision(url) == "0009_bv1b_classification"
 
     engine = create_engine(sync_url_for(url), future=True)
     try:
@@ -493,4 +493,19 @@ def test_revision_0009_adds_columns_idempotently_and_downgrades(tmp_path):
 
     # Idempotent second pass.
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0009_bv1b_document_classification"
+    assert current_revision(url) == "0009_bv1b_classification"
+
+
+def test_all_revision_ids_fit_the_alembic_version_column():
+    """Alembic's version_num column is VARCHAR(32); a longer id breaks Postgres.
+
+    Caught only in CI (the local suite skips the PostgreSQL test when pgserver is
+    absent), so guard it in the ordinary suite.
+    """
+    import re
+    from pathlib import Path
+
+    for path in sorted(Path("migrations/versions").glob("*.py")):
+        match = re.search(r'^revision = "([^"]+)"', path.read_text(), re.M)
+        assert match, f"no revision id in {path.name}"
+        assert len(match.group(1)) <= 32, (path.name, match.group(1))
