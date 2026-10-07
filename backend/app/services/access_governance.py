@@ -53,6 +53,9 @@ from app.models import (
     Document,
     GroupMembership,
     PlatformOperator,
+    PrincipalAccount,
+    SupportDelegation,
+    Tenant,
     TenantMembership,
 )
 
@@ -114,6 +117,8 @@ class PrincipalAccess:
     department_ids: frozenset[str] = frozenset()
     group_ids: frozenset[str] = frozenset()
     steward_scopes: frozenset[tuple[str, str]] = frozenset()
+    # Active, unexpired OpenJM support delegations for this tenant.
+    support_scopes: frozenset[str] = frozenset()
 
 
 async def load_principal_access(
@@ -174,8 +179,36 @@ async def load_principal_access(
     )
 
     return PrincipalAccess(
-        department_ids=department_ids, group_ids=group_ids, steward_scopes=steward_scopes
+        department_ids=department_ids,
+        group_ids=group_ids,
+        steward_scopes=steward_scopes,
+        support_scopes=await _active_support_scopes(
+            db, principal_id=principal_id, tenant_id=tenant_id
+        ),
     )
+
+
+async def _active_support_scopes(
+    db: AsyncSession, *, principal_id: str, tenant_id: str
+) -> frozenset[str]:
+    """Active, unexpired OpenJM support delegations for this principal+tenant."""
+    moment = utcnow()
+    rows = (
+        await db.execute(
+            select(SupportDelegation.scope, SupportDelegation.expires_at).where(
+                SupportDelegation.tenant_id == tenant_id,
+                SupportDelegation.principal_id == principal_id,
+                SupportDelegation.status == "active",
+            )
+        )
+    ).all()
+    scopes: set[str] = set()
+    for scope, expires_at in rows:
+        expires = _as_utc(expires_at)
+        if expires is not None and expires <= moment:
+            continue
+        scopes.add(str(scope))
+    return frozenset(scopes)
 
 
 async def _effective_steward_scopes(
@@ -945,6 +978,135 @@ async def set_document_policy(
         metadata=audit_metadata,
     )
     return document
+
+
+# ---------------------------------------------------------------------------
+# BV3-A: OpenJM support delegations
+# ---------------------------------------------------------------------------
+
+SUPPORT_SCOPES: tuple[str, ...] = ("metadata", "content")
+
+
+def _require_operator(actor: Principal) -> None:
+    actor.require_platform(PlatformCapability.OPERATORS_ADMIN)
+
+
+async def list_support_delegations(
+    db: AsyncSession, *, tenant_id: str | None = None, principal_id: str | None = None
+) -> list[SupportDelegation]:
+    query = select(SupportDelegation)
+    if tenant_id is not None:
+        query = query.where(SupportDelegation.tenant_id == tenant_id)
+    if principal_id is not None:
+        query = query.where(SupportDelegation.principal_id == principal_id)
+    return list((await db.execute(query.order_by(SupportDelegation.created_at))).scalars().all())
+
+
+async def grant_support_delegation(
+    db: AsyncSession,
+    *,
+    actor: Principal,
+    tenant_id: str,
+    principal_id: str,
+    scope: str,
+    expires_at: datetime | None = None,
+) -> SupportDelegation:
+    """Delegate tenant-scoped OpenJM support authority to one operator account.
+
+    Only an operator with ``OPERATORS_ADMIN`` may delegate, and ``content``
+    support additionally requires the actor to hold ``CONTENT_SUPPORT``: an
+    authority cannot be delegated by someone who does not hold it. The delegation
+    is scoped to one tenant, auditable, revocable and optionally time-bounded.
+    """
+    _require_operator(actor)
+    if scope not in SUPPORT_SCOPES:
+        raise ValueError(f"Unsupported support scope: {scope!r}")
+    if scope == "content" and not actor.has_platform(PlatformCapability.CONTENT_SUPPORT):
+        raise AuthorizationError(
+            "Content support cannot be delegated without holding that capability",
+            code="missing_platform_capability",
+        )
+    if expires_at is not None:
+        expiry = _as_utc(expires_at)
+        if expiry is not None and expiry <= utcnow():
+            raise ValueError("Support delegation expiry must be in the future")
+
+    tenant = await db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise ValueError("Unknown tenant")
+    account = await db.get(PrincipalAccount, principal_id)
+    if account is None:
+        raise ValueError("Unknown principal account")
+
+    existing = (
+        await db.execute(
+            select(SupportDelegation).where(
+                SupportDelegation.tenant_id == tenant_id,
+                SupportDelegation.principal_id == principal_id,
+                SupportDelegation.scope == scope,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.status = "active"
+        existing.revoked_at = None
+        existing.expires_at = expires_at
+        existing.granted_by = actor.principal_id
+        await db.flush()
+        delegation = existing
+    else:
+        delegation = SupportDelegation(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            scope=scope,
+            status="active",
+            granted_by=actor.principal_id,
+            expires_at=expires_at,
+        )
+        db.add(delegation)
+        await db.flush()
+
+    await _audit(
+        db,
+        principal=actor,
+        action="platform.support.grant",
+        resource_type="support_delegation",
+        resource_id=f"{tenant_id}:{principal_id}:{scope}",
+        metadata={"scope": scope, "expires_at": expires_at.isoformat() if expires_at else None},
+    )
+    return delegation
+
+
+async def revoke_support_delegation(
+    db: AsyncSession, *, actor: Principal, tenant_id: str, principal_id: str, scope: str
+) -> int:
+    _require_operator(actor)
+    if scope not in SUPPORT_SCOPES:
+        raise ValueError(f"Unsupported support scope: {scope!r}")
+    delegation = (
+        await db.execute(
+            select(SupportDelegation).where(
+                SupportDelegation.tenant_id == tenant_id,
+                SupportDelegation.principal_id == principal_id,
+                SupportDelegation.scope == scope,
+                SupportDelegation.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if delegation is None:
+        return 0
+    delegation.status = "revoked"
+    delegation.revoked_at = utcnow()
+    await db.flush()
+    await _audit(
+        db,
+        principal=actor,
+        action="platform.support.revoke",
+        resource_type="support_delegation",
+        resource_id=f"{tenant_id}:{principal_id}:{scope}",
+        metadata={"scope": scope},
+    )
+    return 1
 
 
 async def set_data_source_policy(

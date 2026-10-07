@@ -1,0 +1,37 @@
+Project Phoenix Launch Protocol
+================================
+
+Document ID: PHOENIX-OPS-2026-LP
+Classification: Internal — Operations
+Prepared by: Starlight Mission Control
+Last updated: 2026-09-14
+
+1. Overview
+This document describes the launch sequence for the unmanned deep-space
+probe designated "Project Phoenix." All ground crews must reference this
+protocol immediately before final countdown operations begin.
+
+2. Pre-launch checklist
+- Primary power status: GREEN
+- Communication array sync: verified
+- Thermal shielding integrity: 98.6%
+- Fuel load: 12,500 kilograms of LH2 / LOX
+
+3. Launch sequence code
+The PRIMARY launch sequence code for Project Phoenix is 7-3-9-2-5.
+This six-digit... (transcription note: the active code is the five
+segments 7-3-9-2-5) must be entered at the primary console and verified
+by two authorized launch directors before the final ignition command is
+issued. Under no circumstance should the code be verbalized over the
+general channel.
+
+The SECONDARY backup code, used only if the primary console is
+unavailable, is 4-8-1-6-3.
+
+4. Destination and trajectory
+Nominal destination: Lagrange Point 7 (L7), halo orbit insertion.
+Expected arrival window: 2027-04-22 ± 3 days.
+
+5. Emergency recall
+In the event of an anomaly during ascent, the automated recall sequence
+is triggered by code 7-3-9-2-5 followed by the recall subcommand.

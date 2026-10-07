@@ -1247,6 +1247,51 @@ class Notification(Base):
 
 
 # ---------------------------------------------------------------------------
+# BV3-A: OpenJM support delegation (explicit, scoped, revocable, time-bounded)
+# ---------------------------------------------------------------------------
+
+
+class SupportDelegation(Base):
+    """One OpenJM operator's explicit, tenant-scoped support authority.
+
+    Platform authority is global; a delegation is per tenant and per scope. The
+    ``metadata`` scope permits tenant-metadata administration only. The
+    ``content`` scope is the only record that can support access to customer
+    content, it is always granted explicitly, and it is revoked or expires
+    without touching tenant ownership.
+    """
+
+    __tablename__ = "support_delegations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "principal_id", "scope", name="uq_support_delegation"
+        ),
+        CheckConstraint("scope IN ('metadata','content')", name="ck_support_delegation_scope"),
+        CheckConstraint(
+            "status IN ('active','revoked')", name="ck_support_delegation_status"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principal_accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    granted_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+# ---------------------------------------------------------------------------
 # #46 M1: immutable LLM usage metering
 # ---------------------------------------------------------------------------
 
