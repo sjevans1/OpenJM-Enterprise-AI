@@ -65,6 +65,9 @@ class ModelGatewayError(RuntimeError):
 
     def __init__(self, message: str, *, category: str = "bad_response") -> None:
         self.category = category if category in FAILURE_CATEGORIES else "bad_response"
+        # Set by the gateway when a provider attempt consumed tokens but failed,
+        # so the caller can persist the usage evidence after its own rollback.
+        self.pending_usage: dict | None = None
         super().__init__(message)
 
 
@@ -419,20 +422,20 @@ class OpenAICompatibleModelGateway:
                 ),
                 extra={"category": "model_provider", "failure_category": category},
             )
-            await self._meter(
-                usage_context=usage_context,
-                db=db,
-                call_role=call_role,
-                attempt=attempt,
-                status="failed",
-                failure_category=category,
-                provider_usage=None,
-                prompt_text=_prompt_text(payload),
-                completion_text="",
-                started_at=started_wall,
-                parent_call_id=parent_call_id,
-            )
-            raise provider_failure(category) from exc
+            error = provider_failure(category)
+            # A consumed attempt must outlive the caller's own rollback: hand the
+            # evidence to the caller, which persists it after discarding the
+            # abandoned business turn (usage_metering.record_pending_failure).
+            error.pending_usage = {
+                "context": usage_context,
+                "call_role": call_role,
+                "attempt": attempt,
+                "failure_category": category,
+                "prompt_text": _prompt_text(payload),
+                "started_at": started_wall,
+                "parent_call_id": parent_call_id,
+            }
+            raise error from exc
         if budget is not None:
             budget.check_wall(datetime.now(timezone.utc))
         content = self._extract_content(body)
@@ -507,10 +510,9 @@ class OpenAICompatibleModelGateway:
                 parent_call_id=parent_call_id,
                 started_at=started_at,
             )
-            await db.flush()
             return event.id if event is not None else None
-        except Exception:  # noqa: BLE001 - metering must not break the model path
-            logger.warning("model usage metering failed", exc_info=False)
+        except Exception as exc:  # noqa: BLE001 - metering must not break the model path
+            logger.warning("model usage metering failed: %r", exc)
             return None
 
     async def chat(

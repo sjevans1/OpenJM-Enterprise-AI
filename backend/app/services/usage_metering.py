@@ -123,6 +123,31 @@ def _idempotency_key(context: UsageContext, call_role: str, attempt: int) -> str
     return f"{context.request_id}:{call_role}:{attempt}"
 
 
+async def _find_existing(db: AsyncSession, key: str) -> ModelUsageEvent | None:
+    return (
+        await db.execute(
+            select(ModelUsageEvent).where(ModelUsageEvent.idempotency_key == key)
+        )
+    ).scalar_one_or_none()
+
+
+def _independent_session(db: AsyncSession) -> AsyncSession | None:
+    """A separate session on the same engine, for durable metering.
+
+    Metering is observational/commercial infrastructure: a failed business
+    request must not erase the evidence that a model was invoked. When the
+    caller's session is bound to an engine we can open a short-lived session that
+    commits on its own, leaving the caller's unit of work untouched.
+    """
+    bind = getattr(db, "bind", None)
+    if bind is None:
+        return None
+    try:
+        return AsyncSession(bind=bind, expire_on_commit=False)
+    except Exception:  # noqa: BLE001 - fall back to the caller session
+        return None
+
+
 async def record_model_usage(
     db: AsyncSession,
     *,
@@ -138,22 +163,26 @@ async def record_model_usage(
     started_at: datetime | None = None,
     finished_at: datetime | None = None,
 ) -> ModelUsageEvent | None:
-    """Finalize one model invocation, exactly once.
+    """Finalize one model invocation, exactly once, inside the caller's work.
 
-    Returns the existing row when the same (request, role, attempt) was already
-    finalized, so a retry or a replayed request cannot create a second row. When
-    no usage is supplied and no provider usage was available, an estimate is
-    derived from the prompt/completion text and marked ``estimated``.
+    Exactly-once: the row key is ``<request_id>:<call_role>:<attempt>``. A replay
+    resolves to the existing row.
+
+    Conflict handling never rolls back the caller's transaction: the insert runs
+    inside a SAVEPOINT, so a unique-constraint race unwinds only the savepoint and
+    unrelated pending caller state survives and still commits.
+
+    A failure that must outlive the caller's own rollback (a consumed model
+    attempt whose business request is being abandoned) is handled by the caller
+    via :func:`record_pending_failure` after that rollback, not by a second
+    session here: a second session cannot commit while the caller holds the
+    database's write lock.
     """
     if not context.tenant_id or not context.request_id:
         return None
 
     key = _idempotency_key(context, call_role, attempt)
-    existing = (
-        await db.execute(
-            select(ModelUsageEvent).where(ModelUsageEvent.idempotency_key == key)
-        )
-    ).scalar_one_or_none()
+    existing = await _find_existing(db, key)
     if existing is not None:
         return existing
 
@@ -180,23 +209,51 @@ async def record_model_usage(
         call_role=call_role,
         parent_call_id=parent_call_id,
         idempotency_key=key,
-        status=status if status in (USAGE_STATUS_SUCCEEDED, USAGE_STATUS_FAILED) else USAGE_STATUS_SUCCEEDED,
+        status=(
+            status
+            if status in (USAGE_STATUS_SUCCEEDED, USAGE_STATUS_FAILED)
+            else USAGE_STATUS_SUCCEEDED
+        ),
         failure_category=failure_category,
         started_at=started_at or now,
         finished_at=finished_at or now,
     )
-    db.add(event)
+
     try:
-        await db.flush()
+        async with db.begin_nested():
+            db.add(event)
+            await db.flush()
+        return event
     except IntegrityError:
-        # Concurrent finalization of the same key: keep the winner.
-        await db.rollback()
-        return (
-            await db.execute(
-                select(ModelUsageEvent).where(ModelUsageEvent.idempotency_key == key)
-            )
-        ).scalar_one_or_none()
-    return event
+        return await _find_existing(db, key)
+
+
+async def record_pending_failure(db: AsyncSession, pending: dict) -> ModelUsageEvent | None:
+    """Persist a failed model attempt the caller captured from a gateway error.
+
+    Called AFTER the caller has rolled back its business transaction, so the
+    metering write starts from a clean transaction and cannot be undone by, or
+    interfere with, unrelated state.
+    """
+    if not isinstance(pending, dict):
+        return None
+    context = pending.get("context")
+    if context is None:
+        return None
+    return await record_model_usage(
+        db,
+        context=context,
+        usage=None,
+        call_role=pending.get("call_role", UsageCallRole.PRIMARY.value),
+        attempt=int(pending.get("attempt", 0)),
+        status=USAGE_STATUS_FAILED,
+        failure_category=pending.get("failure_category"),
+        parent_call_id=pending.get("parent_call_id"),
+        prompt_text=pending.get("prompt_text", ""),
+        completion_text="",
+        started_at=pending.get("started_at"),
+        finished_at=utcnow(),
+    )
 
 
 async def summarize_usage(

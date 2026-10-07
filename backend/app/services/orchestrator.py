@@ -142,6 +142,42 @@ def _request_access_for(user_id: str) -> DocumentAccess | None:
     return access_from_principal(principal)
 
 
+async def _persist_pending_usage(db, exc) -> None:
+    """Record a consumed planner attempt that was abandoned, into the caller's work.
+
+    The caller (chat route or report run) commits its unit of work, so the row
+    survives without opening a second transaction.
+    """
+    pending = getattr(exc, "pending_usage", None)
+    if not pending:
+        return
+    from app.services.usage_metering import record_pending_failure
+
+    await record_pending_failure(db, pending)
+
+
+def _usage_context_for(user_id: str, request_id: str | None, execution_class: str):
+    """Metering attribution for a planner call on the current request.
+
+    None when there is no matching validated principal, so an internal call path
+    does not invent attribution.
+    """
+    from app.core.context import current_principal_or_none
+    from app.services.usage_metering import UsageContext
+
+    principal = current_principal_or_none()
+    if principal is None or principal.user_id != user_id:
+        return None
+    return UsageContext(
+        tenant_id=principal.tenant_id,
+        request_id=request_id or str(uuid4()),
+        provider_route=settings.model_provider_mode or "local",
+        model_name=settings.model_name,
+        principal_id=principal.principal_id,
+        execution_class=execution_class,
+    )
+
+
 class OpenJMOrchestrator:
     """Routes an explicit user-selected execution mode into the governed
     capability path the user chose.
@@ -258,8 +294,10 @@ class OpenJMOrchestrator:
                 user_id,
                 **({"scope": scope} if scope is not None else {}),
                 budget=budget,
+                usage_context=_usage_context_for(user_id, request_id, "structured"),
             )
-        except StructuredPlannerError:
+        except StructuredPlannerError as exc:
+            await _persist_pending_usage(db, exc)
             return ExecutionPlan(
                 execution_class="structured",
                 system_prompt="",
@@ -988,8 +1026,10 @@ class OpenJMOrchestrator:
                 user_id,
                 **({"scope": scope} if scope is not None else {}),
                 budget=budget,
+                usage_context=_usage_context_for(user_id, request_id, "structured"),
             )
-        except StructuredPlannerError:
+        except StructuredPlannerError as exc:
+            await _persist_pending_usage(db, exc)
             return ExecutionPlan(
                 execution_class="hybrid",
                 system_prompt=self._hybrid_system_prompt(

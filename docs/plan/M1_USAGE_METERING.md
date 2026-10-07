@@ -58,16 +58,32 @@ fast-path pre-check does **not** fail the suite, because the unique constraint a
 the `IntegrityError` fallback still enforce exactly-once: the guard is
 defence-in-depth rather than a single point.
 
+## Correction pass (PR #51 review)
+
+- **Per-turn request identity.** The Chat route now mints a fresh `uuid4` per
+  submission as the correlation id and passes it both to the orchestrator and to
+  the gateway. `conversation_id` is stored separately for aggregation, so two
+  turns in one conversation are two distinct billable events.
+- **Transaction-safe exactly-once.** `record_model_usage` inserts inside a
+  SAVEPOINT, so a unique-constraint race unwinds only the savepoint. It never
+  calls `rollback()` on the caller's session, so unrelated pending business state
+  survives and still commits.
+- **Failed attempts keep evidence without orphan Chat state.** On a provider
+  failure the gateway attaches the consumed-attempt evidence to the raised
+  error. The Chat route rolls back the abandoned turn (no orphan user message),
+  then persists the failure usage row on its own and commits. Report runs do the
+  same after marking the run failed; the orchestrator does it for an abandoned
+  planner attempt. A second session is deliberately **not** used: it cannot
+  commit while the caller holds SQLite's write lock.
+- **Invocation coverage.** The structured-planner and report-execution model
+  calls are now metered through the central gateway (successful calls record
+  usage; abandoned attempts record a failure row). Ordinary Chat, planner and
+  report execution are all covered.
+
 ## NOT RUN / limitations
 
-- Failed-attempt usage rows are written into the caller's unit of work and are
-  therefore rolled back if the request aborts before its commit. An independent
-  usage-commit (its own transaction) is intentionally **not** implemented in M1
-  because committing inside the gateway would also commit the caller's pending
-  conversation rows and break the accepted chat-history integrity contract.
-- Structured-planner and report-execution model calls are not yet threaded with a
-  usage context; only the ordinary Chat route is wired in M1.
 - Local model token accounting uses the deterministic estimate, not a real
   tokenizer.
 - No pricing/entitlement conversion, no admin views.
-- GitHub CI: NOT RUN (object writes unavailable).
+- GitHub CI for the correction head: dispatched, see the PR freeze comment.
+

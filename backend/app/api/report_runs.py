@@ -483,6 +483,8 @@ async def _execute_owned_run(
 
     try:
         remaining = budget.remaining_seconds()
+        from app.services.usage_metering import UsageContext
+
         answer = await asyncio.wait_for(
             model_gateway.chat(
                 [
@@ -491,13 +493,30 @@ async def _execute_owned_run(
                 ],
                 max_tokens=2048,
                 budget=budget,
+                db=db,
+                usage_context=UsageContext(
+                    tenant_id=current_principal().tenant_id,
+                    request_id=f"report-run:{run_id}",
+                    provider_route=settings.model_provider_mode or "local",
+                    model_name=settings.model_name,
+                    principal_id=current_principal().principal_id,
+                    execution_class=mode,
+                ),
             ),
             timeout=remaining,
         )
-    except ModelGatewayError:
-        return await _fail_owned_run(
+    except ModelGatewayError as exc:
+        failure = await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="model"
         )
+        # A consumed model attempt whose run was abandoned still bills.
+        pending = getattr(exc, "pending_usage", None)
+        if pending is not None:
+            from app.services.usage_metering import record_pending_failure
+
+            await record_pending_failure(db, pending)
+            await db.commit()
+        return failure
     except (BudgetExceeded, TimeoutError):
         return await _fail_owned_run(
             db, run_id=run_id, fingerprint=fingerprint, category="budget_exceeded"

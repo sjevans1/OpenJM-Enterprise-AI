@@ -23,7 +23,11 @@ from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
 
 class StructuredPlannerError(RuntimeError):
-    pass
+    """A bounded planner failure; may carry consumed-attempt usage evidence."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message)
+        self.pending_usage: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -396,6 +400,7 @@ class StructuredPlanner:
         user_id: str,
         scope: ReportSourceScope | None = None,
         budget: ReportRunBudget | None = None,
+        usage_context: object = None,
     ) -> StructuredPlanningResult:
         sources = (
             await self._sources(db, user_id)
@@ -434,9 +439,13 @@ class StructuredPlanner:
                 temperature=0.0,
                 max_tokens=700,
                 budget=budget,
+                usage_context=usage_context,
+                db=db,
             )
         except ModelGatewayError as exc:
-            raise StructuredPlannerError(str(exc)) from exc
+            error = StructuredPlannerError(str(exc))
+            error.pending_usage = getattr(exc, "pending_usage", None)
+            raise error from exc
 
         payload = self._extract_json(raw)
         use_structured = payload.get("use_structured")

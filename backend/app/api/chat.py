@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -132,12 +133,17 @@ async def chat(
         await db.flush()
         history = []
 
+    # One correlation id per user turn. It is deliberately NOT the conversation
+    # id: two turns in one conversation are two distinct billable requests, and
+    # every attempt/retry/fallback of this turn shares this one id.
+    turn_request_id = str(uuid4())
     plan = await orchestrator.plan(
         message=request.message,
         db=db,
         user_id=current_principal().user_id,
         conversation_id=conversation.id,
         mode=request.mode,
+        request_id=turn_request_id,
     )
 
     if conversation.title == "New conversation":
@@ -175,7 +181,7 @@ async def chat(
                 db=db,
                 usage_context=UsageContext(
                     tenant_id=current_principal().tenant_id,
-                    request_id=str(conversation.id),
+                    request_id=turn_request_id,
                     provider_route=settings.model_provider_mode or "local",
                     model_name=settings.model_name,
                     principal_id=current_principal().principal_id,
@@ -184,7 +190,16 @@ async def chat(
                 ),
             )
         except ModelGatewayError as exc:
+            # Preserve the metering evidence for a consumed attempt: drop the
+            # abandoned business turn (no orphan user message), then commit the
+            # usage row on its own, so the failed request still bills.
+            pending = getattr(exc, "pending_usage", None)
             await db.rollback()
+            if pending is not None:
+                from app.services.usage_metering import record_pending_failure
+
+                await record_pending_failure(db, pending)
+                await db.commit()
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     assistant_message = Message(

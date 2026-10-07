@@ -69,7 +69,18 @@ class DirectAnswerOrchestrator:
     def __init__(self, answer_text="The answer."):
         self.answer_text = answer_text
 
-    async def plan(self, message, db, user_id, conversation_id=None, mode="chat"):
+    async def plan(
+        self,
+        message,
+        db,
+        user_id,
+        conversation_id=None,
+        mode="chat",
+        scope=None,
+        request_id=None,
+        budget=None,
+        access=None,
+    ):
         return SimpleNamespace(
             execution_class="general",
             system_prompt="You are OpenJM Enterprise AI.",
