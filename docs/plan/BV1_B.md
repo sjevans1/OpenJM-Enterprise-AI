@@ -9,20 +9,26 @@ Give governed Knowledge documents a source-level classification and policy, and
 enforce it **before retrieval**: an unauthorized document must never become a
 retrieval candidate, evidence, citation, report pin, or model context.
 
-## Interpretation (stricter reading, per package rule 6 and the global boundary)
+## Interpretation (resolved product decision)
 
-The accepted data model scopes Knowledge documents to the owner
-(`Document.user_id`, tenant-qualified) plus connector-authorized documents. The
-package's proposed baseline says `internal` is "visible to authenticated tenant
-members", which would widen retrieval from owner-scope to tenant-wide and would
-also need reconciling with the connector authorization gate.
+Superseded the earlier stricter reading. Per the human product decision on
+Issue #45 and PR #48:
 
-This increment therefore applies classification as an **additional restriction**
-on the existing candidate set, and does **not** introduce tenant-wide sharing of
-`internal` documents across owners. This is the stricter interpretation the
-package instructs us to choose on conflict, and it preserves the accepted
-retrieval scope. Enabling tenant-wide internal sharing is recorded as NOT RUN and
-left for explicit human review.
+- a native OpenJM source classified `public` or `internal` with
+  `tenant_visible=true` is available to **all active members of the tenant**,
+  subject to normal capability permissions. Source ownership is a
+  curation/management boundary, not the ordinary consumption boundary;
+- `confidential` requires explicit authorized groups/departments/steward/admin
+  policy; `highly_restricted` requires explicit narrow authorization with no
+  tenant-wide fallback;
+- tenant isolation and RBAC capability permission remain mandatory;
+- **connector-origin content is an intersecting gate**: it must satisfy the
+  current connector authorization gate AND the classification/group policy.
+  Classification never widens a connector's provider-side authorization.
+
+Enforcement selects the tenant-wide candidate set
+(`document_policy.governed_tenant_documents`) and removes connector-origin
+documents that the connector gate does not currently authorize.
 
 ## Classification model
 
@@ -83,6 +89,5 @@ foreign-tenant safety, and the 0009 migration.
 
 ## NOT RUN
 
-- Tenant-wide `internal` sharing across owners (deliberate; needs a product
-  decision and connector-gate reconciliation).
 - Data / SQL / Hybrid / Reports source-policy propagation (Package 2, BV1-C).
+- Per-object/table classification labels.

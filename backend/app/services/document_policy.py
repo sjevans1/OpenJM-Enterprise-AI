@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from sqlalchemy import select
+
 from app.core.governance import (
     TENANT_WIDE_CLASSIFICATIONS,
     StewardScopeType,
@@ -113,3 +115,73 @@ def visible_documents(access: DocumentAccess | None, documents):
     if access is None:
         return list(documents)
     return [document for document in documents if document_is_visible(access, document)]
+
+
+# ---------------------------------------------------------------------------
+# Governed tenant-wide selection (resolved product decision)
+# ---------------------------------------------------------------------------
+
+
+async def connector_origin_document_ids(db, *, tenant_id: str) -> frozenset[str]:
+    """Document ids whose content is carried from an external connector."""
+    from app.models import ExternalResource
+
+    rows = (
+        await db.execute(
+            select(ExternalResource.document_id).where(
+                ExternalResource.tenant_id == tenant_id,
+                ExternalResource.document_id.is_not(None),
+            )
+        )
+    ).scalars().all()
+    return frozenset(str(row) for row in rows if row)
+
+
+async def governed_tenant_documents(db, access: DocumentAccess) -> list:
+    """Tenant-wide, policy-filtered Knowledge candidate set.
+
+    Implements the resolved product decision: a native source classified
+    ``public``/``internal`` with ``tenant_visible`` is available to every active
+    member of the tenant, not only to its uploader. Source ownership is a
+    curation boundary, not the ordinary consumption boundary.
+
+    Connector-origin content is an intersecting gate: it must satisfy the
+    current connector authorization gate AND the classification/group policy.
+    Classification never widens a connector's provider-side authorization.
+    Tenant isolation is preserved by the ``tenant_id`` predicate.
+    """
+    from app.models import Document
+    from app.services.document_lifecycle import retrievable_filter
+
+    rows = (
+        (
+            await db.execute(
+                select(Document)
+                .where(Document.tenant_id == access.tenant_id, *retrievable_filter())
+                .order_by(Document.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    connector_origin = await connector_origin_document_ids(db, tenant_id=access.tenant_id)
+    authorized_connector_ids: frozenset[str] = frozenset()
+    if connector_origin:
+        from app.services.connectors.authorization import (
+            authorized_connector_document_ids_for_context,
+        )
+
+        authorized_connector_ids = frozenset(
+            await authorized_connector_document_ids_for_context(db) or ()
+        )
+
+    selected = []
+    for document in rows:
+        if not document_is_visible(access, document):
+            continue
+        if document.id in connector_origin and document.id not in authorized_connector_ids:
+            # Connector content needs BOTH gates.
+            continue
+        selected.append(document)
+    return selected

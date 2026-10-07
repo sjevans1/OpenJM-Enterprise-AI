@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import DataSource, Document
 from app.services.document_lifecycle import retrievable_filter
-from app.services.document_policy import DocumentAccess, visible_documents
+from app.services.document_policy import (
+    DocumentAccess,
+    governed_tenant_documents,
+    visible_documents,
+)
 from app.services.report_scope import ReportSourceScope, ReportScopeError
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
 from app.services.dependent_hybrid import (
@@ -153,6 +157,21 @@ class OpenJMOrchestrator:
         scope: ReportSourceScope | None = None,
         access: DocumentAccess | None = None,
     ) -> list[Document]:
+        # Governed, tenant-wide retrieval (resolved product decision): a native
+        # public/internal source with tenant_visible is available to every active
+        # member of the tenant; connector content additionally needs the current
+        # connector authorization gate. See app.services.document_policy.
+        if access is not None:
+            documents = await governed_tenant_documents(db, access)
+            if scope is not None:
+                pinned = set(scope.document_ids)
+                documents = [item for item in documents if item.id in pinned]
+                if {item.id for item in documents} != pinned:
+                    raise ReportScopeError("Pinned Knowledge document is no longer available")
+            return documents
+
+        # Legacy owner/connector path for internal callers that supply no
+        # request identity (direct service/test use; never the HTTP path).
         # Connector-owned documents are admitted only through the current
         # authorization gate. That gate re-asks the provider whether this
         # principal's mapped user may still see each resource, and returns an

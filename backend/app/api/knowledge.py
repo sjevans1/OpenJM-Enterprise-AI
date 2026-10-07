@@ -17,7 +17,11 @@ from app.schemas import DocumentOut, IngestResponse
 from app.services import access_governance
 from app.services import document_lifecycle as lifecycle
 from app.services import identity as identity_service
-from app.services.document_policy import access_from_principal, visible_documents
+from app.services.document_policy import (
+    access_from_principal,
+    governed_tenant_documents,
+    visible_documents,
+)
 from app.services.knowledge import KnowledgeEngineError, knowledge_engine
 
 
@@ -68,14 +72,11 @@ async def list_documents(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require(Permission.KNOWLEDGE_READ)),
 ):
-    result = await db.execute(
-        select(Document)
-        .where(*_owned(principal), Document.deleted_at.is_(None))
-        .order_by(Document.created_at.desc())
-    )
-    # BV1-B: a document the caller is not authorized to use does not appear in
-    # the catalog either, so the listing cannot leak its existence.
-    documents = visible_documents(access_from_principal(principal), result.scalars().all())
+    # Governed, tenant-wide listing (resolved product decision): an active tenant
+    # member sees the tenant's public/internal documents; confidential and
+    # highly-restricted require explicit authorization, and connector content
+    # also passes the connector gate inside governed_tenant_documents.
+    documents = await governed_tenant_documents(db, access_from_principal(principal))
     return [_document_out(document) for document in documents]
 
 
