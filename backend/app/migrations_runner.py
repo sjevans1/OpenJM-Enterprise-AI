@@ -54,7 +54,11 @@ def sync_url_for(database_url: str) -> str:
 def _alembic_config(sync_url: str) -> Config:
     config = Config(str(ALEMBIC_INI))
     config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
-    config.set_main_option("sqlalchemy.url", sync_url)
+    # Alembic stores options in a configparser file, where '%' starts an
+    # interpolation. Percent-encoded URLs (a unix-socket host, a password
+    # containing '%') would otherwise raise "invalid interpolation syntax" at
+    # startup. Escape the value so any valid database URL is accepted.
+    config.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
     return config
 
 

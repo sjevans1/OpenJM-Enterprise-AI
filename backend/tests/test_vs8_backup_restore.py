@@ -126,3 +126,11 @@ def test_config_snapshot_never_inlines_secret_values(tmp_path) -> None:
     snapshot = (backup / "config" / "effective-config.json").read_text()
     assert "top-secret-key" not in snapshot
     assert "model_api_key_present" in snapshot
+
+
+def test_libpq_url_strips_sqlalchemy_driver_suffix() -> None:
+    from app.ops.backup import _libpq_url
+
+    assert _libpq_url("postgresql+asyncpg://u@/db?host=/x") == "postgresql://u@/db?host=/x"
+    assert _libpq_url("postgresql+psycopg://u@h/db") == "postgresql://u@h/db"
+    assert _libpq_url("postgresql://u@h/db") == "postgresql://u@h/db"

@@ -64,6 +64,27 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _bin(name: str) -> str:
+    """Resolve a PostgreSQL client binary.
+
+    Prefer one on PATH; fall back to the binaries bundled with ``pgserver`` (the
+    dependency that provides a real PostgreSQL for acceptance), so a deployment
+    that has a server but not the client tools on PATH still backs up.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    try:
+        import pgserver
+
+        candidate = Path(pgserver.__file__).parent / "pginstall" / "bin" / name
+        if candidate.exists():
+            return str(candidate)
+    except Exception:  # noqa: BLE001 - optional dependency
+        pass
+    return name
+
+
 def _sqlite_online_backup(source: Path, destination: Path) -> None:
     """Transactionally consistent copy of a live SQLite database."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +107,18 @@ def _sqlite_path(url: str) -> Path:
     # sqlite+aiosqlite:///abs/path  ->  /abs/path
     _, _, rest = url.partition(":///")
     return Path(rest)
+
+
+def _libpq_url(database_url: str) -> str:
+    """Strip a SQLAlchemy driver suffix so libpq clients (pg_dump/psql) accept it.
+
+    ``postgresql+asyncpg://…`` -> ``postgresql://…``. The query form
+    (``?host=/socket/dir``) is already libpq-compatible.
+    """
+    for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql+psycopg2://"):
+        if database_url.startswith(prefix):
+            return "postgresql://" + database_url[len(prefix):]
+    return database_url
 
 
 @dataclass
@@ -170,7 +203,7 @@ def create_backup(
         try:
             with dump.open("wb") as handle:
                 subprocess.run(
-                    ["pg_dump", "--format=plain", "--no-owner", database_url],
+                    [_bin("pg_dump"), "--format=plain", "--no-owner", _libpq_url(database_url)],
                     check=True,
                     stdout=handle,
                 )
@@ -309,14 +342,28 @@ def restore_backup(
     manifest = json.loads((backup / MANIFEST_NAME).read_text(encoding="utf-8"))
     restored: list[str] = []
 
-    if not _database_is_sqlite(target_database_url):
-        raise BackupError("restore currently supports a SQLite target in this toolkit")
-
-    db_source = backup / "db" / "openjm.db"
-    db_target = _sqlite_path(target_database_url)
-    db_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(db_source, db_target)
-    restored.append(str(db_target))
+    if _database_is_sqlite(target_database_url):
+        db_source = backup / "db" / "openjm.db"
+        db_target = _sqlite_path(target_database_url)
+        db_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(db_source, db_target)
+        restored.append(str(db_target))
+    elif target_database_url.startswith("postgresql"):
+        if manifest.get("database_engine") != "postgresql":
+            raise BackupError("backup engine does not match a PostgreSQL target")
+        dump = backup / "db" / "openjm.pg.sql"
+        if not dump.exists():
+            raise BackupError("backup has no PostgreSQL dump to restore")
+        try:
+            subprocess.run(
+                [_bin("psql"), _libpq_url(target_database_url), "-v", "ON_ERROR_STOP=1", "-f", str(dump)],
+                check=True, capture_output=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise BackupError(f"psql restore failed: {exc}") from exc
+        restored.append("postgresql target restored from pg_dump")
+    else:
+        raise BackupError(f"unsupported restore target: {target_database_url}")
 
     uploads_archive = backup / "uploads.tar.gz"
     if uploads_archive.exists():
