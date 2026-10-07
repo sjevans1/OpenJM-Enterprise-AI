@@ -423,11 +423,15 @@ export const api = {
         body: JSON.stringify({ idempotency_key: idempotencyKey }),
       },
     ),
-  saveReport: (messageId: string) =>
+  saveReport: (messageId: string, title?: string) =>
     request<SavedReportDetail>('/api/reports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message_id: messageId }),
+      body: JSON.stringify(
+        title !== undefined && title !== null
+          ? { message_id: messageId, title }
+          : { message_id: messageId },
+      ),
     }),
   deleteReport: async (id: string): Promise<void> => {
     const response = await authorizedFetch(`/api/reports/${encodeURIComponent(id)}`, {

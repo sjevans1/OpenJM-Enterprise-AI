@@ -102,11 +102,12 @@ test('connectors and operations surfaces mount from the sidebar and load on dema
   expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/connectors'))).toBe(false)
   expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/operations'))).toBe(false)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Connectors' }))
-  expect(await screen.findByText('Workspace prod')).toBeTruthy()
-  expect(screen.getByRole('heading', { name: 'Connectors' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /Reports/ }))
+  await screen.findByRole('heading', { name: 'Saved Reports' })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Operations' }))
-  expect(await screen.findByText('Workspace incremental')).toBeTruthy()
-  expect(screen.getByLabelText('Operation')).toBeTruthy()
+  // BV2: raw control-plane surfaces are no longer in ordinary customer
+  // navigation. Server-side relocation into platform admin remains BV3-C; this
+  // is a navigation cleanup, not a security claim.
+  expect(screen.queryByRole('button', { name: 'Connectors' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Operations' })).toBeNull()
 })

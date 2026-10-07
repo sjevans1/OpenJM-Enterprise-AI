@@ -2,7 +2,6 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   BrainCircuit,
-  CalendarClock,
   ChevronDown,
   ChevronRight,
   Database,
@@ -11,7 +10,6 @@ import {
   Gauge,
   LogOut,
   MessageSquareText,
-  Plug,
   Plus,
   Send,
   Settings,
@@ -265,6 +263,7 @@ export default function App() {
   const [chatError, setChatError] = useState<string | null>(null)
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [uploading, setUploading] = useState(false)
+  const [uploadingName, setUploadingName] = useState<string | null>(null)
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null)
   const [dataSources, setDataSources] = useState<DataSourceRecord[]>([])
   const [dataError, setDataError] = useState<string | null>(null)
@@ -277,6 +276,7 @@ export default function App() {
   const [activeReport, setActiveReport] = useState<SavedReportDetail | null>(null)
   const [reportError, setReportError] = useState<string | null>(null)
   const [reportBusyId, setReportBusyId] = useState<string | null>(null)
+  const [reportDraft, setReportDraft] = useState<{ messageId: string; title: string } | null>(null)
   const [reportDefinitions, setReportDefinitions] = useState<ReportDefinition[]>([])
   const [activeDefinition, setActiveDefinition] = useState<ReportDefinition | null>(null)
   const [reportRuns, setReportRuns] = useState<ReportRunSummary[]>([])
@@ -496,6 +496,7 @@ export default function App() {
   const uploadDocument = async (file?: File) => {
     if (!file || uploading) return
     setUploading(true)
+    setUploadingName(file.name)
     setKnowledgeError(null)
     try {
       await api.uploadDocument(file)
@@ -504,6 +505,7 @@ export default function App() {
       setKnowledgeError(error instanceof Error ? error.message : 'Upload failed')
     } finally {
       setUploading(false)
+      setUploadingName(null)
       if (fileRef.current) fileRef.current.value = ''
     }
   }
@@ -573,12 +575,13 @@ export default function App() {
     }
   }
 
-  const saveReport = async (message: Message) => {
+  const saveReport = async (message: Message, title?: string) => {
     if (reportBusyId || !message.evidence?.length) return
     setReportBusyId(message.id)
     setChatError(null)
     try {
-      const saved = await api.saveReport(message.id)
+      const trimmed = title?.trim()
+      const saved = await api.saveReport(message.id, trimmed ? trimmed : undefined)
       setReports((current) => [saved, ...current.filter((report) => report.id !== saved.id)])
       await loadReports()
     } catch (error) {
@@ -586,6 +589,16 @@ export default function App() {
     } finally {
       setReportBusyId(null)
     }
+  }
+
+  const suggestReportTitle = (message: Message) => {
+    const index = messages.findIndex((item) => item.id === message.id)
+    const priorUser =
+      index > 0
+        ? [...messages.slice(0, index)].reverse().find((item) => item.role === 'user')
+        : undefined
+    const base = (priorUser?.content || message.content || 'Saved report').replace(/\s+/g, ' ').trim()
+    return (base || 'Saved report').slice(0, 120)
   }
 
   const isRevocationError = (error: unknown) => (
@@ -1009,22 +1022,6 @@ export default function App() {
             <span className="count-pill">{reports.length}</span>
           </button>
 
-          <button
-            className={view === 'connectors' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView('connectors')}
-          >
-            <Plug size={17} />
-            Connectors
-          </button>
-
-          <button
-            className={view === 'operations' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView('operations')}
-          >
-            <CalendarClock size={17} />
-            Operations
-          </button>
-
           <div className="nav-divider" />
           <div className="nav-section-label">Next capabilities</div>
           {futureNav.map((item) => (
@@ -1189,7 +1186,12 @@ export default function App() {
                             <button
                               type="button"
                               disabled={Boolean(reportBusyId) || reports.some((report) => report.message_id === message.id)}
-                              onClick={() => saveReport(message)}
+                              onClick={() =>
+                                setReportDraft({
+                                  messageId: message.id,
+                                  title: suggestReportTitle(message),
+                                })
+                              }
                             >
                               {reports.some((report) => report.message_id === message.id)
                                 ? 'Report saved'
@@ -1323,7 +1325,7 @@ export default function App() {
                     <FileText size={28} />
                     <strong>No documents indexed yet</strong>
                     <span>Add a document to make it available to OpenJM Chat.</span>
-                    <button onClick={() => fileRef.current?.click()}>
+                    <button onClick={() => fileRef.current?.click()} disabled={uploading}>
                       <Upload size={15} />
                       Add first document
                     </button>
@@ -1346,6 +1348,7 @@ export default function App() {
                       <button
                         className="icon-button danger"
                         title="Delete document"
+                        disabled={uploading}
                         onClick={() => deleteDocument(document.id)}
                       >
                         <Trash2 size={15} />
@@ -1797,6 +1800,65 @@ export default function App() {
               </div>
             </section>
           </>
+        )}
+
+        {uploading && (
+          <div
+            className="ingest-overlay"
+            role="alertdialog"
+            aria-modal="true"
+            aria-busy="true"
+            aria-label="Indexing document"
+          >
+            <div className="ingest-card">
+              <div className="ingest-spinner" aria-hidden="true" />
+              <strong>Indexing document</strong>
+              <span className="ingest-name">{uploadingName || 'document'}</span>
+              <p>OpenJM is parsing, chunking and indexing this document. This may take a moment.</p>
+              <p className="ingest-hint">
+                The Knowledge page is paused until this finishes. Duplicate uploads are unnecessary.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {reportDraft && (
+          <div className="report-modal-overlay" role="dialog" aria-modal="true" aria-label="Save as report">
+            <form
+              className="report-modal"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const draft = reportDraft
+                const message = messages.find((item) => item.id === draft.messageId)
+                if (!draft.title.trim() || !message) return
+                setReportDraft(null)
+                void saveReport(message, draft.title)
+              }}
+            >
+              <h2>Save as governed report</h2>
+              <p>Give this evidence-backed snapshot a title. It is saved with its citations.</p>
+              <label>
+                <span>Report title</span>
+                <input
+                  autoFocus
+                  required
+                  maxLength={160}
+                  value={reportDraft.title}
+                  onChange={(event) =>
+                    setReportDraft({ ...reportDraft, title: event.target.value })
+                  }
+                />
+              </label>
+              <div className="report-modal-actions">
+                <button type="button" onClick={() => setReportDraft(null)}>
+                  Cancel
+                </button>
+                <button className="primary-action" type="submit" disabled={!reportDraft.title.trim()}>
+                  Save report
+                </button>
+              </div>
+            </form>
+          </div>
         )}
       </main>
     </div>
