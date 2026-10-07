@@ -104,6 +104,78 @@ class Settings(BaseSettings):
     # is reclaimable, which is what makes crash recovery deterministic.
     document_lease_seconds: int = 120
 
+    # --- VS8 deployment profile, release and white-label metadata -------------
+    # 'development' is the local/CI default and is never a production claim.
+    # 'production' is a supported, hardened profile; startup performs a strict
+    # fail-closed configuration preflight (app.core.preflight).
+    deployment_profile: str = "development"
+    # Build/release identifier surfaced in /api/version and logs. A release
+    # artefact sets this; a developer checkout leaves it empty.
+    release_id: str = ""
+
+    # White-label configuration. Values are display metadata only: they are
+    # rendered as text (never as raw HTML) by the frontend, so they cannot
+    # become an injection surface. Security-sensitive names are not settable.
+    product_name: str = "OpenJM Enterprise AI"
+    organization_name: str = ""
+    brand_logo_url: str = ""
+    browser_page_title: str = ""
+    support_contact: str = ""
+    theme_accent: str = ""
+
+    # --- VS8 model-provider routing -------------------------------------------
+    # 'local' = an OpenAI-compatible endpoint reachable on the local/on-prem
+    # network (may be plain HTTP). 'private_remote' = an operator-managed private
+    # OpenAI-compatible service; production requires HTTPS/TLS. Routing is
+    # backend-only: the credential never reaches the browser (see model_gateway).
+    model_provider_mode: str = "local"
+    # Retained, explicit, development/local-only escape hatch for insecure HTTP.
+    # Production refuses plain HTTP to a private_remote endpoint.
+    model_allow_insecure_http: bool = True
+    # Fail-closed by design: OpenJM never silently routes to an unapproved
+    # public provider. 'none' means a provider failure surfaces as an error.
+    model_provider_fallback: str = "none"
+
+    # --- VS8 production security surface --------------------------------------
+    # Comma-separated explicit origins. A production profile refuses '*'.
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # Comma-separated host allow-list. A production profile refuses '*'.
+    trusted_hosts: str = "*"
+    # When True, honour X-Forwarded-* from a configured reverse proxy boundary.
+    trust_proxy_headers: bool = False
+    security_headers_enabled: bool = True
+    # Request-hardening bounds. 413 on an over-size body / upload.
+    max_request_body_bytes: int = 8_000_000
+    max_upload_bytes: int = 25_000_000
+    # Bounded rate limits for expensive endpoints (per client window). Off by
+    # default (development); production preflight requires it enabled.
+    rate_limit_enabled: bool = False
+    rate_limit_expensive_per_minute: int = 60
+
+    # --- VS8 observability ----------------------------------------------------
+    metrics_enabled: bool = True
+    # Shared bearer credential for the detailed operational surface (Prometheus
+    # metrics and the readiness detail report). Empty in development, where the
+    # endpoints stay open for local/CI convenience; a production profile hides
+    # them unless this is set. Never returned by any endpoint.
+    ops_token: str = ""
+    # The scheduler runs as an in-process bounded tick when enabled. Default off
+    # so the offline suite and a single-shot deployment are unaffected.
+    scheduler_enabled: bool = False
+    scheduler_tick_seconds: int = 30
+    scheduler_tick_limit: int = 20
+
+    # --- VS8 backup and retention ---------------------------------------------
+    backup_dir: Path = REPO_ROOT / "data" / "backups"
+    # Retention is opt-in and bounded; destructive classes support dry-run and
+    # are tenant-scoped. Audit evidence, customer source data, report history
+    # and regulatory records are never eligible for automatic deletion.
+    retention_enabled: bool = False
+    retention_sessions_days: int = 30
+    retention_scheduler_runs_days: int = 30
+    retention_notification_history_days: int = 90
+    retention_connector_run_history_days: int = 30
+
     @field_validator("database_url", mode="after")
     @classmethod
     def resolve_relative_sqlite_url(cls, value: str) -> str:
@@ -120,7 +192,7 @@ class Settings(BaseSettings):
                 return f"{scheme}:///{resolved}"
         return value
 
-    @field_validator("upload_dir", "vector_path", "credential_key_file", mode="after")
+    @field_validator("upload_dir", "vector_path", "credential_key_file", "backup_dir", mode="after")
     @classmethod
     def resolve_repo_relative_paths(cls, value: Path) -> Path:
         if value.is_absolute():
@@ -131,7 +203,20 @@ class Settings(BaseSettings):
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.vector_path.mkdir(parents=True, exist_ok=True)
         self.credential_key_file.parent.mkdir(parents=True, exist_ok=True)
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
         (REPO_ROOT / "data").mkdir(parents=True, exist_ok=True)
+
+    @property
+    def is_production(self) -> bool:
+        return self.deployment_profile.strip().lower() == "production"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def trusted_host_list(self) -> list[str]:
+        return [item.strip() for item in self.trusted_hosts.split(",") if item.strip()]
 
 
 @lru_cache

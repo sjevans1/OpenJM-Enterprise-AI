@@ -1,0 +1,48 @@
+# OpenJM Enterprise AI — production systemd unit (VS8 Workstream A/B).
+#
+# Install to /etc/systemd/system/openjm.service, then:
+#   systemctl daemon-reload && systemctl enable --now openjm
+#
+# Configuration comes from an EnvironmentFile with 0600 permissions owned by
+# the openjm service user. No secret is passed on the command line.
+
+[Unit]
+Description=OpenJM Enterprise AI (backend API)
+Documentation=file:/opt/openjm/docs/OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openjm
+Group=openjm
+WorkingDirectory=/opt/openjm/backend
+EnvironmentFile=/etc/openjm/openjm.env
+# Strip any ambient interpreter path so the venv is authoritative.
+Environment=PYTHONPATH=
+Environment=PYTHONHOME=
+# Fail closed: preflight runs inside the app lifespan and refuses to serve an
+# unsafe production configuration.
+ExecStartPre=/opt/openjm/backend/.venv/bin/python -m app.core.preflight
+ExecStart=/opt/openjm/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# Restart policy bounds: never loop forever on a bad configuration.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+# Resource limits (adjust to the measured sizing in docs/PERFORMANCE.md).
+MemoryMax=4G
+CPUQuota=200%
+TasksMax=512
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/openjm /var/backups/openjm
+# Graceful shutdown.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

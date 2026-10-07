@@ -161,6 +161,7 @@ def main() -> int:
                 json={
                     "message": "What documents do you have loaded?",
                     "conversation_id": conversation_id,
+                    "mode": "knowledge",
                 },
             )
             catalog.raise_for_status()
@@ -180,6 +181,7 @@ def main() -> int:
                 json={
                     "message": args.question,
                     "conversation_id": conversation_id,
+                    "mode": "knowledge",
                 },
             )
             grounded.raise_for_status()

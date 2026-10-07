@@ -54,7 +54,11 @@ def sync_url_for(database_url: str) -> str:
 def _alembic_config(sync_url: str) -> Config:
     config = Config(str(ALEMBIC_INI))
     config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
-    config.set_main_option("sqlalchemy.url", sync_url)
+    # Alembic stores options in a configparser file, where '%' starts an
+    # interpolation. Percent-encoded URLs (a unix-socket host, a password
+    # containing '%') would otherwise raise "invalid interpolation syntax" at
+    # startup. Escape the value so any valid database URL is accepted.
+    config.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
     return config
 
 
@@ -144,3 +148,56 @@ def current_revision(database_url: str) -> str | None:
             return MigrationContext.configure(connection).get_current_revision()
     finally:
         engine.dispose()
+
+
+class UnknownSchemaRevisionError(RuntimeError):
+    """The database records a revision this build does not know about.
+
+    Raised to refuse startup rather than run newer/unknown code against a
+    schema it cannot reason about (VS8 Workstream G).
+    """
+
+    def __init__(self, recorded: str, known_heads: list[str]):
+        self.recorded = recorded
+        self.known_heads = known_heads
+        super().__init__(
+            f"database is at unknown schema revision {recorded!r}; this build "
+            f"knows {known_heads}. Refusing to start."
+        )
+
+
+def script_heads(database_url: str) -> list[str]:
+    """The head revision(s) this build's migration scripts define."""
+    sync_url = sync_url_for(database_url)
+    config = _alembic_config(sync_url)
+    from alembic.script import ScriptDirectory
+
+    return sorted(ScriptDirectory.from_config(config).get_heads())
+
+
+def known_revisions(database_url: str) -> set[str]:
+    """Every revision id present in this build's migration directory."""
+    sync_url = sync_url_for(database_url)
+    config = _alembic_config(sync_url)
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(config)
+    return {rev.revision for rev in script.walk_revisions()}
+
+
+def assert_known_schema_revision(database_url: str) -> str | None:
+    """Refuse startup when the recorded revision is unknown to this build.
+
+    An empty database (no recorded revision) and an older-but-known revision
+    both proceed: the former is a fresh install and the latter is upgraded by
+    ``adopt_and_upgrade``. Only a revision absent from this build's script
+    directory — a future schema written by a newer release — fails closed.
+    """
+    sync_url = sync_url_for(database_url)
+    tables = _existing_tables(sync_url)
+    recorded = current_revision_from_tables(sync_url, tables)
+    if recorded is None:
+        return None
+    if recorded not in known_revisions(database_url):
+        raise UnknownSchemaRevisionError(recorded, script_heads(database_url))
+    return recorded
