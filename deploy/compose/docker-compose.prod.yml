@@ -1,0 +1,78 @@
+# OpenJM Enterprise AI — self-hosted production compose (VS8 Workstream A/B).
+#
+# A strong Compose deployment is preferred over Kubernetes (no K8s requirement).
+# The backend is the only service that reaches the private model endpoint; the
+# browser talks to the reverse proxy, which terminates TLS.
+#
+#   cp .env.production.example .env
+#   docker compose -f deploy/compose/docker-compose.prod.yml up -d
+#
+# Secrets come from the .env file / docker secrets and are never baked into an
+# image. This file has no default passwords.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openjm
+      POSTGRES_DB: openjm
+      POSTGRES_PASSWORD_FILE: /run/secrets/openjm_db_password
+    volumes:
+      - openjm-db:/var/lib/postgresql/data
+    secrets:
+      - openjm_db_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openjm -d openjm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    restart: unless-stopped
+    env_file: ../../.env
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      OPENJM_DATABASE_URL: postgresql+asyncpg://openjm:${OPENJM_DB_PASSWORD}@db:5432/openjm
+    volumes:
+      - openjm-data:/var/lib/openjm
+      - openjm-keys:/etc/openjm
+      - openjm-backups:/var/backups/openjm
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Liveness uses /api/health; readiness (which checks dependencies) is a
+    # separate probe so a model-provider outage does not restart the container.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  openjm-db:
+  openjm-data:
+  openjm-keys:
+  openjm-backups:
+  caddy-data:
+
+secrets:
+  openjm_db_password:
+    file: ./secrets/openjm_db_password.txt

@@ -1,0 +1,19 @@
+# OpenJM Enterprise AI — reverse proxy / TLS boundary (VS8).
+# Caddy terminates TLS and forwards to the backend. The browser never talks to
+# the model endpoint; only the backend does, server-side.
+openjm.example.com {
+    encode gzip
+    # Security headers (also set defensively by the application).
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+    # Static SPA build.
+    root * /srv/openjm/frontend
+    @api path /api/*
+    reverse_proxy @api backend:8000
+    try_files {path} /index.html
+    file_server
+}
