@@ -644,6 +644,322 @@ async def test_principal_access_context_defaults_empty(world, file_db):
 
 
 # ---------------------------------------------------------------------------
+# Package 0: archived department/group lifecycle and stewardship effectiveness
+# ---------------------------------------------------------------------------
+
+
+async def test_archiving_department_removes_it_from_resolution(world, file_db):
+    async with file_db() as db:
+        department = await governance.create_department(
+            db, principal=world["admin_a"], slug="hr", name="HR"
+        )
+        group = await governance.create_group(
+            db,
+            principal=world["admin_a"],
+            slug="hr-team",
+            name="HR Team",
+            department_id=department.id,
+        )
+        await governance.add_group_member(
+            db, principal=world["admin_a"], group_id=group.id, member_principal_id=MEMBER_A
+        )
+        await db.commit()
+        department_id, group_id = department.id, group.id
+
+    async with file_db() as db:
+        before = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert before.department_ids == frozenset({department_id})
+
+    async with file_db() as db:
+        await governance.set_department_status(
+            db, principal=world["admin_a"], department_id=department_id, status="archived"
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        after = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+        # The still-active group survives (no destructive cascade).
+        remaining_group = await db.get(AccessGroup, group_id)
+    assert after.group_ids == frozenset({group_id})
+    assert after.department_ids == frozenset(), "archived department must disappear"
+    assert remaining_group is not None and remaining_group.status == "active"
+
+
+async def test_archiving_department_revokes_department_stewardship(world, file_db):
+    async with file_db() as db:
+        department = await governance.create_department(
+            db, principal=world["admin_a"], slug="finance", name="Finance"
+        )
+        await governance.grant_steward(
+            db,
+            principal=world["admin_a"],
+            steward_principal_id=MEMBER_A,
+            scope_type=StewardScopeType.DEPARTMENT.value,
+            scope_id=department.id,
+        )
+        await db.commit()
+        department_id = department.id
+
+    async with file_db() as db:
+        access = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert (StewardScopeType.DEPARTMENT.value, department_id) in access.steward_scopes
+
+    async with file_db() as db:
+        await governance.set_department_status(
+            db, principal=world["admin_a"], department_id=department_id, status="archived"
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        access = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert access.steward_scopes == frozenset(), "archived scope must be ineffective"
+
+    # The grant row is preserved (not deleted) so reactivation can restore it.
+    async with file_db() as db:
+        rows = (
+            await db.execute(select(DataSteward).where(DataSteward.tenant_id == TENANT_A))
+        ).scalars().all()
+    assert len(rows) == 1 and rows[0].status == "active"
+
+
+async def test_archiving_group_removes_group_and_department(world, file_db):
+    async with file_db() as db:
+        department = await governance.create_department(
+            db, principal=world["admin_a"], slug="hr", name="HR"
+        )
+        group = await governance.create_group(
+            db,
+            principal=world["admin_a"],
+            slug="hr-team",
+            name="HR Team",
+            department_id=department.id,
+        )
+        await governance.add_group_member(
+            db, principal=world["admin_a"], group_id=group.id, member_principal_id=MEMBER_A
+        )
+        await db.commit()
+        group_id = group.id
+
+    async with file_db() as db:
+        await governance.set_group_status(
+            db, principal=world["admin_a"], group_id=group_id, status="archived"
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        after = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert after.group_ids == frozenset(), "archived group must disappear"
+    assert after.department_ids == frozenset(), "its department goes with it"
+
+
+async def test_archiving_group_revokes_group_stewardship(world, file_db):
+    async with file_db() as db:
+        group = await governance.create_group(
+            db, principal=world["admin_a"], slug="finance", name="Finance"
+        )
+        await governance.grant_steward(
+            db,
+            principal=world["admin_a"],
+            steward_principal_id=MEMBER_A,
+            scope_type=StewardScopeType.GROUP.value,
+            scope_id=group.id,
+        )
+        await db.commit()
+        group_id = group.id
+
+    async with file_db() as db:
+        access = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert (StewardScopeType.GROUP.value, group_id) in access.steward_scopes
+
+    async with file_db() as db:
+        await governance.set_group_status(
+            db, principal=world["admin_a"], group_id=group_id, status="archived"
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        access = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert access.steward_scopes == frozenset()
+
+
+async def test_reactivating_department_restores_scope_and_stewardship(world, file_db):
+    async with file_db() as db:
+        department = await governance.create_department(
+            db, principal=world["admin_a"], slug="hr", name="HR"
+        )
+        group = await governance.create_group(
+            db,
+            principal=world["admin_a"],
+            slug="hr-team",
+            name="HR Team",
+            department_id=department.id,
+        )
+        await governance.add_group_member(
+            db, principal=world["admin_a"], group_id=group.id, member_principal_id=MEMBER_A
+        )
+        await governance.grant_steward(
+            db,
+            principal=world["admin_a"],
+            steward_principal_id=MEMBER_A,
+            scope_type=StewardScopeType.DEPARTMENT.value,
+            scope_id=department.id,
+        )
+        await db.commit()
+        department_id = department.id
+
+    for _ in range(1):  # archive then reactivate, no re-grant
+        async with file_db() as db:
+            await governance.set_department_status(
+                db, principal=world["admin_a"], department_id=department_id, status="archived"
+            )
+            await db.commit()
+        async with file_db() as db:
+            archived = await governance.load_principal_access(
+                db, principal_id=MEMBER_A, tenant_id=TENANT_A
+            )
+        assert archived.department_ids == frozenset()
+
+        async with file_db() as db:
+            await governance.set_department_status(
+                db, principal=world["admin_a"], department_id=department_id, status="active"
+            )
+            await db.commit()
+
+    async with file_db() as db:
+        restored = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+        grants = (
+            await db.execute(select(DataSteward).where(DataSteward.tenant_id == TENANT_A))
+        ).scalars().all()
+    assert restored.department_ids == frozenset({department_id})
+    assert (StewardScopeType.DEPARTMENT.value, department_id) in restored.steward_scopes
+    assert len(grants) == 1, "reactivation must not require or create a second grant"
+
+
+async def test_reactivating_group_restores_access_and_stewardship(world, file_db):
+    async with file_db() as db:
+        group = await governance.create_group(
+            db, principal=world["admin_a"], slug="finance", name="Finance"
+        )
+        await governance.add_group_member(
+            db, principal=world["admin_a"], group_id=group.id, member_principal_id=MEMBER_A
+        )
+        await governance.grant_steward(
+            db,
+            principal=world["admin_a"],
+            steward_principal_id=MEMBER_A,
+            scope_type=StewardScopeType.GROUP.value,
+            scope_id=group.id,
+        )
+        await db.commit()
+        group_id = group.id
+
+    async with file_db() as db:
+        await governance.set_group_status(
+            db, principal=world["admin_a"], group_id=group_id, status="archived"
+        )
+        await db.commit()
+    async with file_db() as db:
+        archived = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert archived.group_ids == frozenset() and archived.steward_scopes == frozenset()
+
+    async with file_db() as db:
+        await governance.set_group_status(
+            db, principal=world["admin_a"], group_id=group_id, status="active"
+        )
+        await db.commit()
+    async with file_db() as db:
+        restored = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert restored.group_ids == frozenset({group_id})
+    assert (StewardScopeType.GROUP.value, group_id) in restored.steward_scopes
+
+
+async def test_tenant_wide_stewardship_is_independent_of_other_scope_lifecycle(
+    world, file_db
+):
+    async with file_db() as db:
+        department = await governance.create_department(
+            db, principal=world["admin_a"], slug="hr", name="HR"
+        )
+        await governance.grant_steward(
+            db,
+            principal=world["admin_a"],
+            steward_principal_id=MEMBER_A,
+            scope_type=StewardScopeType.TENANT.value,
+            scope_id=TENANT_A,
+        )
+        await db.commit()
+        department_id = department.id
+
+    async with file_db() as db:
+        await governance.set_department_status(
+            db, principal=world["admin_a"], department_id=department_id, status="archived"
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        access = await governance.load_principal_access(
+            db, principal_id=MEMBER_A, tenant_id=TENANT_A
+        )
+    assert access.steward_scopes == frozenset({(StewardScopeType.TENANT.value, TENANT_A)})
+
+
+async def test_grant_to_archived_scope_is_rejected(world, file_db):
+    async with file_db() as db:
+        department = await governance.create_department(
+            db, principal=world["admin_a"], slug="hr", name="HR"
+        )
+        group = await governance.create_group(
+            db, principal=world["admin_a"], slug="ops", name="Ops"
+        )
+        await governance.set_department_status(
+            db, principal=world["admin_a"], department_id=department.id, status="archived"
+        )
+        await governance.set_group_status(
+            db, principal=world["admin_a"], group_id=group.id, status="archived"
+        )
+        await db.commit()
+        department_id, group_id = department.id, group.id
+
+    async with file_db() as db:
+        with pytest.raises(ValueError):
+            await governance.grant_steward(
+                db,
+                principal=world["admin_a"],
+                steward_principal_id=MEMBER_A,
+                scope_type=StewardScopeType.DEPARTMENT.value,
+                scope_id=department_id,
+            )
+        with pytest.raises(ValueError):
+            await governance.grant_steward(
+                db,
+                principal=world["admin_a"],
+                steward_principal_id=MEMBER_A,
+                scope_type=StewardScopeType.GROUP.value,
+                scope_id=group_id,
+            )
+
+
+# ---------------------------------------------------------------------------
 # No control-plane HTTP surface in this increment (fail closed by absence)
 # ---------------------------------------------------------------------------
 

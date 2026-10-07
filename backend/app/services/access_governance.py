@@ -138,15 +138,22 @@ async def load_principal_access(
 
     department_ids: frozenset[str] = frozenset()
     if group_ids:
+        # A department only counts while BOTH the group and the department are
+        # active: archiving the department removes it from resolution even when
+        # an active group still points at it.
         department_ids = frozenset(
             dept
             for dept in (
                 await db.execute(
-                    select(AccessGroup.department_id).where(
+                    select(AccessGroup.department_id)
+                    .join(Department, Department.id == AccessGroup.department_id)
+                    .where(
                         AccessGroup.tenant_id == tenant_id,
                         AccessGroup.id.in_(group_ids),
                         AccessGroup.status == "active",
                         AccessGroup.department_id.is_not(None),
+                        Department.tenant_id == tenant_id,
+                        Department.status == "active",
                     )
                 )
             )
@@ -155,22 +162,96 @@ async def load_principal_access(
             if dept is not None
         )
 
-    steward_scopes = frozenset(
-        (str(row[0]), str(row[1]))
-        for row in (
-            await db.execute(
-                select(DataSteward.scope_type, DataSteward.scope_id).where(
-                    DataSteward.tenant_id == tenant_id,
-                    DataSteward.principal_id == principal_id,
-                    DataSteward.status == "active",
-                )
-            )
-        ).all()
+    steward_scopes = await _effective_steward_scopes(
+        db, principal_id=principal_id, tenant_id=tenant_id
     )
 
     return PrincipalAccess(
         department_ids=department_ids, group_ids=group_ids, steward_scopes=steward_scopes
     )
+
+
+async def _effective_steward_scopes(
+    db: AsyncSession, *, principal_id: str, tenant_id: str
+) -> frozenset[tuple[str, str]]:
+    """Stewardship rows that are currently effective.
+
+    A steward grant is preserved historically, but it only resolves while its
+    scope is live. Archiving the governing department or group makes the grant
+    ineffective on the next resolution; reactivating the scope makes the same
+    preserved grant effective again, with no re-grant. A tenant-wide steward
+    scope is governed by the active tenant membership that got us here.
+    """
+    rows = (
+        await db.execute(
+            select(DataSteward.scope_type, DataSteward.scope_id).where(
+                DataSteward.tenant_id == tenant_id,
+                DataSteward.principal_id == principal_id,
+                DataSteward.status == "active",
+            )
+        )
+    ).all()
+    if not rows:
+        return frozenset()
+
+    wanted_departments = {
+        str(scope_id)
+        for scope_type, scope_id in rows
+        if scope_type == StewardScopeType.DEPARTMENT.value
+    }
+    wanted_groups = {
+        str(scope_id)
+        for scope_type, scope_id in rows
+        if scope_type == StewardScopeType.GROUP.value
+    }
+
+    active_department_ids: set[str] = set()
+    if wanted_departments:
+        active_department_ids = {
+            str(row)
+            for row in (
+                await db.execute(
+                    select(Department.id).where(
+                        Department.tenant_id == tenant_id,
+                        Department.id.in_(wanted_departments),
+                        Department.status == "active",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    active_group_ids: set[str] = set()
+    if wanted_groups:
+        active_group_ids = {
+            str(row)
+            for row in (
+                await db.execute(
+                    select(AccessGroup.id).where(
+                        AccessGroup.tenant_id == tenant_id,
+                        AccessGroup.id.in_(wanted_groups),
+                        AccessGroup.status == "active",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    effective: set[tuple[str, str]] = set()
+    for scope_type, scope_id in rows:
+        scope_type, scope_id = str(scope_type), str(scope_id)
+        if scope_type == StewardScopeType.TENANT.value:
+            if scope_id == tenant_id:
+                effective.add((scope_type, scope_id))
+        elif scope_type == StewardScopeType.DEPARTMENT.value:
+            if scope_id in active_department_ids:
+                effective.add((scope_type, scope_id))
+        elif scope_type == StewardScopeType.GROUP.value:
+            if scope_id in active_group_ids:
+                effective.add((scope_type, scope_id))
+    return frozenset(effective)
 
 
 async def platform_capabilities_for(
@@ -530,11 +611,17 @@ async def _validate_steward_scope(
             raise ValueError("Tenant-scoped stewardship must reference the active tenant")
         return
     if scope_type == StewardScopeType.DEPARTMENT.value:
-        if await get_department(db, principal=principal, department_id=scope_id) is None:
+        department = await get_department(db, principal=principal, department_id=scope_id)
+        if department is None:
             raise ValueError("Department does not belong to the active tenant")
+        if department.status != "active":
+            raise ValueError("Department is not active")
         return
-    if await get_group(db, principal=principal, group_id=scope_id) is None:
+    group = await get_group(db, principal=principal, group_id=scope_id)
+    if group is None:
         raise ValueError("Group does not belong to the active tenant")
+    if group.status != "active":
+        raise ValueError("Group is not active")
 
 
 async def list_stewards(db: AsyncSession, *, principal: Principal) -> list[DataSteward]:

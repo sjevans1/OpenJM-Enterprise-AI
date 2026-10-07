@@ -92,3 +92,24 @@ Each stops at a merge boundary for human review. No merge without approval.
 - Migration `0008` upgrades a real migrated database additively and downgrades
   cleanly; `adopt_and_upgrade` reaches the new head idempotently.
 - Accepted VS1–VS8 behaviour remains green.
+
+## 6. Lifecycle and reactivation semantics (Package 0 correction)
+
+Archiving is a live-state change, not a destructive one. No row is deleted and
+no membership is cascaded away.
+
+- An archived department disappears from a principal's resolved `department_ids`
+  on the next resolution, even when an active group still points at it. The
+  group itself is untouched.
+- An archived group disappears from resolved `group_ids`, and its department
+  goes with it (the department is only counted while the group and the
+  department are both active).
+- A department- or group-scoped steward grant becomes ineffective while its
+  scope is archived. The `data_stewards` row is preserved.
+- A tenant-wide steward grant is independent of any department/group lifecycle;
+  it is governed by the active tenant membership.
+- Reactivating a scope restores the preserved membership and the preserved
+  steward grant with no re-grant: archive then reactivate is the defined
+  reversible semantic, proved by test.
+- Granting new stewardship against an archived scope is refused (fail closed).
+
