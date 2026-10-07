@@ -43,6 +43,7 @@ Selected fields:
 | `model_allow_insecure_http` | development-only | plain-HTTP model endpoint |
 | `model_provider_fallback` | required | must be `none` in production |
 | `rate_limit_enabled` | safe-default | must be `true` in production |
+| `ops_token` | **secret** | bearer for `/api/metrics` and `/api/ready/detail`; hidden (404) in production without it |
 | `retention_enabled` | optional | opt-in lifecycle |
 | `product_name` etc. | optional | white-label display text |
 

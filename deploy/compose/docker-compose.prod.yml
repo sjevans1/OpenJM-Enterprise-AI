@@ -2,13 +2,18 @@
 #
 # A strong Compose deployment is preferred over Kubernetes (no K8s requirement).
 # The backend is the only service that reaches the private model endpoint; the
-# browser talks to the reverse proxy, which terminates TLS.
+# browser talks to the reverse proxy, which terminates TLS and serves the built
+# frontend from the proxy image (Dockerfile.proxy).
 #
 #   cp .env.production.example .env
-#   docker compose -f deploy/compose/docker-compose.prod.yml up -d
+#   mkdir -p deploy/compose/secrets
+#   printf '%s' "$(openssl rand -hex 24)" > deploy/compose/secrets/openjm_db_password.txt
+#   docker compose -f deploy/compose/docker-compose.prod.yml up -d --build
 #
 # Secrets come from the .env file / docker secrets and are never baked into an
-# image. This file has no default passwords.
+# image. This file has no default passwords. The database password has a single
+# source: the openjm_db_password secret, mounted into both the db and the
+# backend, so the two can never disagree.
 
 services:
   db:
@@ -38,7 +43,16 @@ services:
       db:
         condition: service_healthy
     environment:
-      OPENJM_DATABASE_URL: postgresql+asyncpg://openjm:${OPENJM_DB_PASSWORD}@db:5432/openjm
+      # Single source of truth for the database password: the same secret the db
+      # service reads. The entrypoint assembles OPENJM_DATABASE_URL from it, so
+      # the DSN is never rendered with a stale or empty password.
+      OPENJM_DB_PASSWORD_FILE: /run/secrets/openjm_db_password
+      OPENJM_DB_HOST: db
+      OPENJM_DB_PORT: "5432"
+      OPENJM_DB_NAME: openjm
+      OPENJM_DB_USER: openjm
+    secrets:
+      - openjm_db_password
     volumes:
       - openjm-data:/var/lib/openjm
       - openjm-keys:/etc/openjm
@@ -55,15 +69,20 @@ services:
       start_period: 30s
 
   proxy:
-    image: caddy:2
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.proxy
     restart: unless-stopped
     depends_on:
       - backend
+    environment:
+      # Caddy site address. Default is the production hostname (automatic TLS).
+      # Override for a local/HTTP run, e.g. OPENJM_SITE_ADDRESS=":80".
+      OPENJM_SITE_ADDRESS: ${OPENJM_SITE_ADDRESS:-openjm.example.com}
     ports:
-      - "443:443"
-      - "80:80"
+      - "${OPENJM_HTTPS_PORT:-443}:443"
+      - "${OPENJM_HTTP_PORT:-80}:80"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
 
 volumes:

@@ -8,7 +8,11 @@
   the repository is reachable from inside WSL, then delegates to the same Linux
   installer so both platforms exercise one script.
 
-  Idempotent: safe to run again. It never deletes user data.
+  Idempotent: safe to run again. It never deletes user data. Distribution
+  detection is read-only by default: pass -AllowDistroInstall to install the
+  target distribution, or -DetectOnly to run detection and exit without any
+  install or delegation. Without -AllowDistroInstall it refuses to install a
+  different distribution automatically.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\scripts\install-wsl2.ps1
@@ -17,7 +21,9 @@
 param(
   [string]$Distro = "Ubuntu",
   [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-  [switch]$SkipInstall
+  [switch]$SkipInstall,
+  [switch]$AllowDistroInstall,
+  [switch]$DetectOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,12 +39,39 @@ if ($defaultVersion -and $defaultVersion -match "1") {
   Write-Warning "Default WSL version is 1. Set it with: wsl --set-default-version 2"
 }
 
-# --- 2. Ensure the target distribution exists -------------------------------
-$distros = (wsl --list --quiet) -replace "`0", ""
-if ($distros -notcontains $Distro) {
-  Write-Host "Installing distribution '$Distro'..."
+# --- 2. Detect the target distribution (read-only) --------------------------
+# `wsl --list --quiet` is UTF-16LE on Windows; strip NULs, a leading BOM and
+# whitespace before comparing, and compare case-insensitively. Detection is
+# read-only: a distribution is only installed when -AllowDistroInstall is given
+# explicitly, so a parsing surprise can never register a different distro.
+function Get-WslDistros {
+  $raw = (wsl --list --quiet) 2>$null
+  if ($null -eq $raw) { return @() }
+  return @(
+    $raw |
+      ForEach-Object { ($_ -replace "`0", "") -replace "^\uFEFF", "" } |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -ne "" }
+  )
+}
+
+$distros = Get-WslDistros
+$haveDistro = @($distros | Where-Object { $_ -ieq $Distro }).Count -gt 0
+if (-not $haveDistro) {
+  Write-Host "Detected WSL distributions: $($distros -join ', ')"
+  if (-not $AllowDistroInstall) {
+    Fail ("Distribution '$Distro' was not detected in 'wsl --list --quiet'. " +
+          "Pass -AllowDistroInstall to install it explicitly, or install it " +
+          "yourself. Refusing to install a different distribution automatically.")
+  }
+  Write-Host "Installing distribution '$Distro' (explicitly requested)..."
   wsl --install -d $Distro
   Fail "Distribution installed. Complete first-run user setup, then re-run this script."
+}
+
+if ($DetectOnly) {
+  Write-Host "Detected distribution '$Distro'. Read-only detection complete."
+  exit 0
 }
 
 # --- 3. Map the Windows repo path to a WSL path -----------------------------

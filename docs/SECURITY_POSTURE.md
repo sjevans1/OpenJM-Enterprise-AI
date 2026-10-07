@@ -29,8 +29,15 @@
 - **Error responses are safe**: a generic exception handler logs a category and
   returns `{"detail": "internal server error", "correlation_id": ...}` — no stack
   trace, no infrastructure detail.
-- **No debug endpoints by default**: `metrics_enabled` controls `/api/metrics`
-  only, and it exposes counters/gauges, never tenant content.
+- **No debug endpoints by default**: the detailed operational surface
+  (`/api/metrics`, `/api/ready/detail`) requires the `OPENJM_OPS_TOKEN` bearer
+  and is hidden (404) in production without one; it exposes counters/gauges,
+  never tenant content. The public `/api/ready` is a minimal go/no-go that runs
+  no migration, DB-wide count or model probe, so an external probe cannot
+  amplify load. The private model endpoint URL/host and credential never appear
+  in any response, probe, metric or log: provider failures surface as a stable
+  category (`timeout`, `auth_rejected`, `unreachable`, `bad_response`), not as
+  raw transport text.
 
 ## Production-security test profile
 

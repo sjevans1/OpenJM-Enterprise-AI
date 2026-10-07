@@ -5,12 +5,24 @@
 | Endpoint | Purpose | Auth |
 | --- | --- | --- |
 | `GET /api/health` | liveness — the process is up | none |
-| `GET /api/ready` | readiness — per-component status | none |
+| `GET /api/ready` | public readiness — a minimal, cheap go/no-go | none |
+| `GET /api/ready/detail` | detailed readiness — per-component status | ops token |
 | `GET /api/version` | product/release identity | none |
 | `GET /api/config/public` | white-label display metadata | none |
-| `GET /api/metrics` | Prometheus-style metrics (when enabled) | none |
+| `GET /api/metrics` | Prometheus-style metrics (when enabled) | ops token |
 
-`/api/ready` returns a component map. The overall `ready` flag reflects only the
+The detailed operational surface (`/api/ready/detail`, `/api/metrics`) requires
+the `OPENJM_OPS_TOKEN` bearer (`Authorization: Bearer <token>`). Without a token
+configured, those endpoints stay hidden (404) in a production profile; in
+development they stay open for local/CI convenience. This bounds an
+unauthenticated probe: the public `/api/ready` never runs the migration runner,
+a DB-wide count or a remote model-provider call.
+
+`/api/ready` returns only `{"ready": bool, "status": ...}`. The public `ready`
+flag reflects the components required to serve core requests — `database` and
+`storage`.
+
+`/api/ready/detail` returns the component map. Its `ready` flag reflects only the
 components required to serve core requests — `database`, `migrations`,
 `storage`. The `model_provider`, `scheduler`, `connectors`, `notifications` and
 `knowledge` components are reported but do **not** gate readiness, so a
@@ -50,7 +62,8 @@ safe, fixed field set: `category`, `duration_ms`, `tenant_id`, `principal_id`,
 
 ## Metrics
 
-`GET /api/metrics` (Prometheus text format; disabled deployments return 404):
+`GET /api/metrics` (Prometheus text format; disabled deployments return 404;
+requires the `OPENJM_OPS_TOKEN` bearer, or hidden in production without one):
 
 | Metric | Type | Meaning |
 | --- | --- | --- |

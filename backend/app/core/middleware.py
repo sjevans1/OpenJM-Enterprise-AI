@@ -24,6 +24,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -112,28 +113,81 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.method in {"POST", "PUT", "PATCH"}:
-            content_type = request.headers.get("content-type", "")
-            limit = (
-                settings.max_upload_bytes
-                if content_type.startswith("multipart/form-data")
-                else settings.max_request_body_bytes
-            )
-            declared = request.headers.get("content-length")
-            if declared is not None:
-                try:
-                    if int(declared) > limit:
-                        return JSONResponse(
-                            status_code=413,
-                            content={"detail": "request body exceeds the configured limit"},
-                        )
-                except ValueError:
-                    return JSONResponse(
-                        status_code=400, content={"detail": "invalid Content-Length"}
-                    )
-        return await call_next(request)
+_TOO_LARGE = "request body exceeds the configured limit"
+_INVALID_LENGTH = "invalid Content-Length"
+
+
+async def _reject(scope, receive, send, status_code: int, detail: str) -> None:
+    response = JSONResponse(status_code=status_code, content={"detail": detail})
+    await response(scope, receive, send)
+
+
+def _replay(body: bytes, *, disconnected: bool = False):
+    """A ``receive`` callable that hands the buffered body to the application."""
+    sent = False
+
+    async def _receive():
+        nonlocal sent
+        if disconnected or sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return _receive
+
+
+class BodySizeLimitMiddleware:
+    """Bound the request body for mutating methods (VS8 hardening).
+
+    A declared ``Content-Length`` above the bound is refused immediately. A
+    chunked/streamed body that declares no length is read under a running byte
+    budget and refused with 413 the moment it exceeds the bound, so an
+    over-size streamed POST cannot bypass the limit by omitting the header. A
+    body within the bound is replayed unchanged to the application. File
+    uploads use the (larger) upload bound; other requests use the API body
+    bound.
+
+    Implemented as a pure ASGI middleware so it can inspect the ``receive``
+    stream itself; a ``BaseHTTPMiddleware`` only sees the declared header.
+    """
+
+    def __init__(self, app) -> None:  # noqa: D401 - ASGI middleware signature
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            return await self.app(scope, receive, send)
+
+        headers = Headers(scope=scope)
+        content_type = headers.get("content-type", "")
+        limit = (
+            settings.max_upload_bytes
+            if content_type.startswith("multipart/form-data")
+            else settings.max_request_body_bytes
+        )
+
+        declared = headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > limit:
+                    return await _reject(scope, receive, send, 413, _TOO_LARGE)
+            except ValueError:
+                return await _reject(scope, receive, send, 400, _INVALID_LENGTH)
+
+        # No (or untrusted) declared length: enforce the bound while streaming.
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return await self.app(
+                    scope, _replay(bytes(body), disconnected=True), send
+                )
+            body += message.get("body", b"") or b""
+            if len(body) > limit:
+                return await _reject(scope, receive, send, 413, _TOO_LARGE)
+            if not message.get("more_body", False):
+                break
+        return await self.app(scope, _replay(bytes(body)), send)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

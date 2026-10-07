@@ -1,0 +1,18 @@
+# OpenJM Enterprise AI — reverse proxy image carrying the built SPA (VS8).
+#
+# Multistage: stage 1 builds the frontend, stage 2 is Caddy with the built asset
+# tree baked in at /srv/openjm/frontend (the root the Caddyfile serves) plus the
+# Caddyfile. This guarantees the assets the proxy serves are actually present in
+# the running container, with no host bind mount and no separate build step.
+FROM node:20-bookworm-slim AS frontend
+
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+FROM caddy:2
+
+COPY --from=frontend /app/dist /srv/openjm/frontend
+COPY deploy/compose/Caddyfile /etc/caddy/Caddyfile

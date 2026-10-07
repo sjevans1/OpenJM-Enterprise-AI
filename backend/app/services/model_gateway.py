@@ -23,6 +23,7 @@ Phase B reliability design (docs/MODEL_GATEWAY_RELIABILITY.md):
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 import re
 import time
@@ -34,9 +35,73 @@ import httpx
 from app.core.config import get_settings
 from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
+logger = logging.getLogger("openjm.model")
+
+# Stable, client-safe provider failure categories (Issue #38 backend-only
+# provider isolation). A provider failure is reported as one of these, never as
+# raw exception text: an httpx error string can carry the private provider
+# URL/host/path and, on some paths, credential material. The API response, the
+# public probes and the metrics therefore carry a category at most; the
+# operator log carries the category plus a sanitised, bounded detail.
+FAILURE_CATEGORIES = ("timeout", "auth_rejected", "unreachable", "bad_response")
+
+_SAFE_FAILURE_MESSAGES: dict[str, str] = {
+    "timeout": "The model provider did not respond within the configured timeout.",
+    "auth_rejected": "The model provider rejected the deployment credential.",
+    "unreachable": "The model provider is unreachable.",
+    "bad_response": "The model provider returned an unusable response.",
+}
+
+_URL_PATTERN = re.compile(r"https?://[^\s'\"<>()]+")
+
 
 class ModelGatewayError(RuntimeError):
-    pass
+    """A controlled model-gateway failure that is safe to surface to a client.
+
+    ``category`` is one of :data:`FAILURE_CATEGORIES`; ``str(error)`` is always a
+    stable, non-sensitive message and never contains the provider URL/host/path
+    or the credential.
+    """
+
+    def __init__(self, message: str, *, category: str = "bad_response") -> None:
+        self.category = category if category in FAILURE_CATEGORIES else "bad_response"
+        super().__init__(message)
+
+
+def provider_failure(category: str) -> ModelGatewayError:
+    """Build a controlled error carrying the safe message for *category*."""
+    safe = category if category in FAILURE_CATEGORIES else "bad_response"
+    return ModelGatewayError(_SAFE_FAILURE_MESSAGES[safe], category=safe)
+
+
+def classify_provider_error(exc: BaseException) -> str:
+    """Map a transport/HTTP failure to a stable, non-sensitive category."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (401, 403):
+            return "auth_rejected"
+        return "bad_response"
+    if isinstance(exc, (httpx.TransportError, httpx.ConnectError, OSError)):
+        return "unreachable"
+    return "bad_response"
+
+
+def sanitise_provider_text(text: str, *, base_url: str = "", api_key: str = "") -> str:
+    """Redact provider addresses and credential material from operator text.
+
+    Defence in depth: even the operator-only log must not echo the private
+    provider address or the bearer credential. Known values are replaced first,
+    then any remaining URL-like token is collapsed; the result is bounded.
+    """
+    cleaned = text
+    for secret in (base_url, api_key):
+        secret = (secret or "").strip()
+        if secret:
+            cleaned = cleaned.replace(secret, "[redacted]")
+    cleaned = _URL_PATTERN.sub("[redacted-url]", cleaned)
+    return cleaned[:300]
 
 
 # ── tokenizer control-token families (generic across local models) ─────────
@@ -290,7 +355,8 @@ class OpenAICompatibleModelGateway:
             content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelGatewayError(
-                "Model endpoint returned an unexpected response shape"
+                "Model endpoint returned an unexpected response shape",
+                category="bad_response",
             ) from exc
         return content if isinstance(content, str) else ""
 
@@ -315,13 +381,27 @@ class OpenAICompatibleModelGateway:
         try:
             _, body = await self._post_json(url, headers, payload)
         except (httpx.HTTPError, ValueError) as exc:
+            category = classify_provider_error(exc)
             METRICS.inc("openjm_model_requests_total", labels={"outcome": "error"})
             METRICS.histogram(
                 "openjm_model_request_duration_seconds",
                 time.perf_counter() - started,
                 {"op": "chat"},
             )
-            raise ModelGatewayError(f"Model request failed: {exc}") from exc
+            # Operator-only, strictly sanitised: category + type + redacted
+            # detail. The raw httpx message is never logged.
+            logger.warning(
+                "model provider request failed (category=%s, error_type=%s): %s",
+                category,
+                type(exc).__name__,
+                sanitise_provider_text(
+                    str(exc),
+                    base_url=self.settings.model_base_url,
+                    api_key=self.settings.model_api_key,
+                ),
+                extra={"category": "model_provider", "failure_category": category},
+            )
+            raise provider_failure(category) from exc
         if budget is not None:
             budget.check_wall(datetime.now(timezone.utc))
         content = self._extract_content(body)
@@ -383,5 +463,6 @@ class OpenAICompatibleModelGateway:
         raise ModelGatewayError(
             "Model output failed validation after one bounded retry "
             f"(first: {validation.failure_reason}; "
-            f"retry: {retry_validation.failure_reason})"
+            f"retry: {retry_validation.failure_reason})",
+            category="bad_response",
         )

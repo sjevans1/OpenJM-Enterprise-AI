@@ -79,6 +79,7 @@ CONFIGURATION_SURFACE: tuple[ConfigurationField, ...] = (
     ConfigurationField("rate_limit_enabled", Classification.SAFE_DEFAULT, "Expensive-endpoint rate limiting."),
     ConfigurationField("retention_enabled", Classification.OPTIONAL, "Enable bounded retention lifecycle."),
     ConfigurationField("metrics_enabled", Classification.SAFE_DEFAULT, "Expose Prometheus-style metrics."),
+    ConfigurationField("ops_token", Classification.SECRET, "Bearer shared by the detailed operational endpoints (metrics, readiness detail)."),
     ConfigurationField("product_name", Classification.OPTIONAL, "White-label display name (text only)."),
     ConfigurationField("organization_name", Classification.OPTIONAL, "White-label organization name."),
     ConfigurationField("release_id", Classification.OPTIONAL, "Build/release identifier."),
@@ -275,6 +276,16 @@ def validate_configuration(settings: Settings) -> PreflightReport:
         report.add_error(
             "rate_limit_enabled",
             "production requires rate limiting on expensive endpoints",
+        )
+
+    # Detailed operational endpoints are the trusted monitoring surface. Without
+    # a shared token they stay hidden (404) rather than exposing operational
+    # state to an unauthenticated caller.
+    if not (settings.ops_token or "").strip():
+        report.add_warning(
+            "ops_token",
+            "no ops_token set: /api/metrics and /api/ready/detail stay hidden "
+            "in production (set OPENJM_OPS_TOKEN to expose them to monitoring)",
         )
 
     return report

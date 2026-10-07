@@ -169,6 +169,7 @@ def run(out_path: Path | None) -> dict:
         model_api_key=FIXTURE_MODEL_KEY,
         model_provider_fallback="none",
         metrics_enabled=True,
+        ops_token="ops-acceptance-token",
     )
     report = validate_configuration(prod)
     results["production_preflight_ok"] = report.ok
@@ -195,6 +196,7 @@ def run(out_path: Path | None) -> dict:
            "OPENJM_MODEL_BASE_URL": model_base, "OPENJM_MODEL_NAME": "openjm-private-8b",
            "OPENJM_MODEL_API_KEY": FIXTURE_MODEL_KEY,
            "OPENJM_MODEL_PROVIDER_FALLBACK": "none",
+           "OPENJM_OPS_TOKEN": "ops-acceptance-token",
            "OPENJM_UPLOAD_DIR": str(root / "uploads"), "OPENJM_VECTOR_PATH": str(root / "vector"),
            "OPENJM_BACKUP_DIR": str(root / "backups")}
     port = _free_port()
@@ -255,15 +257,31 @@ def run(out_path: Path | None) -> dict:
         results["chat_routed_to_private_model"] = (
             chat.status_code == 200 and "PRIVATE-MODEL-ANSWER" in chat.text
         )
-        # credential non-exposure across client surfaces
+        # credential non-exposure across client surfaces. The detailed
+        # operational endpoints (readiness detail, metrics) are the trusted
+        # monitoring surface and require the ops token; the public readiness
+        # result stays minimal.
+        ops = {"Authorization": "Bearer ops-acceptance-token"}
+        surfaces = {
+            "/api/health": {},
+            "/api/version": {},
+            "/api/ready": {},
+            "/api/ready/detail": ops,
+            "/api/config/public": {},
+            "/api/metrics": ops,
+        }
         blob = "".join(
-            httpx.get(base + p, timeout=5).text
-            for p in ("/api/health", "/api/version", "/api/ready", "/api/config/public", "/api/metrics")
+            httpx.get(base + path, headers=headers, timeout=5).text
+            for path, headers in surfaces.items()
         )
         results["client_surfaces_no_model_key"] = FIXTURE_MODEL_KEY not in blob
         results["client_surfaces_no_provider_url"] = f"127.0.0.1:{model_port}" not in blob
-        # readiness reports provider mode/transport without secrets
-        ready = httpx.get(base + "/api/ready", timeout=5).json()
+        # The detailed operational surface is refused without the ops token.
+        results["ops_metrics_requires_token"] = (
+            httpx.get(base + "/api/metrics", timeout=5).status_code == 401
+        )
+        # readiness reports provider mode/transport without secrets (trusted view)
+        ready = httpx.get(base + "/api/ready/detail", headers=ops, timeout=5).json()
         mp = ready.get("components", {}).get("model_provider", {})
         results["ready_provider_mode"] = mp.get("mode")
         results["ready_provider_transport"] = mp.get("transport")
@@ -346,6 +364,7 @@ def main() -> int:
         "unauthenticated_denied", "dev_auth_refused", "oidc_token_accepted_path_live",
         "oidc_bad_token_refused", "chat_routed_to_private_model",
         "client_surfaces_no_model_key", "client_surfaces_no_provider_url",
+        "ops_metrics_requires_token",
         "pg_backup_verified", "pg_restore_row_count_matches",
     ]
     ok = all(results.get(c) is True for c in checks)

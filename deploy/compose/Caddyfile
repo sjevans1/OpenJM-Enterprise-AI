@@ -1,7 +1,19 @@
 # OpenJM Enterprise AI — reverse proxy / TLS boundary (VS8).
+#
 # Caddy terminates TLS and forwards to the backend. The browser never talks to
 # the model endpoint; only the backend does, server-side.
-openjm.example.com {
+#
+# The site address is operator-selectable (default: the production hostname).
+# The SPA asset tree is built into this image at /srv/openjm/frontend (see
+# Dockerfile.proxy), so `docker compose up --build` serves a real frontend with
+# no host bind mount.
+#
+# `/api/*` is routed with `handle`, NOT a bare `reverse_proxy @api` matcher: a
+# `try_files` rewrite runs in Caddy's rewrite phase, before the proxy handler, so
+# an un-matched `/api/...` path would be rewritten to `/index.html` and served
+# as the SPA. Mutually exclusive `handle` blocks keep the API proxy and the SPA
+# fallback separate.
+{$OPENJM_SITE_ADDRESS:openjm.example.com} {
     encode gzip
     # Security headers (also set defensively by the application).
     header {
@@ -10,10 +22,16 @@ openjm.example.com {
         Referrer-Policy no-referrer
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
     }
-    # Static SPA build.
-    root * /srv/openjm/frontend
-    @api path /api/*
-    reverse_proxy @api backend:8000
-    try_files {path} /index.html
-    file_server
+
+    # API: backend only. Evaluated before the SPA fallback.
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Static SPA build (baked into this image), with client-side routing fallback.
+    handle {
+        root * /srv/openjm/frontend
+        try_files {path} /index.html
+        file_server
+    }
 }

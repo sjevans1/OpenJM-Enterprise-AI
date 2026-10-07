@@ -154,6 +154,11 @@ class Settings(BaseSettings):
 
     # --- VS8 observability ----------------------------------------------------
     metrics_enabled: bool = True
+    # Shared bearer credential for the detailed operational surface (Prometheus
+    # metrics and the readiness detail report). Empty in development, where the
+    # endpoints stay open for local/CI convenience; a production profile hides
+    # them unless this is set. Never returned by any endpoint.
+    ops_token: str = ""
     # The scheduler runs as an in-process bounded tick when enabled. Default off
     # so the offline suite and a single-shot deployment are unaffected.
     scheduler_enabled: bool = False

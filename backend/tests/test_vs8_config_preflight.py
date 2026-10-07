@@ -143,3 +143,12 @@ def test_configuration_surface_classifies_secrets() -> None:
     assert by_name["model_api_key"].classification is Classification.SECRET
     assert by_name["oidc_client_secret"].classification is Classification.SECRET
     assert by_name["credential_encryption_key"].classification is Classification.SECRET
+    assert by_name["ops_token"].classification is Classification.SECRET
+
+
+def test_production_warns_when_ops_token_absent() -> None:
+    """Without an ops token the detailed endpoints stay hidden, not exposed."""
+
+    report = validate_configuration(_production_settings())
+    assert report.ok
+    assert any(i.setting == "ops_token" for i in report.warnings)
