@@ -53,7 +53,7 @@ def access_from_principal(principal) -> DocumentAccess:
 
 
 def allowed_group_ids(document) -> frozenset[str]:
-    """Parse a document's allowed-group list, ignoring malformed content."""
+    """Parse a source's allowed-group list, ignoring malformed content."""
     raw = getattr(document, "allowed_group_ids_json", None)
     if not raw:
         return frozenset()
@@ -66,40 +66,39 @@ def allowed_group_ids(document) -> frozenset[str]:
     return frozenset(item for item in parsed if isinstance(item, str) and item)
 
 
-def document_is_visible(access: DocumentAccess | None, document) -> bool:
-    """Fail-closed visibility for one governed Knowledge document.
-
-    ``access`` of ``None`` means the caller supplied no request identity (an
-    internal/legacy path); tenant and owner scoping have already been applied by
-    the caller's candidate query, so no additional restriction is added.
-    """
+def _source_is_visible(
+    access: DocumentAccess | None,
+    *,
+    tenant_id,
+    classification,
+    department_id,
+    tenant_visible,
+    allowed_groups: frozenset[str],
+) -> bool:
+    """Shared fail-closed policy evaluation for a governed source."""
     if access is None:
         return True
     # Defense in depth: tenant isolation is already enforced by the tenant
     # qualified ownership predicate, but never admit another tenant here either.
-    if str(document.tenant_id) != access.tenant_id:
+    if str(tenant_id) != access.tenant_id:
         return False
 
-    classification = getattr(document, "classification", None)
     if not is_known_classification(classification):
-        # Unknown/missing/corrupt class fails closed to the strictest behavior.
         classification = None
     else:
         classification = str(classification)
 
     # The tenant-wide fallback is only for the broad classes, and only when the
-    # document is explicitly marked tenant visible. A not-yet-flushed object has
-    # no value; the column default is true, so treat "unset" as the default.
-    tenant_visible = getattr(document, "tenant_visible", True)
+    # source is explicitly marked tenant visible. A not-yet-flushed object has no
+    # value; the column default is true, so treat "unset" as the default.
     if tenant_visible is None:
         tenant_visible = True
     if classification in TENANT_WIDE_CLASSIFICATIONS and bool(tenant_visible):
         return True
 
     # Explicit grants, valid for any classification.
-    if allowed_group_ids(document) & access.group_ids:
+    if allowed_groups & access.group_ids:
         return True
-    department_id = getattr(document, "department_id", None)
     if department_id:
         if department_id in access.department_ids:
             return True
@@ -110,11 +109,42 @@ def document_is_visible(access: DocumentAccess | None, document) -> bool:
     return False
 
 
+def document_is_visible(access: DocumentAccess | None, document) -> bool:
+    """Fail-closed visibility for one governed Knowledge document."""
+    return _source_is_visible(
+        access,
+        tenant_id=document.tenant_id,
+        classification=getattr(document, "classification", None),
+        department_id=getattr(document, "department_id", None),
+        tenant_visible=getattr(document, "tenant_visible", True),
+        allowed_groups=allowed_group_ids(document),
+    )
+
+
+def data_source_is_visible(access: DocumentAccess | None, source) -> bool:
+    """Fail-closed visibility for one governed structured Data source."""
+    return _source_is_visible(
+        access,
+        tenant_id=source.tenant_id,
+        classification=getattr(source, "classification", None),
+        department_id=getattr(source, "department_id", None),
+        tenant_visible=getattr(source, "tenant_visible", True),
+        allowed_groups=allowed_group_ids(source),
+    )
+
+
 def visible_documents(access: DocumentAccess | None, documents):
     """Filter a candidate set down to the documents this principal may use."""
     if access is None:
         return list(documents)
     return [document for document in documents if document_is_visible(access, document)]
+
+
+def visible_data_sources(access: DocumentAccess | None, sources):
+    """Filter a candidate set down to the Data sources this principal may use."""
+    if access is None:
+        return list(sources)
+    return [source for source in sources if data_source_is_visible(access, source)]
 
 
 # ---------------------------------------------------------------------------

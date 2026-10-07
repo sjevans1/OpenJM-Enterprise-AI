@@ -477,7 +477,8 @@ def test_revision_0009_adds_columns_idempotently_and_downgrades(tmp_path):
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'bv1b.db'}"
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0009_bv1b_classification"
+    head = current_revision(url)
+    assert head is not None
 
     engine = create_engine(sync_url_for(url), future=True)
     try:
@@ -493,7 +494,7 @@ def test_revision_0009_adds_columns_idempotently_and_downgrades(tmp_path):
 
     # Idempotent second pass.
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0009_bv1b_classification"
+    assert current_revision(url) == head
 
 
 def test_all_revision_ids_fit_the_alembic_version_column():

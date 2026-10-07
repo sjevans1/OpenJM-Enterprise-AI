@@ -189,6 +189,18 @@ class DataSource(Base):
     last_schema_refresh: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # --- BV1-C governed structured source classification ---
+    classification: Mapped[str] = mapped_column(
+        String(32),
+        default=DEFAULT_SOURCE_CLASSIFICATION,
+        server_default=DEFAULT_SOURCE_CLASSIFICATION,
+        nullable=False,
+    )
+    department_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    tenant_visible: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
+    allowed_group_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, onupdate=now_utc

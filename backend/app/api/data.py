@@ -1,13 +1,15 @@
 import json
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
 from app.core.config import get_settings
-from app.core.identity import Permission, Principal
+from app.core.identity import AuthorizationError, Permission, Principal
 from app.db import get_db
 from app.models import DataSource
 from app.schemas import (
@@ -18,6 +20,7 @@ from app.schemas import (
     DataSourceSchemaRefreshResult,
     DataSourceTestResult,
 )
+from app.services import access_governance
 from app.services.credentials import CredentialVaultError, credential_vault
 from app.services.data_sources import (
     DataSourceError,
@@ -42,6 +45,9 @@ def _source_out(source: DataSource) -> DataSourceOut:
         revenue_currency=source.revenue_currency,
         status=source.status,
         enabled=source.enabled,
+        classification=source.classification,
+        department_id=source.department_id,
+        tenant_visible=source.tenant_visible,
         tables=decode_schema(source.schema_json),
         last_error=source.last_error,
         last_schema_refresh=source.last_schema_refresh,
@@ -235,6 +241,39 @@ async def update_source_currency(
     source.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(source)
+    return _source_out(source)
+
+
+class DataSourcePolicyUpdate(BaseModel):
+    classification: Literal["public", "internal", "confidential", "highly_restricted"]
+    department_id: str | None = Field(default=None, max_length=36)
+    tenant_visible: bool | None = None
+    allowed_group_ids: list[str] | None = Field(default=None, max_length=200)
+
+
+@router.patch("/{source_id}/policy", response_model=DataSourceOut)
+async def update_source_policy(
+    source_id: str,
+    payload: DataSourcePolicyUpdate,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.DATA_WRITE)),
+):
+    """Set a governed Data source's classification/policy (steward or admin only).
+
+    The permission gate admits any Data writer; the service then requires a
+    tenant admin or a steward whose scope covers the source, and audits it.
+    """
+    try:
+        source = await access_governance.set_data_source_policy(
+            db, principal=principal, source_id=source_id, **payload.model_dump()
+        )
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=exc.message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if source is None:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    await db.commit()
     return _source_out(source)
 
 

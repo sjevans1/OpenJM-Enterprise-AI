@@ -11,6 +11,7 @@ from app.services.document_lifecycle import retrievable_filter
 from app.services.document_policy import (
     DocumentAccess,
     governed_tenant_documents,
+    visible_data_sources,
     visible_documents,
 )
 from app.services.report_scope import ReportSourceScope, ReportScopeError
@@ -211,10 +212,22 @@ class OpenJMOrchestrator:
         db: AsyncSession,
         user_id: str,
         scope: ReportSourceScope | None = None,
+        access: DocumentAccess | None = None,
     ) -> list[DataSource]:
-        if scope is None:
-            return await structured_planner._sources(db, user_id)
-        return await structured_planner._sources(db, user_id, scope)
+        # Governed, tenant-wide selection (resolved product decision): an
+        # internal source is available to any active member of the tenant;
+        # confidential/highly-restricted need explicit authorization.
+        tenant_id = access.tenant_id if access is not None else None
+        sources = await structured_planner._sources(db, user_id, scope, tenant_id)
+        # Remove sources the principal is not authorized to use before any schema
+        # or SQL exposure. A policy-hidden pinned source fails the exact scope
+        # check below (fail closed), never silently dropped.
+        sources = visible_data_sources(access, sources)
+        if scope is not None and {source.id for source in sources} != set(
+            scope.require_sources()
+        ):
+            raise ReportScopeError("Pinned data source is no longer authorized")
+        return sources
 
     # ------------------------------------------------------------------
     # Structured path (Data mode + Hybrid structured side)
@@ -508,7 +521,7 @@ class OpenJMOrchestrator:
             if scope.document_ids:
                 await self._ready_documents(db, user_id, scope, _request_access_for(user_id))
             if scope.source_ids:
-                await self._structured_sources(db, user_id, scope)
+                await self._structured_sources(db, user_id, scope, _request_access_for(user_id))
 
         if execution_class == "general":
             return ExecutionPlan(
@@ -611,7 +624,7 @@ class OpenJMOrchestrator:
             )
 
         sources = await self._structured_sources(
-            db, user_id, **({"scope": scope} if scope is not None else {})
+            db, user_id, scope=scope, access=_request_access_for(user_id)
         )
         decomposition = self._decompose_hybrid(message, sources)
 
@@ -1055,7 +1068,7 @@ class OpenJMOrchestrator:
         # explicitly declared and matches the policy. Unknown or mismatched
         # currencies cannot be safely compared; do not execute.
         sources = await self._structured_sources(
-            db, user_id, **({"scope": scope} if scope is not None else {})
+            db, user_id, scope=scope, access=_request_access_for(user_id)
         )
         matching = [source for source in sources if source.id == proposal.source_id]
         if len(matching) != 1:
