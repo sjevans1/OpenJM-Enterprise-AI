@@ -25,6 +25,7 @@ Phase B reliability design (docs/MODEL_GATEWAY_RELIABILITY.md):
 import json
 from datetime import datetime, timezone
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -197,6 +198,58 @@ class OpenAICompatibleModelGateway:
         base_url = self.settings.model_base_url.rstrip("/")
         return f"{base_url}/chat/completions"
 
+    def _models_endpoint(self) -> str:
+        base_url = self.settings.model_base_url.rstrip("/")
+        return f"{base_url}/models"
+
+    async def probe(self) -> dict:
+        """Report provider health WITHOUT leaking the credential.
+
+        Returns provider mode, model identifier and a bounded status. A timeout
+        or unavailability is a reported ``error`` component, never an exception:
+        this is deliberately separate from core process liveness (VS8 D). The
+        bearer credential is never included, and the endpoint host is reduced to
+        a scheme classification so a private internal hostname is not disclosed.
+        """
+        import httpx
+
+        from app.core.observability import METRICS
+
+        mode = (self.settings.model_provider_mode or "local").strip()
+        transport = "https" if self._models_endpoint().lower().startswith("https") else "http"
+        component: dict[str, object] = {
+            "mode": mode,
+            "model": self.settings.model_name,
+            "transport": transport,
+            "configured": bool((self.settings.model_base_url or "").strip()),
+            "fallback_policy": self.settings.model_provider_fallback,
+        }
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(float(self.settings.model_timeout_seconds), 5.0)
+            ) as client:
+                response = await client.get(self._models_endpoint(), headers=self._headers())
+                response.raise_for_status()
+                body = response.json()
+            ids = [
+                item.get("id")
+                for item in (body.get("data") or [])
+                if isinstance(item, dict)
+            ]
+            component["status"] = "ok"
+            component["model_present"] = self.settings.model_name in ids if ids else None
+        except Exception as exc:  # noqa: BLE001 - reported, never raised
+            component["status"] = "error"
+            component["detail"] = type(exc).__name__
+        finally:
+            METRICS.histogram(
+                "openjm_model_request_duration_seconds",
+                time.perf_counter() - started,
+                {"op": "probe"},
+            )
+        return component
+
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.settings.model_api_key:
@@ -256,14 +309,33 @@ class OpenAICompatibleModelGateway:
         url = self._endpoint()
         headers = self._headers()
         payload = self._build_payload(messages, temperature, max_tokens, extras)
+        from app.core.observability import METRICS
+
+        started = time.perf_counter()
         try:
             _, body = await self._post_json(url, headers, payload)
         except (httpx.HTTPError, ValueError) as exc:
+            METRICS.inc("openjm_model_requests_total", labels={"outcome": "error"})
+            METRICS.histogram(
+                "openjm_model_request_duration_seconds",
+                time.perf_counter() - started,
+                {"op": "chat"},
+            )
             raise ModelGatewayError(f"Model request failed: {exc}") from exc
         if budget is not None:
             budget.check_wall(datetime.now(timezone.utc))
         content = self._extract_content(body)
-        return content, validate_model_output(content)
+        validation = validate_model_output(content)
+        METRICS.inc(
+            "openjm_model_requests_total",
+            labels={"outcome": "ok" if validation.ok else "malformed"},
+        )
+        METRICS.histogram(
+            "openjm_model_request_duration_seconds",
+            time.perf_counter() - started,
+            {"op": "chat"},
+        )
+        return content, validation
 
     async def chat(
         self,
