@@ -101,13 +101,18 @@ async def init_db() -> None:
     import asyncio
 
     from app import models  # noqa: F401
-    from app.migrations_runner import adopt_and_upgrade
+    from app.migrations_runner import adopt_and_upgrade, assert_known_schema_revision
     from app.services.identity import ensure_local_identity
 
     # Migrate the database this process is actually bound to, not a separately
     # configured URL: the engine is the single source of truth, so a test or an
     # embedding application that replaces it migrates the right database.
     database_url = engine.url.render_as_string(hide_password=False)
+
+    # Refuse to start on a schema this build does not know (a future revision
+    # written by a newer release). Runs before any upgrade attempt.
+    await asyncio.to_thread(assert_known_schema_revision, database_url)
+
     result = await asyncio.to_thread(adopt_and_upgrade, database_url)
     if result.get("adopted_baseline"):
         logger.info("Application database adopted at baseline revision")
