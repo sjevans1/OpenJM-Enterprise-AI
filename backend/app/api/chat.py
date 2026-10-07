@@ -168,7 +168,21 @@ async def chat(
             {"role": "user", "content": request.message},
         ]
         try:
-            answer = await model_gateway.chat(provider_messages)
+            from app.services.usage_metering import UsageContext
+
+            answer = await model_gateway.chat(
+                provider_messages,
+                db=db,
+                usage_context=UsageContext(
+                    tenant_id=current_principal().tenant_id,
+                    request_id=str(conversation.id),
+                    provider_route=settings.model_provider_mode or "local",
+                    model_name=settings.model_name,
+                    principal_id=current_principal().principal_id,
+                    conversation_id=conversation.id,
+                    execution_class=plan.execution_class,
+                ),
+            )
         except ModelGatewayError as exc:
             await db.rollback()
             raise HTTPException(status_code=502, detail=str(exc)) from exc
