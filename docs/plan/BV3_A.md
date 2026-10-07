@@ -85,6 +85,23 @@ python -m app.services.platform_bootstrap <validated-oidc-subject>
   The account carries no credential of its own; afterwards the operator
   authenticates through normal OIDC or a session.
 
+### Trust-root protection (PR #52 review correction)
+
+`operators:admin` is the only capability that can grant or revoke platform
+operators, and bootstrap is deliberately one time, so the final effective
+`operators:admin` grant cannot be revoked. `_assert_trust_root_survives` refuses
+any revocation that would remove it, which covers both naming the capability
+explicitly and a bulk revoke of every capability the principal holds. A grant
+that is already revoked, or whose expiry has passed, is not authority and
+therefore does not satisfy the guard, so an expired second operator cannot be
+used to authorise removing the only live one.
+
+Bootstrap's own guard is deliberately stricter than the authority check: any
+active row, expired or not, keeps it shut. A lapsed grant therefore never
+re-opens bootstrap automatically, and recovery from a platform lock-out stays a
+deliberate human operation rather than an emergency backdoor. Other platform
+capabilities remain independently revocable.
+
 ### Support and delegation foundation — migration `0012_support_delegations`
 
 One `support_delegations` row per `(tenant, operator, scope)`; `scope` is
@@ -104,6 +121,9 @@ Mutations are audited (`platform.support.grant` / `platform.support.revoke`).
 | Tenant create/suspend/reactivate only via platform authority | `test_tenant_create_suspend_reactivate_via_platform_authority`, `test_tenant_mutation_requires_tenants_admin` |
 | Initial owner provisioning works and is audited | `test_initial_owner_provisioning_is_audited`, `test_provisioning_rejects_tenant_roles` |
 | Bootstrap cannot be replayed | `test_bootstrap_establishes_first_operator_and_cannot_be_replayed` |
+| Final `operators:admin` trust root protected from revocation | `test_sole_operators_admin_cannot_revoke_its_own_capability`, `test_sole_operators_admin_cannot_bulk_revoke_itself`, `test_expired_second_operators_admin_does_not_satisfy_the_guard`, `test_revoke_route_protects_the_trust_root_with_403` |
+| Revocation still succeeds with a second active operator, and other capabilities stay revocable | `test_revocation_succeeds_when_another_active_operators_admin_exists`, `test_other_capabilities_remain_independently_revocable` |
+| Bootstrap is not an emergency backdoor | `test_bootstrap_is_not_an_emergency_backdoor` |
 | Operator grant/revoke applies on the next authorized request | `test_operator_grant_and_revoke_apply_on_next_request` |
 | Support delegation is scoped, revocable and expiring | `test_support_delegation_is_scoped_resolved_and_revocable`, `test_expired_support_delegation_is_not_resolved`, `test_content_support_cannot_be_delegated_without_holding_it` |
 | Cross-tenant metadata without content | `test_platform_metadata_lists_all_tenants_without_content` |
