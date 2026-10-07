@@ -65,6 +65,9 @@ class ModelGatewayError(RuntimeError):
 
     def __init__(self, message: str, *, category: str = "bad_response") -> None:
         self.category = category if category in FAILURE_CATEGORIES else "bad_response"
+        # Set by the gateway when a provider attempt consumed tokens but failed,
+        # so the caller can persist the usage evidence after its own rollback.
+        self.pending_usage: dict | None = None
         super().__init__(message)
 
 
@@ -213,6 +216,18 @@ def validate_model_output(content: str) -> OutputValidation:
             )
 
     return OutputValidation(True, None, round(density, 4), max_repeat)
+
+
+def _prompt_text(payload: dict) -> str:
+    """Concatenated request message text, for a deterministic token estimate."""
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if not isinstance(messages, list):
+        return ""
+    return "\n".join(
+        item.get("content")
+        for item in messages
+        if isinstance(item, dict) and isinstance(item.get("content"), str)
+    )
 
 
 class OpenAICompatibleModelGateway:
@@ -368,8 +383,13 @@ class OpenAICompatibleModelGateway:
         max_tokens: int | None,
         extras: dict[str, Any] | None,
         budget: Optional[ReportRunBudget] = None,
-    ) -> tuple[str, OutputValidation]:
-        """One generation attempt. Returns (raw content, validation)."""
+        usage_context: Any = None,
+        db: Any = None,
+        call_role: str = "primary",
+        attempt: int = 0,
+        parent_call_id: str | None = None,
+    ) -> tuple[str, OutputValidation, str | None]:
+        """One generation attempt. Returns (raw content, validation, usage id)."""
         if budget is not None:
             budget.count_model()
         url = self._endpoint()
@@ -378,6 +398,7 @@ class OpenAICompatibleModelGateway:
         from app.core.observability import METRICS
 
         started = time.perf_counter()
+        started_wall = datetime.now(timezone.utc)
         try:
             _, body = await self._post_json(url, headers, payload)
         except (httpx.HTTPError, ValueError) as exc:
@@ -401,7 +422,20 @@ class OpenAICompatibleModelGateway:
                 ),
                 extra={"category": "model_provider", "failure_category": category},
             )
-            raise provider_failure(category) from exc
+            error = provider_failure(category)
+            # A consumed attempt must outlive the caller's own rollback: hand the
+            # evidence to the caller, which persists it after discarding the
+            # abandoned business turn (usage_metering.record_pending_failure).
+            error.pending_usage = {
+                "context": usage_context,
+                "call_role": call_role,
+                "attempt": attempt,
+                "failure_category": category,
+                "prompt_text": _prompt_text(payload),
+                "started_at": started_wall,
+                "parent_call_id": parent_call_id,
+            }
+            raise error from exc
         if budget is not None:
             budget.check_wall(datetime.now(timezone.utc))
         content = self._extract_content(body)
@@ -415,7 +449,71 @@ class OpenAICompatibleModelGateway:
             time.perf_counter() - started,
             {"op": "chat"},
         )
-        return content, validation
+        provider_usage = None
+        if isinstance(body, dict):
+            from app.services.usage_metering import ModelCallUsage
+
+            provider_usage = ModelCallUsage.from_provider_usage(body.get("usage"))
+        usage_id = await self._meter(
+            usage_context=usage_context,
+            db=db,
+            call_role=call_role,
+            attempt=attempt,
+            status="succeeded",
+            failure_category=None,
+            provider_usage=provider_usage,
+            prompt_text=_prompt_text(payload),
+            completion_text=content,
+            started_at=started_wall,
+            parent_call_id=parent_call_id,
+        )
+        return content, validation, usage_id
+
+    async def _meter(
+        self,
+        *,
+        usage_context: Any,
+        db: Any,
+        call_role: str,
+        attempt: int,
+        status: str,
+        failure_category: str | None,
+        provider_usage: Any,
+        prompt_text: str,
+        completion_text: str,
+        started_at: datetime,
+        parent_call_id: str | None,
+    ) -> str | None:
+        """Finalize one usage event for this attempt. Never breaks the call path.
+
+        Metering flushes into the caller's unit of work; the request-level
+        commit persists it. A metering failure must never fail the model call.
+        """
+        if usage_context is None or db is None:
+            return None
+        try:
+            from app.services.usage_metering import ModelCallUsage, record_model_usage
+
+            resolved = provider_usage
+            if resolved is None:
+                resolved = ModelCallUsage.estimate(
+                    prompt_text, completion_text if status == "succeeded" else ""
+                )
+            event = await record_model_usage(
+                db,
+                context=usage_context,
+                usage=resolved,
+                call_role=call_role,
+                attempt=attempt,
+                status=status,
+                failure_category=failure_category,
+                parent_call_id=parent_call_id,
+                started_at=started_at,
+            )
+            return event.id if event is not None else None
+        except Exception as exc:  # noqa: BLE001 - metering must not break the model path
+            logger.warning("model usage metering failed: %r", exc)
+            return None
 
     async def chat(
         self,
@@ -424,6 +522,8 @@ class OpenAICompatibleModelGateway:
         temperature: float = 0.2,
         max_tokens: int | None = None,
         budget: Optional[ReportRunBudget] = None,
+        usage_context: Any = None,
+        db: Any = None,
     ) -> str:
         """Generate one validated answer.
 
@@ -437,12 +537,17 @@ class OpenAICompatibleModelGateway:
         attempt is counted and max_tokens is capped to
         ``budget.max_output_tokens`` (default 2048).  When *budget* is
         ``None`` (ordinary Chat) behaviour is unchanged.
+
+        When *usage_context* and *db* are supplied, each HTTP attempt is
+        metered as one append-only usage event: the retry is a separate row
+        linked to the primary attempt.
         """
         if budget is not None:
             max_tokens = budget.enforce_max_tokens(max_tokens)
-        content, validation = await self._generate(
+        content, validation, primary_usage_id = await self._generate(
             messages, temperature=temperature, max_tokens=max_tokens, extras=None,
             budget=budget,
+            usage_context=usage_context, db=db, call_role="primary", attempt=0,
         )
         if validation.ok:
             return content
@@ -450,12 +555,17 @@ class OpenAICompatibleModelGateway:
         retry_max_tokens = max_tokens
         if retry_max_tokens is None:
             retry_max_tokens = self.settings.model_retry_max_tokens
-        retry_content, retry_validation = await self._generate(
+        retry_content, retry_validation, _retry_usage_id = await self._generate(
             messages,
             temperature=self.settings.model_retry_temperature,
             max_tokens=retry_max_tokens,
             extras=self._retry_extras,
             budget=budget,
+            usage_context=usage_context,
+            db=db,
+            call_role="retry",
+            attempt=1,
+            parent_call_id=primary_usage_id,
         )
         if retry_validation.ok:
             return retry_content

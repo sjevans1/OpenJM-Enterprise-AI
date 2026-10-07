@@ -1244,3 +1244,66 @@ class Notification(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, onupdate=now_utc
     )
+
+
+# ---------------------------------------------------------------------------
+# #46 M1: immutable LLM usage metering
+# ---------------------------------------------------------------------------
+
+
+class ModelUsageEvent(Base):
+    """One finalized model invocation, append-only.
+
+    A row is written once per provider invocation and is never mutated: a
+    correction is a new adjustment row, not an edit. Exactly-once finalization
+    comes from the unique ``idempotency_key`` (request id + attempt role), so a
+    retried request cannot double count.
+
+    ``parent_call_id`` links a retry/fallback to the attempt it replaces, so a
+    multi-call request is attributable without being collapsed into one row.
+    """
+
+    __tablename__ = "model_usage_events"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_model_usage_idempotency"),
+        CheckConstraint(
+            "usage_source IN ('provider_reported','estimated')",
+            name="ck_model_usage_source",
+        ),
+        CheckConstraint(
+            "call_role IN ('primary','retry','fallback')", name="ck_model_usage_call_role"
+        ),
+        CheckConstraint(
+            "status IN ('succeeded','failed')", name="ck_model_usage_status"
+        ),
+        CheckConstraint(
+            "input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0",
+            name="ck_model_usage_tokens",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    principal_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    # Parent request/workflow correlation shared by every call of one request.
+    request_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    execution_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_route: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    usage_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    call_role: Mapped[str] = mapped_column(String(16), nullable=False, default="primary")
+    parent_call_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Exactly-once key: request id + call role + attempt ordinal.
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
