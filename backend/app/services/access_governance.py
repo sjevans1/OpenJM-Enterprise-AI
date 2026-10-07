@@ -47,6 +47,7 @@ from app.core.platform import (
 )
 from app.models import (
     AccessGroup,
+    DataSource,
     DataSteward,
     Department,
     Document,
@@ -944,3 +945,99 @@ async def set_document_policy(
         metadata=audit_metadata,
     )
     return document
+
+
+async def set_data_source_policy(
+    db: AsyncSession,
+    *,
+    principal: Principal,
+    source_id: str,
+    classification: str,
+    department_id: str | None = None,
+    tenant_visible: bool | None = None,
+    allowed_group_ids: list[str] | None = None,
+) -> DataSource | None:
+    """Set a structured Data source's classification and policy.
+
+    Same authorization and audit discipline as :func:`set_document_policy`. A
+    source outside the actor's tenant is neither revealed nor mutated.
+    """
+    if not is_known_classification(classification):
+        raise ValueError(f"Unsupported classification: {classification!r}")
+
+    source = (
+        await db.execute(
+            select(DataSource).where(
+                DataSource.tenant_id == principal.tenant_id,
+                DataSource.id == source_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        return None
+
+    if not principal.has(Permission.TENANT_ADMIN):
+        covers = (
+            StewardScopeType.TENANT.value,
+            principal.tenant_id,
+        ) in principal.steward_scopes
+        if source.department_id and (
+            StewardScopeType.DEPARTMENT.value,
+            source.department_id,
+        ) in principal.steward_scopes:
+            covers = True
+        if department_id and (
+            StewardScopeType.DEPARTMENT.value,
+            department_id,
+        ) in principal.steward_scopes:
+            covers = True
+        if not covers:
+            raise AuthorizationError(
+                "Principal lacks tenant-admin or steward authority over this source",
+                code="missing_scope",
+            )
+
+    if department_id is not None:
+        if await get_department(db, principal=principal, department_id=department_id) is None:
+            raise ValueError("Department does not belong to the active tenant")
+
+    if allowed_group_ids:
+        wanted = {str(group) for group in allowed_group_ids}
+        found = set(
+            (
+                await db.execute(
+                    select(AccessGroup.id).where(
+                        AccessGroup.tenant_id == principal.tenant_id,
+                        AccessGroup.id.in_(wanted),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if found != wanted:
+            raise ValueError("Allowed group does not belong to the active tenant")
+
+    audit_metadata: dict = {"classification": classification}
+    source.classification = classification
+    if department_id is not None:
+        source.department_id = department_id
+        audit_metadata["department_id"] = department_id
+    if tenant_visible is not None:
+        source.tenant_visible = bool(tenant_visible)
+        audit_metadata["tenant_visible"] = bool(tenant_visible)
+    if allowed_group_ids is not None:
+        groups = sorted({str(group) for group in allowed_group_ids})
+        source.allowed_group_ids_json = json.dumps(groups)
+        audit_metadata["allowed_group_ids"] = groups
+    await db.flush()
+
+    await _audit(
+        db,
+        principal=principal,
+        action="governance.data_source.policy",
+        resource_type="data_source",
+        resource_id=source.id,
+        metadata=audit_metadata,
+    )
+    return source

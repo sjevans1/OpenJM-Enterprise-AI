@@ -138,6 +138,10 @@ class DataSourceOut(BaseModel):
     last_schema_refresh: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # BV1-C governed structured source classification (safe defaults).
+    classification: str = "internal"
+    department_id: str | None = None
+    tenant_visible: bool = True
 
 
 class DataSourceTestResult(BaseModel):

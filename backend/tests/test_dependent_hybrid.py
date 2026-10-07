@@ -356,7 +356,7 @@ async def run_dependent(
             )
         raise AssertionError(f"Unexpected tool: {name}")
 
-    async def fake_sources(self, db, user_id):
+    async def fake_sources(self, db, user_id, scope=None, access=None):
         return [
             SimpleNamespace(
                 id="database-1",
@@ -587,7 +587,7 @@ async def test_independent_hybrid_still_runs_each_source_once(
             ]
         )
 
-    async def fake_sources(self, db, user_id):
+    async def fake_sources(self, db, user_id, scope=None, access=None):
         return [
             SimpleNamespace(
                 id="sqlite-phoenix",

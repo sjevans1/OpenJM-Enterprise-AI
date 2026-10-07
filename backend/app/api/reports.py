@@ -17,6 +17,12 @@ from app.core.context import current_principal
 from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import Conversation, DataSource, Document, Message, SavedReport
+from app.services.document_policy import (
+    access_from_principal,
+    connector_origin_document_ids,
+    data_source_is_visible,
+    document_is_visible,
+)
 from app.schemas import (
     Evidence,
     SaveReportRequest,
@@ -121,26 +127,45 @@ def _authorized_tables(source: DataSource) -> set[str]:
 async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool:
     document_ids, source_ids = _source_ids(evidence)
     structured_tables = _structured_tables(evidence)
-    user_id = current_principal().user_id  # Replace only via VS5 trusted identity context.
+    principal = current_principal()  # Replace only via VS5 trusted identity context.
+    access = access_from_principal(principal)
+    tenant_id = principal.tenant_id
     if document_ids:
+        # Tenant-wide, policy-checked revalidation (resolved product decision):
+        # a public/internal document the caller can still see counts, whether or
+        # not they uploaded it. Connector-origin documents must ALSO pass the
+        # current connector gate.
         documents = (
             await db.execute(
-                select(Document.id).where(
+                select(Document).where(
                     Document.id.in_(document_ids),
-                    Document.user_id == user_id,
+                    Document.tenant_id == tenant_id,
                     Document.status == "ready",
                     Document.indexed.is_(True),
                 )
             )
         ).scalars().all()
-        if set(documents) != document_ids:
+        if {document.id for document in documents} != document_ids:
             return False
+        if any(not document_is_visible(access, document) for document in documents):
+            return False
+        connector_origin = await connector_origin_document_ids(db, tenant_id=tenant_id)
+        if connector_origin & document_ids:
+            from app.services.connectors.authorization import (
+                authorized_connector_document_ids_for_context,
+            )
+
+            authorized = frozenset(
+                await authorized_connector_document_ids_for_context(db) or ()
+            )
+            if (connector_origin & document_ids) - authorized:
+                return False
     if source_ids:
         sources = (
             await db.execute(
                 select(DataSource).where(
                     DataSource.id.in_(source_ids),
-                    DataSource.user_id == user_id,
+                    DataSource.tenant_id == tenant_id,
                     DataSource.status == "connected",
                     DataSource.enabled.is_(True),
                     DataSource.schema_json.is_not(None),
@@ -148,6 +173,8 @@ async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool
             )
         ).scalars().all()
         if {source.id for source in sources} != source_ids:
+            return False
+        if any(not data_source_is_visible(access, source) for source in sources):
             return False
         for source in sources:
             if not structured_tables.get(source.id, set()).issubset(_authorized_tables(source)):

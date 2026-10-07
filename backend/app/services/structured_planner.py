@@ -110,6 +110,7 @@ class StructuredPlanner:
         db: AsyncSession,
         user_id: str,
         scope: ReportSourceScope | None = None,
+        tenant_id: str | None = None,
     ) -> list[DataSource]:
         if scope is not None:
             try:
@@ -118,8 +119,11 @@ class StructuredPlanner:
                 raise StructuredPlannerError("No pinned structured sources") from exc
         else:
             allowed_ids = None
+        scope_column = (
+            DataSource.tenant_id == tenant_id if tenant_id is not None else DataSource.user_id == user_id
+        )
         statement = select(DataSource).where(
-            DataSource.user_id == user_id,
+            scope_column,
             DataSource.enabled.is_(True),
             DataSource.status == "connected",
             DataSource.schema_json.is_not(None),
