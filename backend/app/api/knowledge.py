@@ -1,19 +1,23 @@
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
 from app.core.config import get_settings
-from app.core.identity import Permission, Principal
+from app.core.identity import AuthorizationError, Permission, Principal
 from app.core.tenancy import DOC_STATE_DELETED, DOC_STATE_PENDING
 from app.db import get_db
 from app.models import Document
 from app.schemas import DocumentOut, IngestResponse
+from app.services import access_governance
 from app.services import document_lifecycle as lifecycle
 from app.services import identity as identity_service
+from app.services.document_policy import access_from_principal, visible_documents
 from app.services.knowledge import KnowledgeEngineError, knowledge_engine
 
 
@@ -41,6 +45,9 @@ def _document_out(document: Document) -> DocumentOut:
         status=document.status,
         indexed=document.indexed,
         created_at=document.created_at,
+        classification=document.classification,
+        department_id=document.department_id,
+        tenant_visible=document.tenant_visible,
     )
 
 
@@ -66,7 +73,44 @@ async def list_documents(
         .where(*_owned(principal), Document.deleted_at.is_(None))
         .order_by(Document.created_at.desc())
     )
-    return [_document_out(document) for document in result.scalars().all()]
+    # BV1-B: a document the caller is not authorized to use does not appear in
+    # the catalog either, so the listing cannot leak its existence.
+    documents = visible_documents(access_from_principal(principal), result.scalars().all())
+    return [_document_out(document) for document in documents]
+
+
+class DocumentPolicyUpdate(BaseModel):
+    classification: Literal["public", "internal", "confidential", "highly_restricted"]
+    department_id: str | None = Field(default=None, max_length=36)
+    tenant_visible: bool | None = None
+    allowed_group_ids: list[str] | None = Field(default=None, max_length=200)
+
+
+@router.patch("/documents/{document_id}/policy", response_model=DocumentOut)
+async def update_document_policy(
+    document_id: str,
+    payload: DocumentPolicyUpdate,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.KNOWLEDGE_WRITE)),
+):
+    """Set a governed document's classification/policy (steward or admin only).
+
+    The permission gate admits any Knowledge writer; the service then requires a
+    tenant admin or a steward whose scope covers the document, and audits every
+    change.
+    """
+    try:
+        document = await access_governance.set_document_policy(
+            db, principal=principal, document_id=document_id, **payload.model_dump()
+        )
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=exc.message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await db.commit()
+    return _document_out(document)
 
 
 @router.post("/documents", response_model=IngestResponse)

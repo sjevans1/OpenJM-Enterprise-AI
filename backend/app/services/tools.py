@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DataSource, Document
 from app.services.document_lifecycle import retrievable_filter
+from app.services.document_policy import DocumentAccess, visible_documents
 from app.schemas import Evidence
 from app.services.execution_trace import (
     complete_execution_trace,
@@ -72,6 +73,9 @@ class ToolContext:
     db: AsyncSession | None = None
     report_scope: ReportSourceScope | None = None
     budget: Optional[ReportRunBudget] = None
+    # BV1-B: the request principal's data-side scopes. When present, the
+    # Knowledge tool removes unauthorized documents before vector retrieval.
+    access: "DocumentAccess | None" = None
 
 
 @dataclass
@@ -284,6 +288,10 @@ class KnowledgeSearchTool:
             .scalars()
             .all()
         )
+        # BV1-B: remove documents the principal is not authorized to use before
+        # any vector retrieval. A policy-hidden pinned document therefore also
+        # fails the report-scope equality check below, closing both paths.
+        documents = visible_documents(context.access, documents)
         if context.report_scope is not None and (
             {doc.id for doc in documents} != context.report_scope.document_ids
         ):

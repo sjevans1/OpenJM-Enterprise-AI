@@ -26,13 +26,18 @@ Design rules, matching the accepted VS5 identity layer:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.governance import StewardScopeType, is_known_steward_scope_type
+from app.core.governance import (
+    StewardScopeType,
+    is_known_classification,
+    is_known_steward_scope_type,
+)
 from app.core.identity import AuthorizationError, Principal
 from app.core.permissions import Permission
 from app.core.platform import (
@@ -44,6 +49,7 @@ from app.models import (
     AccessGroup,
     DataSteward,
     Department,
+    Document,
     GroupMembership,
     PlatformOperator,
     TenantMembership,
@@ -834,3 +840,107 @@ async def revoke_platform_operator(
             },
         )
     return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Document policy (BV1-B steward / admin mutation)
+# ---------------------------------------------------------------------------
+
+
+async def set_document_policy(
+    db: AsyncSession,
+    *,
+    principal: Principal,
+    document_id: str,
+    classification: str,
+    department_id: str | None = None,
+    tenant_visible: bool | None = None,
+    allowed_group_ids: list[str] | None = None,
+) -> Document | None:
+    """Set a Knowledge document's classification and policy.
+
+    Authorized only for a tenant admin or a data steward whose scope covers the
+    document (tenant-wide, the document's own department, or the department
+    being assigned). Returns None for a document outside the actor's tenant, so
+    a foreign document is never revealed and never mutated. Every change is
+    audited.
+    """
+    if not is_known_classification(classification):
+        raise ValueError(f"Unsupported classification: {classification!r}")
+
+    document = (
+        await db.execute(
+            select(Document).where(
+                Document.tenant_id == principal.tenant_id,
+                Document.id == document_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if document is None:
+        return None
+
+    if not principal.has(Permission.TENANT_ADMIN):
+        covers = (
+            StewardScopeType.TENANT.value,
+            principal.tenant_id,
+        ) in principal.steward_scopes
+        if document.department_id and (
+            StewardScopeType.DEPARTMENT.value,
+            document.department_id,
+        ) in principal.steward_scopes:
+            covers = True
+        if department_id and (
+            StewardScopeType.DEPARTMENT.value,
+            department_id,
+        ) in principal.steward_scopes:
+            covers = True
+        if not covers:
+            raise AuthorizationError(
+                "Principal lacks tenant-admin or steward authority over this document",
+                code="missing_scope",
+            )
+
+    if department_id is not None:
+        if await get_department(db, principal=principal, department_id=department_id) is None:
+            raise ValueError("Department does not belong to the active tenant")
+
+    if allowed_group_ids:
+        wanted = {str(group) for group in allowed_group_ids}
+        found = set(
+            (
+                await db.execute(
+                    select(AccessGroup.id).where(
+                        AccessGroup.tenant_id == principal.tenant_id,
+                        AccessGroup.id.in_(wanted),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if found != wanted:
+            raise ValueError("Allowed group does not belong to the active tenant")
+
+    audit_metadata: dict = {"classification": classification}
+    document.classification = classification
+    if department_id is not None:
+        document.department_id = department_id
+        audit_metadata["department_id"] = department_id
+    if tenant_visible is not None:
+        document.tenant_visible = bool(tenant_visible)
+        audit_metadata["tenant_visible"] = bool(tenant_visible)
+    if allowed_group_ids is not None:
+        groups = sorted({str(group) for group in allowed_group_ids})
+        document.allowed_group_ids_json = json.dumps(groups)
+        audit_metadata["allowed_group_ids"] = groups
+    await db.flush()
+
+    await _audit(
+        db,
+        principal=principal,
+        action="governance.document.policy",
+        resource_type="document",
+        resource_id=document.id,
+        metadata=audit_metadata,
+    )
+    return document

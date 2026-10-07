@@ -13,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.governance import DEFAULT_SOURCE_CLASSIFICATION
 from app.core.tenancy import (
     DOC_STATE_FAILED,
     DOC_STATE_INDEXING,
@@ -133,6 +134,21 @@ class Document(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # --- BV1-B governed source classification ---
+    classification: Mapped[str] = mapped_column(
+        String(32),
+        default=DEFAULT_SOURCE_CLASSIFICATION,
+        server_default=DEFAULT_SOURCE_CLASSIFICATION,
+        nullable=False,
+    )
+    department_id: Mapped[str | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    # The tenant-wide fallback. Only the broad classifications may rely on it.
+    tenant_visible: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
+    allowed_group_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

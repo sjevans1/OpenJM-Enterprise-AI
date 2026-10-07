@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models import DataSource, Document
 from app.services.document_lifecycle import retrievable_filter
+from app.services.document_policy import DocumentAccess, visible_documents
 from app.services.report_scope import ReportSourceScope, ReportScopeError
 from app.schemas import Evidence, ExecutionClass, ExecutionMode
 from app.services.dependent_hybrid import (
@@ -118,6 +119,24 @@ class GroundedParameter:
     matching_text: str | None = None
 
 
+def _request_access_for(user_id: str) -> DocumentAccess | None:
+    """The ambient request principal's access context, or None.
+
+    Returns None unless a validated principal is active for this request AND it
+    is the principal the caller is acting as (matching ownership key). A direct
+    internal call with a mismatched user_id therefore never applies the wrong
+    scopes; the authenticated route always matches, so enforcement is on in
+    every real request path.
+    """
+    from app.core.context import current_principal_or_none
+    from app.services.document_policy import access_from_principal
+
+    principal = current_principal_or_none()
+    if principal is None or principal.user_id != user_id:
+        return None
+    return access_from_principal(principal)
+
+
 class OpenJMOrchestrator:
     """Routes an explicit user-selected execution mode into the governed
     capability path the user chose.
@@ -132,6 +151,7 @@ class OpenJMOrchestrator:
         db: AsyncSession,
         user_id: str,
         scope: ReportSourceScope | None = None,
+        access: DocumentAccess | None = None,
     ) -> list[Document]:
         # Connector-owned documents are admitted only through the current
         # authorization gate. That gate re-asks the provider whether this
@@ -158,6 +178,11 @@ class OpenJMOrchestrator:
             stmt = stmt.where(Document.id.in_(scope.require_documents()))
         result = await db.execute(stmt.order_by(Document.created_at.desc()))
         documents = list(result.scalars().all())
+        # BV1-B: classification/group policy is applied before anything leaves
+        # this method, so an unauthorized document never becomes a retrieval
+        # candidate, evidence, or model context. A policy-hidden pinned document
+        # also fails the exact-scope check below, closing both paths.
+        documents = visible_documents(access, documents)
         if scope is not None and {item.id for item in documents} != scope.document_ids:
             raise ReportScopeError("Pinned Knowledge document is no longer available")
         return documents
@@ -331,6 +356,7 @@ class OpenJMOrchestrator:
         trace_route: str = "knowledge",
         scope: ReportSourceScope | None = None,
         budget: ReportRunBudget | None = None,
+        access: DocumentAccess | None = None,
     ) -> tuple[list[Evidence], str | None, list[str]]:
         """Run knowledge.search. Returns evidence, direct answer, and trace IDs.
 
@@ -338,9 +364,7 @@ class OpenJMOrchestrator:
         direct_answer (no vector search). Otherwise runs the governed
         knowledge.search tool.
         """
-        documents = await self._ready_documents(
-            db, user_id, **({"scope": scope} if scope is not None else {})
-        )
+        documents = await self._ready_documents(db, user_id, scope=scope, access=access)
         lowered = message.lower().strip()
 
         if any(pattern in lowered for pattern in CATALOG_PATTERNS):
@@ -376,6 +400,7 @@ class OpenJMOrchestrator:
                 db=db,
                 report_scope=scope,
                 budget=budget,
+                access=access,
             ),
             {"query": message},
         )
@@ -462,7 +487,7 @@ class OpenJMOrchestrator:
                 scope.require_sources()
             # Preflight ALL pins before any retrieval, model planner, or SQL.
             if scope.document_ids:
-                await self._ready_documents(db, user_id, scope)
+                await self._ready_documents(db, user_id, scope, _request_access_for(user_id))
             if scope.source_ids:
                 await self._structured_sources(db, user_id, scope)
 
@@ -482,7 +507,8 @@ class OpenJMOrchestrator:
                 "knowledge",
                 request_id=request_id,
                 budget=budget,
-                **({"scope": scope} if scope is not None else {}),
+                scope=scope,
+                access=_request_access_for(user_id),
             )
             return ExecutionPlan(
                 execution_class="knowledge",
@@ -590,8 +616,9 @@ class OpenJMOrchestrator:
                     requested_mode,
                     request_id,
                     "hybrid",
-                    **({"scope": scope} if scope is not None else {}),
+                    scope=scope,
                     budget=budget,
+                    access=_request_access_for(user_id),
                 )
             except ToolError as exc:
                 knowledge_error = str(exc)
@@ -877,8 +904,9 @@ class OpenJMOrchestrator:
                 requested_mode,
                 request_id,
                 "hybrid",
-                **({"scope": scope} if scope is not None else {}),
+                scope=scope,
                 budget=budget,
+                access=_request_access_for(user_id),
             )
         except ToolError:
             knowledge_error = "Knowledge retrieval could not be completed safely."
