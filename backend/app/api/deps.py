@@ -30,6 +30,7 @@ from app.core.identity import (
     Permission,
     Principal,
 )
+from app.core.platform import PlatformCapability
 from app.db import get_db
 from app.services import identity as identity_service
 
@@ -112,6 +113,39 @@ def require(*permissions: Permission) -> Callable[..., Awaitable[Principal]]:
                 db,
                 principal=principal,
                 action=f"authorize:{','.join(p.value for p in permissions)}",
+                decision="deny",
+                reason=exc.message,
+            )
+            await db.commit()
+            raise _to_http(exc) from exc
+        return principal
+
+    return _guard
+
+
+def require_platform(
+    *capabilities: PlatformCapability,
+) -> Callable[..., Awaitable[Principal]]:
+    """Guard a route on one or more explicit platform capabilities.
+
+    Platform authority is a separate axis from the tenant role: it is satisfied
+    only by an explicit platform grant, never by ``viewer``/``editor``/``admin``/
+    ``owner``. Used as
+    ``principal: Principal = Depends(require_platform(PlatformCapability.TENANTS_ADMIN))``.
+    """
+
+    async def _guard(
+        principal: Principal = Depends(get_principal),
+        db: AsyncSession = Depends(get_db),
+    ) -> Principal:
+        try:
+            principal.require_platform(*capabilities)
+        except AuthorizationError as exc:
+            await identity_service.record_audit(
+                db,
+                principal=principal,
+                action="authorize:platform:"
+                + ",".join(c.value for c in capabilities),
                 decision="deny",
                 reason=exc.message,
             )

@@ -49,6 +49,10 @@ from app.models import (
     Tenant,
     TenantMembership,
 )
+from app.services.access_governance import (
+    load_principal_access,
+    platform_capabilities_for,
+)
 from app.services.oidc import OIDCValidationError, oidc_client
 
 settings = get_settings()
@@ -334,6 +338,16 @@ async def _principal_for(
         raise TenantScopeError("Tenant is not active", code="tenant_inactive")
     if account.status != "active":
         raise AuthorizationError("Principal account is disabled", code="account_disabled")
+
+    # BV1-A: resolve the principal's data-side scopes and platform capabilities
+    # from current rows, on every request. This is what makes a group or steward
+    # revocation, or a platform-capability change, effective immediately with no
+    # token or cache to expire.
+    access = await load_principal_access(
+        db, principal_id=account.id, tenant_id=membership.tenant_id
+    )
+    platform_capabilities = await platform_capabilities_for(db, principal_id=account.id)
+
     return Principal(
         principal_id=account.id,
         tenant_id=membership.tenant_id,
@@ -344,6 +358,10 @@ async def _principal_for(
         email=account.email,
         display_name=account.display_name,
         permissions=build_permissions(membership.role),
+        department_ids=access.department_ids,
+        group_ids=access.group_ids,
+        steward_scopes=access.steward_scopes,
+        platform_capabilities=frozenset(c.value for c in platform_capabilities),
     )
 
 
