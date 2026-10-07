@@ -2,6 +2,11 @@
 
 A feature is not considered complete because code exists. It must pass the relevant gate.
 
+> **VS8** adds operational acceptance (deployment profiles, production config,
+> install, health/observability, backup/restore, retention, upgrade/rollback,
+> hardening, load and release). See `docs/VS8_ACCEPTANCE.md` and the recorded
+> evidence in `docs/VS8_ACCEPTANCE_REPORT.md`.
+
 ## Gate A — persistent conversation
 
 1. Start a new conversation.

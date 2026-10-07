@@ -38,6 +38,24 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 See `docs/PRODUCT_ROADMAP.md` and `docs/VS4_ACCEPTANCE_REPORT.md`. **VS5 — enterprise identity and tenant isolation — is the next product stage.**
 
+## VS8 — self-hosted commercialization readiness
+
+VS8 hardens how OpenJM is installed, configured, operated, upgraded, backed up,
+restored and released. It adds no product features. Start here:
+
+- `docs/DEPLOYMENT_PROFILES.md` — local developer, self-hosted production, and
+  private model-serving (local/offline + OpenJM-hosted private remote API)
+- `docs/INSTALLATION.md` — repeatable Linux and Windows/WSL2 bootstrap
+- `docs/CONFIGURATION.md` — fail-closed production configuration and secrets
+- `docs/OPERATIONS.md` — health, readiness, structured logs and metrics
+- `docs/BACKUP_RESTORE.md` — authoritative data set, backup/restore, DR
+- `docs/UPGRADE_ROLLBACK.md` — supported upgrade and honest rollback
+- `docs/SECURITY_POSTURE.md`, `docs/PERFORMANCE.md`, `docs/RELEASE.md`
+- `docs/VS8_ACCEPTANCE.md` and `docs/VS8_ACCEPTANCE_REPORT.md`
+
+Validate a configuration before serving: `python -m app.core.preflight`.
+Operator toolkit: `python scripts/openjm_ops.py {backup,verify,restore,upgrade,retention,config}`.
+
 ## Windows quick start
 
 For the user's current Windows setup, the preferred path is now scripted.
