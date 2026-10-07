@@ -9,6 +9,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api import (
     actions,
+    admin,
     auth,
     chat,
     connectors,
@@ -141,6 +142,7 @@ app.include_router(system.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(platform.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
 app.include_router(connectors.router, prefix="/api")
 app.include_router(operations.router, prefix="/api")

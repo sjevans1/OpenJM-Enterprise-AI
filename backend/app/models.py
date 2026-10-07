@@ -372,6 +372,10 @@ class Tenant(Base):
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    # BV3-B: safe, whitelisted tenant preferences (JSON object stored as text).
+    settings_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

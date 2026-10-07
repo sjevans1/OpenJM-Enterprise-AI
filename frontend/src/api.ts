@@ -645,4 +645,176 @@ export const api = {
 
   notifications: () =>
     request<{ notifications: NotificationRecord[] }>('/api/operations/notifications'),
+
+  // BV3-B client administration (business-facing; tenant:admin only).
+  admin: {
+    members: () => request<AdminMember[]>('/api/admin/members'),
+    provisionMember: (body: AdminMemberInput) =>
+      request<AdminMember>('/api/admin/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    changeMemberRole: (principalId: string, role: string) =>
+      request<AdminMember>(`/api/admin/members/${encodeURIComponent(principalId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      }),
+    revokeMember: (principalId: string) =>
+      request<AdminMember>(`/api/admin/members/${encodeURIComponent(principalId)}/revoke`, {
+        method: 'POST',
+      }),
+    reactivateMember: (principalId: string) =>
+      request<AdminMember>(`/api/admin/members/${encodeURIComponent(principalId)}/reactivate`, {
+        method: 'POST',
+      }),
+    revokeMemberSessions: (principalId: string) =>
+      request<{ revoked: number }>(
+        `/api/admin/members/${encodeURIComponent(principalId)}/sessions/revoke`,
+        { method: 'POST' },
+      ),
+
+    departments: () => request<AdminDepartment[]>('/api/admin/departments'),
+    createDepartment: (body: { slug: string; name: string }) =>
+      request<AdminDepartment>('/api/admin/departments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+
+    groups: () => request<AdminGroup[]>('/api/admin/groups'),
+    createGroup: (body: { slug: string; name: string; department_id?: string | null }) =>
+      request<AdminGroup>('/api/admin/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    groupMembers: (groupId: string) =>
+      request<{ group_id: string; members: string[] }>(
+        `/api/admin/groups/${encodeURIComponent(groupId)}/members`,
+      ),
+    addGroupMember: (groupId: string, principalId: string) =>
+      request<{ group_id: string; principal_id: string; status: string }>(
+        `/api/admin/groups/${encodeURIComponent(groupId)}/members`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ principal_id: principalId }),
+        },
+      ),
+    removeGroupMember: (groupId: string, principalId: string) =>
+      request<{ removed: number }>(
+        `/api/admin/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(principalId)}`,
+        { method: 'DELETE' },
+      ),
+
+    stewards: () => request<AdminSteward[]>('/api/admin/stewards'),
+    grantSteward: (body: AdminStewardInput) =>
+      request<AdminSteward>('/api/admin/stewards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    revokeSteward: (principalId: string, scopeType: string, scopeId: string) =>
+      request<{ revoked: number }>(
+        `/api/admin/stewards?principal_id=${encodeURIComponent(principalId)}` +
+          `&scope_type=${encodeURIComponent(scopeType)}&scope_id=${encodeURIComponent(scopeId)}`,
+        { method: 'DELETE' },
+      ),
+
+    dataAccess: () => request<AdminDataAccess>('/api/admin/data-access'),
+
+    preferences: () => request<AdminPreferences>('/api/admin/preferences'),
+    updatePreferences: (preferences: Record<string, unknown>) =>
+      request<AdminPreferences>('/api/admin/preferences', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences }),
+      }),
+
+    usage: () => request<AdminUsageSummary>('/api/admin/usage'),
+    audit: () => request<{ entries: AdminAuditEntry[] }>('/api/admin/audit'),
+  },
+}
+
+export type AdminMember = {
+  principal_id: string
+  subject: string
+  role: string
+  status: string
+  email?: string | null
+  display_name?: string | null
+  department_ids: string[]
+  group_ids: string[]
+}
+
+export type AdminMemberInput = {
+  subject: string
+  role: string
+  email?: string | null
+  display_name?: string | null
+}
+
+export type AdminDepartment = {
+  id: string
+  slug: string
+  name: string
+  status: string
+}
+
+export type AdminGroup = {
+  id: string
+  slug: string
+  name: string
+  status: string
+  department_id?: string | null
+}
+
+export type AdminSteward = {
+  principal_id: string
+  scope_type: string
+  scope_id: string
+  status: string
+}
+
+export type AdminStewardInput = {
+  principal_id: string
+  scope_type: string
+  scope_id: string
+}
+
+export type AdminDataAccess = {
+  sources: {
+    id: string
+    name?: string | null
+    classification?: string | null
+    department_id?: string | null
+    tenant_visible?: boolean | null
+  }[]
+  documents: {
+    id: string
+    title?: string | null
+    classification?: string | null
+  }[]
+}
+
+export type AdminPreferences = {
+  preferences: Record<string, unknown>
+}
+
+export type AdminUsageSummary = {
+  tenant_id: string
+  usage: Record<string, unknown>
+  plan: unknown | null
+  entitlements: unknown | null
+  note: string
+}
+
+export type AdminAuditEntry = {
+  action: string
+  resource_type?: string | null
+  resource_id?: string | null
+  decision: string
+  created_at?: string | null
 }

@@ -44,10 +44,11 @@ import {
 } from './auth'
 import ConnectorsPanel from './ConnectorsPanel'
 import OperationsPanel from './OperationsPanel'
+import AdminPanel from './AdminPanel'
 
 const CALLBACK_PATH = '/auth/callback'
 
-type View = 'chat' | 'knowledge' | 'data' | 'reports' | 'connectors' | 'operations'
+type View = 'chat' | 'knowledge' | 'data' | 'reports' | 'connectors' | 'operations' | 'admin'
 
 type ReportRunIntent = {
   reportId: string
@@ -62,9 +63,18 @@ const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
   { value: 'hybrid', label: 'Hybrid' },
 ]
 
-const futureNav = [
-  { label: 'Administration', icon: Settings },
-]
+/**
+ * Client administration is a tenant permission, never a platform one. This only
+ * decides whether the navigation entry is offered; the backend stays the
+ * authority for every administration action.
+ */
+export function canAdminister(
+  principal: { role: string; permissions: string[] } | null,
+): boolean {
+  if (!principal) return false
+  if (principal.permissions.includes('tenant:admin')) return true
+  return principal.role === 'admin' || principal.role === 'owner'
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
@@ -296,6 +306,11 @@ export default function App() {
   const pendingRunIntentRef = useRef<ReportRunIntent | null>(null)
   const pendingReportId = useRef<string | null>(null)
   const [authState, setAuthState] = useState<AuthState>({ status: 'loading' })
+  // Client administration visibility. Dev mode has no principal but resolves the
+  // local owner on the server, which does hold tenant:admin.
+  const administer =
+    authState.status === 'dev' ||
+    (authState.status === 'authenticated' && canAdminister(authState.principal))
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -1022,15 +1037,18 @@ export default function App() {
             <span className="count-pill">{reports.length}</span>
           </button>
 
-          <div className="nav-divider" />
-          <div className="nav-section-label">Next capabilities</div>
-          {futureNav.map((item) => (
-            <button className="nav-item future" key={item.label} disabled>
-              <item.icon size={17} />
-              {item.label}
-              <span className="phase-pill">Phase 2</span>
-            </button>
-          ))}
+          {administer && (
+            <>
+              <div className="nav-divider" />
+              <button
+                className={view === 'admin' ? 'nav-item active' : 'nav-item'}
+                onClick={() => setView('admin')}
+              >
+                <Settings size={17} />
+                Administration
+              </button>
+            </>
+          )}
         </nav>
 
         <div className="conversation-section">
@@ -1632,6 +1650,8 @@ export default function App() {
           <ConnectorsPanel />
         ) : view === 'operations' ? (
           <OperationsPanel />
+        ) : view === 'admin' ? (
+          <AdminPanel />
         ) : (
           <>
             <header className="workspace-header">
