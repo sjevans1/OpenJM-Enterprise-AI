@@ -73,6 +73,10 @@ class DocumentOut(BaseModel):
     status: str
     indexed: bool
     created_at: datetime
+    # BV1-B governed source classification (safe defaults for older clients).
+    classification: str = "internal"
+    department_id: str | None = None
+    tenant_visible: bool = True
 
 
 class IngestResponse(DocumentOut):

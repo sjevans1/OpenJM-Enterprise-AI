@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DataSource, Document
 from app.services.document_lifecycle import retrievable_filter
+from app.services.document_policy import DocumentAccess, governed_tenant_documents, visible_documents
 from app.schemas import Evidence
 from app.services.execution_trace import (
     complete_execution_trace,
@@ -72,6 +73,9 @@ class ToolContext:
     db: AsyncSession | None = None
     report_scope: ReportSourceScope | None = None
     budget: Optional[ReportRunBudget] = None
+    # BV1-B: the request principal's data-side scopes. When present, the
+    # Knowledge tool removes unauthorized documents before vector retrieval.
+    access: "DocumentAccess | None" = None
 
 
 @dataclass
@@ -262,34 +266,56 @@ class KnowledgeSearchTool:
             authorized_connector_document_ids_for_context,
         )
 
-        ownership = Document.user_id == context.user_id
-        connector_document_ids = await authorized_connector_document_ids_for_context(context.db)
-        if connector_document_ids:
-            ownership = or_(ownership, Document.id.in_(connector_document_ids))
-        statement = select(Document).where(
-            ownership,
-            Document.status == "ready",
-            Document.indexed.is_(True),
-        )
-        if context.report_scope is not None:
-            try:
-                document_ids = context.report_scope.require_documents()
-            except ReportScopeError as exc:
-                raise ToolPermissionError(
-                    "Report does not permit Knowledge retrieval"
-                ) from exc
-            statement = statement.where(Document.id.in_(document_ids))
-        documents = (
-            (await context.db.execute(statement.order_by(Document.created_at.desc())))
-            .scalars()
-            .all()
-        )
-        if context.report_scope is not None and (
-            {doc.id for doc in documents} != context.report_scope.document_ids
-        ):
-            raise ToolPermissionError(
-                "Pinned Knowledge document is no longer authorized"
+        if context.access is not None:
+            # Governed, tenant-wide selection (resolved product decision) with
+            # the connector gate intersected inside governed_tenant_documents.
+            documents = list(
+                await governed_tenant_documents(context.db, context.access)
             )
+            if context.report_scope is not None:
+                try:
+                    pinned = set(context.report_scope.require_documents())
+                except ReportScopeError as exc:
+                    raise ToolPermissionError(
+                        "Report does not permit Knowledge retrieval"
+                    ) from exc
+                documents = [doc for doc in documents if doc.id in pinned]
+                if {doc.id for doc in documents} != pinned:
+                    raise ToolPermissionError(
+                        "Pinned Knowledge document is no longer authorized"
+                    )
+        else:
+            ownership = Document.user_id == context.user_id
+            connector_document_ids = await authorized_connector_document_ids_for_context(
+                context.db
+            )
+            if connector_document_ids:
+                ownership = or_(ownership, Document.id.in_(connector_document_ids))
+            statement = select(Document).where(
+                ownership,
+                Document.status == "ready",
+                Document.indexed.is_(True),
+            )
+            if context.report_scope is not None:
+                try:
+                    document_ids = context.report_scope.require_documents()
+                except ReportScopeError as exc:
+                    raise ToolPermissionError(
+                        "Report does not permit Knowledge retrieval"
+                    ) from exc
+                statement = statement.where(Document.id.in_(document_ids))
+            documents = (
+                (await context.db.execute(statement.order_by(Document.created_at.desc())))
+                .scalars()
+                .all()
+            )
+            documents = visible_documents(context.access, documents)
+            if context.report_scope is not None and (
+                {doc.id for doc in documents} != context.report_scope.document_ids
+            ):
+                raise ToolPermissionError(
+                    "Pinned Knowledge document is no longer authorized"
+                )
         refs = [(item.id, item.original_name) for item in documents]
         authorized_source_ids = {document_id for document_id, _ in refs}
         evidence = await knowledge_engine.retrieve(
