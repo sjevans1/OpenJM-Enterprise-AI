@@ -591,6 +591,14 @@ PLATFORM_OPERATOR_CAPABILITIES_SQL = (
     "'platform:operations:admin')"
 )
 
+# An *active* grant must always sit inside the current vocabulary, so no code path
+# can act on a capability it does not know. A revoked row is history and may keep
+# a value that a later narrowing retired, which is what lets migration 0014
+# narrow the active vocabulary again without deleting an audit trail.
+PLATFORM_OPERATOR_CAPABILITY_CHECK = (
+    f"status = 'revoked' OR capability IN {PLATFORM_OPERATOR_CAPABILITIES_SQL}"
+)
+
 
 class PlatformOperator(Base):
     """One explicit platform capability granted to one principal account.
@@ -606,7 +614,7 @@ class PlatformOperator(Base):
             "principal_id", "capability", name="uq_platform_operator_capability"
         ),
         CheckConstraint(
-            f"capability IN {PLATFORM_OPERATOR_CAPABILITIES_SQL}",
+            PLATFORM_OPERATOR_CAPABILITY_CHECK,
             name="ck_platform_operator_capability",
         ),
         CheckConstraint("status IN ('active','revoked')", name="ck_platform_operator_status"),

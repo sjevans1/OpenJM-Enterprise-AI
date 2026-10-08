@@ -285,3 +285,133 @@ async def test_grant_platform_operator_accepts_machinery_capability(file_db):
         count = await db.scalar(select(func.count()).select_from(AuditRecord))
     assert PlatformCapability.OPERATIONS_ADMIN in resolved
     assert count and count > 0
+
+
+def test_migration_0014_downgrade_revokes_without_deleting_and_re_upgrades(tmp_path):
+    """The downgrade path, which the original revision got wrong.
+
+    Revoking a row does not remove the capability value it holds, so a plain
+    narrowed ``capability IN`` constraint fails while any operations:admin row
+    remains. The constraint is therefore ``status = 'revoked' OR capability IN``:
+    active grants are bounded by the vocabulary, revoked rows are history.
+    """
+    from alembic import command
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import IntegrityError
+
+    from app.migrations_runner import (
+        _alembic_config,
+        adopt_and_upgrade,
+        current_revision,
+        sync_url_for,
+    )
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'bv3c_downgrade.db'}"
+    adopt_and_upgrade(url)
+    assert current_revision(url) == "0014_operations_admin_capability"
+    sync_url = sync_url_for(url)
+    config = _alembic_config(sync_url)
+
+    engine = create_engine(sync_url, future=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO principal_accounts "
+                    "(id, subject, status, created_at, updated_at) "
+                    "VALUES ('p-dg', 'oidc|dg', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO platform_operators "
+                    "(id, principal_id, capability, status, created_at) "
+                    "VALUES ('po-dg', 'p-dg', 'platform:operations:admin', 'active', "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+
+        command.downgrade(config, "0013_tenant_preferences")
+        assert current_revision(url) == "0013_tenant_preferences"
+
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT status, revoked_at FROM platform_operators WHERE id = 'po-dg'"
+                )
+            ).first()
+        assert row is not None, "the grant row must survive the downgrade"
+        assert row[0] == "revoked"
+        assert row[1] is not None
+
+        # An active grant of the retired capability is refused again.
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO platform_operators "
+                        "(id, principal_id, capability, status, created_at) "
+                        "VALUES ('po-dg2', 'p-dg', 'platform:operations:admin', 'active', "
+                        "CURRENT_TIMESTAMP)"
+                    )
+                )
+
+        # A revoked row keeping the historical value is legal...
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO principal_accounts "
+                    "(id, subject, status, created_at, updated_at) "
+                    "VALUES ('p-dg2', 'oidc|dg2', 'active', CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO platform_operators "
+                    "(id, principal_id, capability, status, created_at) "
+                    "VALUES ('po-dg3', 'p-dg2', 'platform:operations:admin', 'revoked', "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+
+        # ...and an active grant of a still-valid capability is unaffected.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO platform_operators "
+                    "(id, principal_id, capability, status, created_at) "
+                    "VALUES ('po-dg4', 'p-dg', 'platform:metadata:read', 'active', "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+
+        command.upgrade(config, "0014_operations_admin_capability")
+        assert current_revision(url) == "0014_operations_admin_capability"
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO principal_accounts "
+                    "(id, subject, status, created_at, updated_at) "
+                    "VALUES ('p-dg3', 'oidc|dg3', 'active', CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO platform_operators "
+                    "(id, principal_id, capability, status, created_at) "
+                    "VALUES ('po-dg5', 'p-dg3', 'platform:operations:admin', 'active', "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+            statuses = dict(
+                conn.execute(
+                    text("SELECT id, status FROM platform_operators")
+                ).all()
+            )
+        assert statuses["po-dg"] == "revoked", "re-upgrade must not resurrect a revoked grant"
+        assert statuses["po-dg5"] == "active"
+    finally:
+        engine.dispose()

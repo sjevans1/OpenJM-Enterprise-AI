@@ -49,13 +49,31 @@ added in the #52 correction.
 
 Widens the `platform_operators` capability check constraint. Revision `0008` keeps
 an immutable literal so history replays identically, so the widening is its own
-additive revision. No row is rewritten and no data is moved: the constraint only
-widens what the column may hold. SQLite cannot alter a constraint in place, so
-Alembic's batch mode recreates the table and copies rows; PostgreSQL drops and
-recreates the constraint.
+additive revision. No row is rewritten and no data is moved. SQLite cannot alter a
+constraint in place, so Alembic's batch mode recreates the table and copies rows;
+PostgreSQL drops and recreates the constraint.
+
+The constraint is written as `status = 'revoked' OR capability IN (...)`: an
+**active** grant must always sit inside the current vocabulary, while a revoked
+row is history and may keep a value that a later narrowing retired.
 
 Downgrade **revokes** rather than deletes any row holding the removed capability,
 so a downgrade cannot silently destroy an audit trail.
+
+#### Defect found by the PostgreSQL deployment-acceptance run
+
+The first revision of this migration wrote a plain `capability IN (...)` check and
+its downgrade revoked the `operations:admin` rows before narrowing. That is
+impossible: revoking a row sets `status`, it does not remove the `capability` value
+the row still holds, so the narrowed constraint is violated by an existing row.
+PostgreSQL failed with `CheckViolation ... check constraint
+"ck_platform_operator_capability" ... is violated by some row` on
+`ALTER TABLE platform_operators ADD CONSTRAINT`; SQLite fails the same way when
+batch mode recreates the table. The upgrade-only test suite never exercised the
+downgrade, which is why local and CI runs were green.
+
+The fix makes the constraint status-aware. `test_migration_0014_downgrade_revokes_without_deleting_and_re_upgrades`
+now covers the whole round trip and is the regression for it.
 
 ### What deliberately did not change
 
@@ -80,7 +98,7 @@ so a downgrade cannot silently destroy an audit trail.
 | Existing end-user connector-backed retrieval still works | `test_connector_backed_retrieval_does_not_require_platform_authority` plus the unchanged VS7 connector security suite (retrieval authorization, quarantine, tenancy) |
 | No regression to scheduled report/notification execution | `test_scheduled_execution_registry_is_intact` plus the unchanged VS7 scheduler, notification and action-schedule suites |
 | Audit privileged changes | `test_raw_scheduler_administration_is_still_audited`; connector and schedule services keep their existing `record_audit` calls |
-| Additive migration | `test_migration_0014_widens_the_platform_operator_constraint` |
+| Additive migration | `test_migration_0014_widens_the_platform_operator_constraint`, `test_migration_0014_downgrade_revokes_without_deleting_and_re_upgrades` |
 | exact-head CI green | recorded on the frozen head |
 
 ## Not run / limitations
