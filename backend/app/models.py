@@ -587,7 +587,8 @@ class GroupMembership(Base):
 # tuple is the single literal list shared by the model and the 0008 migration.
 PLATFORM_OPERATOR_CAPABILITIES_SQL = (
     "('platform:metadata:read','platform:tenants:admin',"
-    "'platform:operators:admin','platform:content:support')"
+    "'platform:operators:admin','platform:content:support',"
+    "'platform:operations:admin')"
 )
 
 

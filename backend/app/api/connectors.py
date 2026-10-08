@@ -1,9 +1,20 @@
-"""Connector management API.
+"""Connector management API (OpenJM platform control plane).
 
-Every route is guarded by an OpenJM permission, resolves its connector through a
-tenant-scoped lookup, and audits its mutation. Responses carry operational
-metadata only: a credential value is never returned, and configuration is
-filtered so a key that looks secret is omitted rather than echoed.
+BV3-C: this is the **raw administration** surface and it sits on the OpenJM
+platform plane. Every route requires the explicit ``platform:operations:admin``
+capability, never a tenant role: a tenant ``admin``/``owner`` does not inherit raw
+connector authority merely because the legacy permission existed. The check is
+enforced by the backend on every request; hiding the surface in the UI is not a
+security boundary.
+
+End-user connector workflows are unaffected: connector-backed retrieval and the
+governed action runtime reach connectors through the service layer under the
+tenant permission model, not through these routes.
+
+Each route resolves its connector through a tenant-scoped lookup and audits its
+mutation. Responses carry operational metadata only: a credential value is never
+returned, and configuration is filtered so a key that looks secret is omitted
+rather than echoed.
 
 The API is a management surface, not an authorization surface. Nothing here
 decides whether evidence may be served; that decision belongs to the connector
@@ -19,9 +30,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require
+from app.api.deps import require_platform
 from app.core.connectors import connector_registry
-from app.core.identity import Permission, Principal
+from app.core.identity import Principal
+from app.core.platform import PlatformCapability
 from app.db import get_db
 from app.models import ConnectorInstance, ExternalResource, WorkspaceUserMapping
 from app.services.connectors import sync as sync_engine
@@ -160,7 +172,7 @@ async def _instance(
 
 @router.get("/types")
 async def list_connector_types(
-    principal: Principal = Depends(require(Permission.CONNECTOR_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     return {"types": connector_registry.describe()}
 
@@ -173,7 +185,7 @@ async def list_connector_types(
 @router.get("")
 async def list_connectors(
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     result = await db.execute(
         select(ConnectorInstance)
@@ -187,7 +199,7 @@ async def list_connectors(
 async def create_connector(
     payload: ConnectorCreate,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     try:
         instance = await configure_instance(
@@ -215,7 +227,7 @@ async def create_connector(
 async def get_connector(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     runs = await sync_engine.latest_runs(
@@ -230,7 +242,7 @@ async def get_connector(
 async def test_connector(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     try:
@@ -252,7 +264,7 @@ async def test_connector(
 async def enable_connector(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     try:
@@ -268,7 +280,7 @@ async def enable_connector(
 async def disable_connector(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     await set_enabled(db, instance=instance, enabled=False, actor=principal.principal_id)
@@ -286,7 +298,7 @@ async def rotate_connector_credential(
     connector_id: str,
     payload: CredentialRotate,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     try:
@@ -313,7 +325,7 @@ async def rotate_connector_credential(
 async def revoke_connector_credential(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_ADMIN)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     revoked = await revoke_credential(db, instance=instance, actor=principal.principal_id)
@@ -331,7 +343,7 @@ async def disconnect_connector(
     connector_id: str,
     payload: DisconnectRequest,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_ADMIN)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     quarantined = await disconnect(
@@ -351,7 +363,7 @@ async def sync_connector(
     connector_id: str,
     payload: SyncRequest,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     try:
@@ -373,7 +385,7 @@ async def connector_runs(
     connector_id: str,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     runs = await sync_engine.latest_runs(
@@ -389,7 +401,7 @@ async def connector_runs(
 async def connector_resources(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     resources = await list_resources(
@@ -407,7 +419,7 @@ async def connector_resources(
 async def connector_mappings(
     connector_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     mappings = await list_mappings(
@@ -433,7 +445,7 @@ async def create_connector_mapping(
     connector_id: str,
     payload: MappingCreate,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     try:
@@ -468,7 +480,7 @@ async def delete_connector_mapping(
     connector_id: str,
     mapping_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.CONNECTOR_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     instance = await _instance(db, connector_id, principal)
     result = await db.execute(
