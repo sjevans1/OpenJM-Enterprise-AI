@@ -10,7 +10,11 @@ this module adds the membership lifecycle and the safe preferences surface.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import csv
+import io
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +24,7 @@ from app.core.permissions import Permission
 from app.db import get_db
 from app.services import access_governance as governance
 from app.services import client_admin
+from app.services import usage_aggregation
 
 router = APIRouter(prefix="/admin", tags=["client-admin"])
 
@@ -128,6 +133,7 @@ class PreferencesUpdateRequest(BaseModel):
 class UsageSummaryOut(BaseModel):
     tenant_id: str
     usage: dict
+    aggregate: dict | None = None
     plan: dict | None = None
     entitlements: dict | None = None
     note: str
@@ -562,10 +568,71 @@ async def update_preferences(
 
 @router.get("/usage", response_model=UsageSummaryOut)
 async def usage(
+    period: str = Query(default="day", pattern="^(day|month|total)$"),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(_ADMIN),
 ):
-    return UsageSummaryOut(**await client_admin.usage_summary(db, principal=principal))
+    """Real M2 aggregates for the caller's tenant (requires tenant:admin)."""
+    try:
+        summary = await client_admin.usage_summary(
+            db, principal=principal, period=period, start=start, end=end
+        )
+    except Exception as exc:  # noqa: BLE001 - mapped to HTTP below
+        raise _http_for(exc) from exc
+    return UsageSummaryOut(**summary)
+
+
+@router.get("/usage/export")
+async def export_usage(
+    format: str = Query(default="csv", pattern="^(csv|json)$"),
+    period: str = Query(default="day", pattern="^(day|month)$"),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    limit: int = Query(default=usage_aggregation.MAX_EXPORT_ROWS, ge=1),
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(_ADMIN),
+):
+    """Bounded usage export for the caller's tenant (requires tenant:admin).
+
+    The window is capped at ``MAX_EXPORT_WINDOW_DAYS`` days and the row count at
+    ``MAX_EXPORT_ROWS``; an over-large request is refused with HTTP 400. CSV is
+    generated in-process and no file is written, and no network call is made.
+    """
+    try:
+        header, rows = await usage_aggregation.export_rows(
+            db,
+            tenant_id=principal.tenant_id,
+            period=period,
+            start=start,
+            end=end,
+            limit=min(limit, usage_aggregation.MAX_EXPORT_ROWS),
+        )
+    except Exception as exc:  # noqa: BLE001 - mapped to HTTP below
+        raise _http_for(exc) from exc
+
+    if format == "json":
+        return {
+            "tenant_id": principal.tenant_id,
+            "period": period,
+            "schema_version": usage_aggregation.SCHEMA_VERSION,
+            "attribution": usage_aggregation.LEGACY_ATTRIBUTION,
+            "generated_at": usage_aggregation.utcnow().isoformat(),
+            "header": header,
+            "rows": rows,
+        }
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=header, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"X-OpenJM-Schema-Version": usage_aggregation.SCHEMA_VERSION},
+    )
 
 
 @router.get("/audit")

@@ -22,6 +22,7 @@ from app.core.identity import AuthorizationError, Principal
 from app.core.permissions import ROLE_OWNER, Permission, is_known_role
 from app.models import AuthSession, PrincipalAccount, Tenant, TenantMembership
 from app.services import identity as identity_service
+from app.services import usage_aggregation
 from app.services import usage_metering
 from app.services.access_governance import load_principal_access
 from app.services.identity import utcnow
@@ -334,16 +335,34 @@ async def update_preferences(
     return current
 
 
-async def usage_summary(db: AsyncSession, *, principal: Principal) -> dict:
-    """Tenant-scoped usage totals, plus an explicit placeholder for plan data."""
+async def usage_summary(
+    db: AsyncSession,
+    *,
+    principal: Principal,
+    period: str = "day",
+    start=None,
+    end=None,
+) -> dict:
+    """Tenant-scoped usage totals plus M2 aggregates for the caller's tenant.
+
+    The scalar ``usage`` totals object is kept for backward compatibility with
+    existing consumers; the M2 ``aggregate`` carries the per-bucket breakdowns.
+    This surface is scoped to the caller's tenant by a SQL predicate and can
+    never total another tenant. Plan and entitlement values remain M3 work and
+    stay ``None``.
+    """
     _require_tenant_admin(principal)
     totals = await usage_metering.summarize_usage(db, tenant_id=principal.tenant_id)
+    aggregate = await usage_aggregation.aggregate_usage(
+        db, tenant_id=principal.tenant_id, period=period, start=start, end=end
+    )
     return {
         "tenant_id": principal.tenant_id,
         "usage": totals,
-        # M2/M3 (aggregation + entitlements) have not landed; this is a
-        # placeholder so the admin surface has a stable contract.
+        "aggregate": aggregate,
+        # M3 (entitlements) has not landed; this is a placeholder so the admin
+        # surface has a stable contract.
         "plan": None,
         "entitlements": None,
-        "note": "Plan and entitlement data arrive with M2/M3.",
+        "note": "Usage aggregation is M2; plan and entitlement data arrive with M3.",
     }
