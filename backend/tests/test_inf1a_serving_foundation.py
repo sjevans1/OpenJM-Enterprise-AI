@@ -583,6 +583,17 @@ async def test_attribution_refuses_a_tenant_mismatch(file_db):
                 usage=usage,
                 target=outcome.target,
             )
+        # With no resolved target the deployment ownership check cannot fire, so
+        # this case isolates the tenant equality rule itself.
+        with pytest.raises(InferenceError):
+            await attribute_usage_event(
+                db,
+                usage_event=event,
+                context=ApprovalContext("biz-1", "call-1", "att-1"),
+                decision=outcome.decision,
+                usage=usage,
+                target=None,
+            )
 
 
 # ---------------------------------------------------------------------------
