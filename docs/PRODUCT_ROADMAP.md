@@ -1,8 +1,32 @@
 # OpenJM Enterprise AI — Product Roadmap
 
-**Current accepted main:** `86164252c38c74e1d7417d61c310951472ff81f8` (VS4-D merge).  
-**Accepted stage:** VS4 complete. **Next:** VS5 enterprise identity and tenant isolation.  
-**Checklist source:** roadmap issue #11 and the current batch contracts in `docs/plan/`.
+## Current post-VS8 phase — observed 2026-10-08
+
+**Inspected main:** `18cabaa2d03faace8dac69b0b62a143e5e629125` (BV1/BV2/M1 foundations plus the integrated BV3 train).  
+**Execution umbrella:** [Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45); commercialization: [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
+
+The BV3 gate is closed. BV3-A, BV3-B and BV3-C are merged in `main` at
+`18cabaa2` (PRs #52, #53, #54) after the BV3-C PostgreSQL deployment acceptance
+passed and corrected a downgrade defect in migration `0014`. Plan records:
+[BV3-A](plan/BV3_A.md), [BV3-B](plan/BV3_B.md), [BV3-C](plan/BV3_C.md).
+Remaining sequence:
+
+1. Authorize and begin **INF1-A** serving contracts/registry/routing/attribution
+   and **M2** usage aggregation in parallel where schema/API ownership is reconciled.
+2. Reconcile INF1 admission/reservation semantics with **M3** before commercial
+   completion; follow with INF1 capacity telemetry/reconciliation qualification.
+
+The [INF1 plan](plan/INF1.md) links architecture, contracts, A/B/C acceptance and
+an executor handoff. This documentation does not mark INF1 implemented or
+authorize a merge; INF1 runtime work has not started, and the BV3 acceptance above
+does not transfer to INF1. BV4/BV5/BV6 remain under Issue #45's existing scope.
+Workspace remains separate.
+
+## Historical VS4 roadmap snapshot
+
+The remaining sections record the earlier VS4 stage and then-planned VS5–VS8
+work. They preserve history and do not override the current phase above. Refresh
+live PR/main evidence before execution.
 
 ## Delivered foundation
 
@@ -52,3 +76,4 @@ Repeatable on-prem packaging, observability, backup/restore, update/rollback, re
 4. Negative security cases fail closed and prove no unauthorized tool execution.
 5. Real-model/browser evidence is required where the contract calls for it.
 6. Do not claim VS5–VS8 or production multi-user readiness from VS4 acceptance.
+

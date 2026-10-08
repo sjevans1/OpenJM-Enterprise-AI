@@ -1,5 +1,21 @@
 # OpenJM Enterprise AI — Architecture v1
 
+## INF1 serving-plane extension — proposed 2026-10-08
+
+The [Rahkia inference serving plane](architecture/INF1_RAHKIA_SERVING_PLANE.md)
+and its [contracts](architecture/INF1_CONTRACTS.md) expand the model abstraction
+below into versioned model/deployment registries, tenant-safe routing, runtime
+adapters and deployment-attributed usage. They cover customer-local,
+OpenJM-managed local, hosted-dedicated and hosted-shared topologies while
+preserving the existing application contract.
+
+This is an architecture proposal, not shipped runtime functionality. Follow
+[INF1 delivery gates](plan/INF1.md); the BV3-A/B/C integration this depended on is
+now in `main` at `18cabaa2`, while INF1 runtime work itself has not begun and is
+not authorized by this document. The vertical-slice sections below retain their
+historical scope and evidence.
+
+
 ## Product contract
 
 OpenJM is the product. DB-GPT, model runtimes, vector stores and database libraries are replaceable infrastructure behind OpenJM-owned interfaces.
@@ -185,3 +201,4 @@ Each registered capability carries deterministic application metadata for operat
 Tool execution can create a generic execution trace containing safe request hashes, route, selected tool, source, policy/validation outcome, timing, result bounds and evidence IDs. Plaintext credentials and connection secrets are not trace inputs.
 
 This seam is intentionally small. Hybrid composition is deferred to Vertical Slice 3, and autonomous agent planning/tool selection remains a later bounded-runtime capability.
+
