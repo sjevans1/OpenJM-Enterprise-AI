@@ -964,14 +964,25 @@ async def test_grant_to_archived_scope_is_rejected(world, file_db):
 # ---------------------------------------------------------------------------
 
 
-async def test_control_plane_routes_are_not_exposed(client):
-    for path in (
-        "/api/admin/departments",
-        "/api/admin/groups",
-        "/api/admin/platform/operators",
-    ):
+async def test_control_plane_authority_is_not_reachable_from_the_tenant_plane(client):
+    """The tenant plane never exposes platform authority.
+
+    BV1-A originally asserted that no control-plane route existed at all. BV3-A
+    and BV3-B introduce the platform control plane (``/api/platform``, guarded by
+    explicit platform capabilities) and the tenant administration plane
+    (``/api/admin``, guarded by ``tenant:admin``). The invariant that must still
+    hold is that the tenant plane grants no platform authority: no tenant-reachable
+    platform-operator route exists, and the platform routes refuse a tenant owner.
+    """
+    for path in ("/api/admin/platform/operators", "/api/admin/operators"):
         assert (await client.get(path)).status_code == 404
         assert (await client.post(path, json={})).status_code == 404
+
+    # The dev identity is a tenant owner with no platform capability grant.
+    assert (await client.get("/api/platform/operators")).status_code == 403
+    assert (
+        await client.post("/api/platform/tenants", json={"slug": "x", "name": "X"})
+    ).status_code == 403
 
 
 # ---------------------------------------------------------------------------

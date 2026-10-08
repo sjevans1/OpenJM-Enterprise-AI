@@ -401,14 +401,31 @@ async def test_platform_metadata_lists_all_tenants_without_content(file_db):
 
 
 def test_migration_0012_adds_support_delegations(tmp_path):
+    from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine, inspect
 
-    from app.migrations_runner import adopt_and_upgrade, current_revision, sync_url_for
+    from app.migrations_runner import (
+        _alembic_config,
+        adopt_and_upgrade,
+        current_revision,
+        sync_url_for,
+    )
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'bv3a.db'}"
     adopt_and_upgrade(url)
     head = current_revision(url)
-    assert head == "0012_support_delegations"
+    # Head-agnostic: later stacked packages move the head forward. Assert 0012 is
+    # in the applied chain rather than pinning the current head.
+    assert head is not None
+    script = ScriptDirectory.from_config(_alembic_config(url))
+    chain: set[str] = set()
+    cursor: str | None = script.get_current_head()
+    while cursor:
+        chain.add(cursor)
+        revision = script.get_revision(cursor)
+        cursor = revision.down_revision if revision else None
+    assert "0012_support_delegations" in chain
+
     engine = create_engine(sync_url_for(url), future=True)
     try:
         tables = set(inspect(engine).get_table_names())
