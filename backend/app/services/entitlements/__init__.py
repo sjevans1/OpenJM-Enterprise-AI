@@ -1,0 +1,80 @@
+"""M3 commercial entitlement foundation (#46 M3).
+
+Importing this package registers the ORM immutability guards for the credit
+ledger, then re-exports the service surface.
+"""
+
+from __future__ import annotations
+
+from app.core.entitlements import (  # noqa: F401
+    BillingPeriodStatus,
+    EntitlementNotConfigured,
+    EntitlementsError,
+    HardCapExceeded,
+    LedgerEntryType,
+    LedgerImmutabilityError,
+    PlanStatus,
+    ReservationNotFound,
+    ReservationStateError,
+    ReservationStatus,
+    SOFT_THRESHOLDS,
+    SubscriptionStatus,
+    TenantInactive,
+)
+from app.services.entitlements import guards  # noqa: F401  (registers immutability events)
+from app.services.entitlements.service import (
+    DEFAULT_TTL_SECONDS,
+    add_plan_version,
+    available_units,
+    can_start_execution,
+    configure_tenant,
+    entitlement_summary,
+    expire_reservations,
+    finalize,
+    grant_allowance,
+    period_key,
+    platform_entitlement_metadata,
+    purchase_credits,
+    recover_inflight,
+    record_plan,
+    release,
+    reserve,
+    set_subscription,
+    soft_thresholds,
+    utcnow,
+)
+
+__all__ = [
+    "DEFAULT_TTL_SECONDS",
+    "utcnow",
+    "EntitlementNotConfigured",
+    "EntitlementsError",
+    "HardCapExceeded",
+    "LedgerEntryType",
+    "LedgerImmutabilityError",
+    "PlanStatus",
+    "ReservationNotFound",
+    "ReservationStateError",
+    "ReservationStatus",
+    "SOFT_THRESHOLDS",
+    "SubscriptionStatus",
+    "TenantInactive",
+    "BillingPeriodStatus",
+    "add_plan_version",
+    "available_units",
+    "can_start_execution",
+    "configure_tenant",
+    "entitlement_summary",
+    "expire_reservations",
+    "finalize",
+    "grant_allowance",
+    "period_key",
+    "platform_entitlement_metadata",
+    "purchase_credits",
+    "recover_inflight",
+    "record_plan",
+    "release",
+    "reserve",
+    "set_subscription",
+    "soft_thresholds",
+]

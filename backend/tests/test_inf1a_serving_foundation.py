@@ -819,7 +819,12 @@ def test_migration_0015_is_additive_and_reversible(tmp_path):
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'inf1a.db'}"
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0015_inf1_inference_registry"
+    # Head-agnostic: a later package (M3's 0016, and the INF1-B chain) moves the
+    # migration head forward, so this asserts the database reached the current
+    # head rather than pinning 0015.
+    from app.migrations_runner import script_heads
+
+    assert current_revision(url) == script_heads(url)[0]
 
     engine = create_engine(sync_url_for(url), future=True)
     try:

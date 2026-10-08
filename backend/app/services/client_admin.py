@@ -22,6 +22,7 @@ from app.core.identity import AuthorizationError, Principal
 from app.core.permissions import ROLE_OWNER, Permission, is_known_role
 from app.models import AuthSession, PrincipalAccount, Tenant, TenantMembership
 from app.services import identity as identity_service
+from app.services import entitlements
 from app.services import usage_aggregation
 from app.services import usage_metering
 from app.services.access_governance import load_principal_access
@@ -356,13 +357,28 @@ async def usage_summary(
     aggregate = await usage_aggregation.aggregate_usage(
         db, tenant_id=principal.tenant_id, period=period, start=start, end=end
     )
+    entitlement_view = await entitlements.entitlement_summary(
+        db, tenant_id=principal.tenant_id
+    )
+    configured = entitlement_view["subscription_status"] is not None
     return {
         "tenant_id": principal.tenant_id,
         "usage": totals,
         "aggregate": aggregate,
-        # M3 (entitlements) has not landed; this is a placeholder so the admin
-        # surface has a stable contract.
-        "plan": None,
-        "entitlements": None,
-        "note": "Usage aggregation is M2; plan and entitlement data arrive with M3.",
+        # A tenant with no commercial relationship keeps the pre-M3 contract
+        # (both None). Once M3 provisioning lands, the view is populated.
+        "plan": entitlement_view["plan"] if configured else None,
+        "entitlements": entitlement_view if configured else None,
+        "note": "Usage aggregation is M2; plan and entitlement values are M3.",
     }
+
+
+async def entitlement_summary(db: AsyncSession, *, principal: Principal) -> dict:
+    """Bounded, tenant-scoped plan, allowance and soft-threshold view (M3).
+
+    Requires ``tenant:admin``. Every query in the underlying service is scoped by
+    ``tenant_id`` in SQL, so this surface can never read another tenant's plan,
+    allowance or credits.
+    """
+    _require_tenant_admin(principal)
+    return await entitlements.entitlement_summary(db, tenant_id=principal.tenant_id)
