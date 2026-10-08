@@ -1,8 +1,28 @@
 # OpenJM Enterprise AI — Product Roadmap
 
-**Current accepted main:** `86164252c38c74e1d7417d61c310951472ff81f8` (VS4-D merge).  
-**Accepted stage:** VS4 complete. **Next:** VS5 enterprise identity and tenant isolation.  
-**Checklist source:** roadmap issue #11 and the current batch contracts in `docs/plan/`.
+## Current post-VS8 phase — observed 2026-10-08
+
+**Inspected main:** `8626f422a663ce238157a4023df23b9a5ed43c96` (accepted BV1/BV2/M1 foundations).  
+**Execution umbrella:** [Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45); commercialization: [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
+
+BV3-A/B/C remain open at inspection. The agreed next sequence is:
+
+1. Finish BV3-C PostgreSQL acceptance and integrate the accepted BV3 train.
+2. Begin **INF1-A** serving contracts/registry/routing/attribution and **M2** usage
+   aggregation in parallel where schema/API ownership is reconciled.
+3. Reconcile INF1 admission/reservation semantics with **M3** before commercial
+   completion; follow with INF1 capacity telemetry/reconciliation qualification.
+
+The [INF1 plan](plan/INF1.md) links architecture, contracts, A/B/C acceptance and
+an executor handoff. This documentation does not mark INF1 implemented, accept
+BV3 or authorize a merge. BV4/BV5/BV6 remain under Issue #45's existing scope.
+Workspace remains separate.
+
+## Historical VS4 roadmap snapshot
+
+The remaining sections record the earlier VS4 stage and then-planned VS5–VS8
+work. They preserve history and do not override the current phase above. Refresh
+live PR/main evidence before execution.
 
 ## Delivered foundation
 
@@ -52,3 +72,4 @@ Repeatable on-prem packaging, observability, backup/restore, update/rollback, re
 4. Negative security cases fail closed and prove no unauthorized tool execution.
 5. Real-model/browser evidence is required where the contract calls for it.
 6. Do not claim VS5–VS8 or production multi-user readiness from VS4 acceptance.
+

@@ -1,5 +1,25 @@
 # VS4 lifecycle pilot — OpenJM Enterprise AI
 
+## Current post-VS8 work — INF1 (2026-10-08)
+
+The VS4 pilot below is historical. The current post-VS8 execution umbrella is
+[Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45), with
+metering and entitlements in [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
+For inference-serving work, use [INF1 delivery and acceptance](plan/INF1.md),
+[architecture](architecture/INF1_RAHKIA_SERVING_PLANE.md),
+[contracts](architecture/INF1_CONTRACTS.md) and the
+[executor handoff](INF1_EXECUTION_PROMPT.md).
+
+INF1 architecture is prepared for review; runtime implementation follows
+BV3-C PostgreSQL acceptance and integration of BV3-A/B/C. Then INF1-A and M2 may
+proceed in parallel where contracts do not conflict. Reconcile INF1 admission
+with M3 before commercial completion. No merge authority is implied.
+
+The historical pilot's single-user/SQLite and uncompleted-VS5 assumptions do not
+supersede the current accepted code or Issue #45. Preserve its evidence and
+review discipline without treating its old stage as current.
+
+
 Plan revision: `vs4-pilot-1` · Approved direction: Shane Evans, 2026-10-02.
 Repository: **sjevans1/OpenJM-Enterprise-AI only**.
 Pilot tracker: [#24](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/24).
@@ -108,3 +128,4 @@ failed repair attempts, review corrections, human interventions and provider
 usage/cost **when available**. Record unknowns as unknown. The first B2C1 PR
 also rehearses interruption/resume without duplicate commits, branches or PRs.
 Evaluate the pilot after that PR before changing the operating contract.
+
