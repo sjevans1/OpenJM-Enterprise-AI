@@ -587,7 +587,16 @@ class GroupMembership(Base):
 # tuple is the single literal list shared by the model and the 0008 migration.
 PLATFORM_OPERATOR_CAPABILITIES_SQL = (
     "('platform:metadata:read','platform:tenants:admin',"
-    "'platform:operators:admin','platform:content:support')"
+    "'platform:operators:admin','platform:content:support',"
+    "'platform:operations:admin')"
+)
+
+# An *active* grant must always sit inside the current vocabulary, so no code path
+# can act on a capability it does not know. A revoked row is history and may keep
+# a value that a later narrowing retired, which is what lets migration 0014
+# narrow the active vocabulary again without deleting an audit trail.
+PLATFORM_OPERATOR_CAPABILITY_CHECK = (
+    f"status = 'revoked' OR capability IN {PLATFORM_OPERATOR_CAPABILITIES_SQL}"
 )
 
 
@@ -605,7 +614,7 @@ class PlatformOperator(Base):
             "principal_id", "capability", name="uq_platform_operator_capability"
         ),
         CheckConstraint(
-            f"capability IN {PLATFORM_OPERATOR_CAPABILITIES_SQL}",
+            PLATFORM_OPERATOR_CAPABILITY_CHECK,
             name="ck_platform_operator_capability",
         ),
         CheckConstraint("status IN ('active','revoked')", name="ck_platform_operator_status"),

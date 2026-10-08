@@ -412,13 +412,30 @@ async def test_usage_summary_records_plan_placeholder(file_db):
 
 
 def test_migration_0013_adds_tenant_preferences(tmp_path):
+    from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine, inspect
 
-    from app.migrations_runner import adopt_and_upgrade, current_revision, sync_url_for
+    from app.migrations_runner import (
+        _alembic_config,
+        adopt_and_upgrade,
+        current_revision,
+        sync_url_for,
+    )
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'bv3b.db'}"
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0013_tenant_preferences"
+    # Head-agnostic: later stacked packages move the head forward. Assert 0013 is
+    # in the applied chain rather than pinning the current head.
+    assert current_revision(url) is not None
+    script = ScriptDirectory.from_config(_alembic_config(url))
+    chain: set[str] = set()
+    cursor: str | None = script.get_current_head()
+    while cursor:
+        chain.add(cursor)
+        revision = script.get_revision(cursor)
+        cursor = revision.down_revision if revision else None
+    assert "0013_tenant_preferences" in chain
+
     engine = create_engine(sync_url_for(url), future=True)
     try:
         columns = {col["name"] for col in inspect(engine).get_columns("tenants")}

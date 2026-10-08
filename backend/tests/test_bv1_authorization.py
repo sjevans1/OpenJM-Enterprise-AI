@@ -207,12 +207,24 @@ async def test_platform_revocation_is_immediate(world, file_db):
     assert caps == frozenset()
 
 
-def test_migration_capability_literal_matches_vocabulary():
+def test_platform_capability_vocabulary_is_fully_migrated():
+    """Every capability the code knows must be permitted by the DB constraint.
+
+    Revision 0008 keeps an immutable literal for its original vocabulary, so this
+    has to span the revisions that widen it rather than pin one file, and it also
+    checks the ORM's own check literal so the two cannot drift.
+    """
     from pathlib import Path
 
-    text = Path("migrations/versions/0008_bv1_authorization.py").read_text()
+    from app.models import PLATFORM_OPERATOR_CAPABILITIES_SQL
+
+    history = "\n".join(
+        path.read_text() for path in sorted(Path("migrations/versions").glob("[0-9]*.py"))
+    )
     for capability in PlatformCapability:
-        assert capability.value in text, capability
+        assert capability.value in history, capability
+        assert capability.value in PLATFORM_OPERATOR_CAPABILITIES_SQL, capability
+    assert PLATFORM_OPERATOR_CAPABILITIES_SQL.count("platform:") == len(PlatformCapability)
 
 
 # ---------------------------------------------------------------------------

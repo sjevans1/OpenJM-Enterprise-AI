@@ -1,8 +1,19 @@
-"""Schedules and notifications API.
+"""Schedules and notifications API (OpenJM platform control plane).
 
-Both surfaces are tenant-scoped and permission-guarded. Neither can be used to
-reach an arbitrary destination: a schedule may only name a registered operation,
-and a notification channel may only be of a registered channel type.
+BV3-C: raw scheduler and notification machinery is platform machinery. Every
+route requires the explicit ``platform:operations:admin`` capability, never a
+tenant role, so a tenant ``admin``/``owner`` does not inherit raw operational
+authority from the legacy permission set. The backend enforces this on every
+request; hiding the surface in the UI is not a security boundary.
+
+Scheduled report and notification *execution* is unchanged: the scheduler and
+notification services keep running under their own service-level authorization,
+and the customer-facing outcome controls (governed actions such as "refresh this
+source nightly") remain on the tenant permission model.
+
+Both surfaces are tenant-scoped. Neither can be used to reach an arbitrary
+destination: a schedule may only name a registered operation, and a notification
+channel may only be of a registered channel type.
 """
 
 from __future__ import annotations
@@ -12,8 +23,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require
-from app.core.identity import Permission, Principal
+from app.api.deps import require_platform
+from app.core.identity import Principal
+from app.core.platform import PlatformCapability
 from app.db import get_db
 from app.models import Schedule
 from app.services import notifications as notifications_service
@@ -81,7 +93,7 @@ def _schedule_out(schedule: Schedule) -> dict:
 
 @router.get("/schedules/operations")
 async def list_registered_operations(
-    principal: Principal = Depends(require(Permission.SCHEDULES_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     """The constrained operation vocabulary a schedule may target."""
     return {"operations": list(scheduler.registered_operations())}
@@ -90,7 +102,7 @@ async def list_registered_operations(
 @router.get("/schedules")
 async def list_schedules(
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.SCHEDULES_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     schedules = await scheduler.list_schedules(db, tenant_id=principal.tenant_id)
     return {"schedules": [_schedule_out(item) for item in schedules]}
@@ -100,7 +112,7 @@ async def list_schedules(
 async def create_schedule(
     payload: ScheduleCreate,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.SCHEDULES_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     try:
         schedule = await scheduler.create_schedule(
@@ -131,7 +143,7 @@ async def update_schedule_state(
     schedule_id: str,
     payload: ScheduleStateUpdate,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.SCHEDULES_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     result = await db.execute(
         select(Schedule).where(
@@ -168,7 +180,7 @@ async def update_schedule_state(
 @router.get("/notification-channels")
 async def list_notification_channels(
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.NOTIFICATIONS_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     channels = await notifications_service.list_channels(db, tenant_id=principal.tenant_id)
     return {
@@ -192,7 +204,7 @@ async def list_notification_channels(
 async def create_notification_channel(
     payload: ChannelCreate,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.NOTIFICATIONS_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     try:
         channel = await notifications_service.create_channel(
@@ -215,7 +227,7 @@ async def create_notification_channel(
 @router.get("/notifications")
 async def list_notifications(
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.NOTIFICATIONS_READ)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     """List the caller's own notifications. Recipient scoping is enforced by the service."""
     items = await notifications_service.list_notifications(
@@ -244,7 +256,7 @@ async def list_notifications(
 async def deliver_notification(
     notification_id: str,
     db: AsyncSession = Depends(get_db),
-    principal: Principal = Depends(require(Permission.NOTIFICATIONS_WRITE)),
+    principal: Principal = Depends(require_platform(PlatformCapability.OPERATIONS_ADMIN)),
 ) -> dict:
     """Deliver one notification after re-proving the recipient's access.
 

@@ -11,6 +11,8 @@ independent of reaching into a customer's governed content:
 * ``METADATA_READ`` reads control-plane metadata and status, never content.
 * ``TENANTS_ADMIN`` creates or suspends tenants.
 * ``OPERATORS_ADMIN`` grants or revokes platform capabilities.
+* ``OPERATIONS_ADMIN`` administers raw platform machinery (connectors, sync
+  schedules, notification channels) and is never implied by a tier.
 * ``CONTENT_SUPPORT`` is the only capability that can reach customer content and
   is always granted explicitly. No metadata capability implies it.
 
@@ -30,6 +32,10 @@ class PlatformCapability(str, Enum):
     METADATA_READ = "platform:metadata:read"
     TENANTS_ADMIN = "platform:tenants:admin"
     OPERATORS_ADMIN = "platform:operators:admin"
+    # Raw platform machinery: connector administration, sync schedules and
+    # notification channels. Deliberately absent from every tier so it is only
+    # ever granted explicitly, and it grants no access to customer content.
+    OPERATIONS_ADMIN = "platform:operations:admin"
     # The only capability that reaches customer content. Always explicit.
     CONTENT_SUPPORT = "platform:content:support"
 
