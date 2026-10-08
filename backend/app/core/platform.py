@@ -36,6 +36,10 @@ class PlatformCapability(str, Enum):
     # notification channels. Deliberately absent from every tier so it is only
     # ever granted explicitly, and it grants no access to customer content.
     OPERATIONS_ADMIN = "platform:operations:admin"
+    # Administers the INF1 inference registry (model releases, runtime profiles,
+    # deployments and tenant bindings). Never granted by a tier and it grants no
+    # access to customer content.
+    INFERENCE_ADMIN = "platform:inference:admin"
     # The only capability that reaches customer content. Always explicit.
     CONTENT_SUPPORT = "platform:content:support"
 
