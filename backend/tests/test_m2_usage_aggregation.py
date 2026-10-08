@@ -14,6 +14,7 @@ the tenant ``WHERE`` predicate is removed; see
 
 import csv
 import io
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -21,7 +22,7 @@ import pytest
 
 from app.core.platform import PlatformCapability
 from app.core.tenancy import LEGACY_PRINCIPAL_ID, LEGACY_TENANT_ID
-from app.models import ModelUsageEvent, Tenant
+from app.models import InferenceUsageAttribution, ModelUsageEvent, Tenant
 from app.services import access_governance as governance
 from app.services import usage_aggregation as ua
 
@@ -182,7 +183,11 @@ async def test_legacy_rows_grouped_as_legacy_unknown_and_not_dropped(tenants, fi
         agg = await ua.aggregate_usage(db, tenant_id=TENANT_A, period="total")
 
     assert agg["attribution"] == ua.LEGACY_ATTRIBUTION == "legacy_unknown"
-    assert agg["coverage"]["attribution"] == "legacy_unknown"
+    assert agg["coverage"]["attribution_state"] == "legacy_unknown"
+    # A window with no sidecar at all reports zero attributed events, so "mixed"
+    # can never be mistaken for "all attributed".
+    assert agg["coverage"]["attributed_events"] == 0
+    assert agg["coverage"]["legacy_unknown_events"] == 3
     assert agg["totals"]["attempts"] == 3, "no unattributed history may be dropped"
     assert all(b["attribution"] == "legacy_unknown" for b in agg["buckets"])
 
@@ -373,6 +378,8 @@ async def test_export_csv_parses_with_stable_header_and_row_count(client, file_d
     assert header.split(",") == [
         "bucket",
         "attribution",
+        "attributed_events",
+        "legacy_unknown_events",
         "attempts",
         "succeeded",
         "failed",
@@ -482,6 +489,9 @@ async def test_platform_metadata_operator_reads_aggregate_only(client, file_db):
         "total_tokens",
         "cached_input_tokens",
         "reasoning_tokens",
+        "attributed_events",
+        "legacy_unknown_events",
+        "attribution",
     }
     for item in body["tenants"]:
         assert set(item) <= allowed_keys
@@ -510,3 +520,184 @@ async def test_platform_usage_unknown_tenant_is_404(client, file_db):
     await _grant(file_db, PlatformCapability.METADATA_READ)
     response = await client.get("/api/platform/usage/tenants/nope")
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# INF1-A attribution sidecar: joined one-to-one, never guessed, never dropped
+# ---------------------------------------------------------------------------
+
+
+async def _attribute(
+    maker,
+    *,
+    event,
+    tenant_id: str | None = None,
+    deployment_id: str = "dep-a",
+    runtime_profile_id: str = "rt-a",
+    site_id: str = "site-a",
+    inference_mode: str = "customer_local",
+    attempt_id: str = "att-1",
+) -> None:
+    """Write one attribution sidecar for an M1 event.
+
+    ``tenant_id`` is overridable so a test can plant a deliberately inconsistent
+    sidecar and prove the join refuses to attach it.
+    """
+    async with maker() as db:
+        db.add(
+            InferenceUsageAttribution(
+                usage_event_id=event.id,
+                tenant_id=tenant_id or event.tenant_id,
+                business_request_id="biz-1",
+                logical_call_id="call-1",
+                attempt_id=attempt_id,
+                parent_attempt_id=None,
+                routing_decision_id=None,
+                deployment_id=deployment_id,
+                deployment_revision=1,
+                model_release_id="rel-a",
+                runtime_profile_id=runtime_profile_id,
+                installation_id="inst-a",
+                site_id=site_id,
+                inference_mode=inference_mode,
+                execution_certainty="completed",
+                completeness="complete",
+                count_method="runtime_reported",
+            )
+        )
+        await db.commit()
+
+
+async def test_attributed_usage_exposes_recorded_identity(tenants, file_db):
+    event = _event(TENANT_A, request_id="a-attr", input_tokens=10, output_tokens=5)
+    await _seed(file_db, [event])
+    await _attribute(file_db, event=event)
+
+    async with file_db() as db:
+        agg = await ua.aggregate_usage(
+            db,
+            tenant_id=TENANT_A,
+            period="total",
+            group_by=("attribution", "deployment_id", "site_id", "inference_mode"),
+        )
+
+    assert agg["attribution"] == ua.ATTRIBUTED
+    assert agg["coverage"]["attributed_events"] == 1
+    assert agg["coverage"]["legacy_unknown_events"] == 0
+
+    bucket = agg["buckets"][0]
+    assert bucket["by_attribution"]["attributed"]["attempts"] == 1
+    # The recorded identity comes from the sidecar, not from any provider string.
+    assert "dep-a" in bucket["by_deployment_id"]
+    assert "site-a" in bucket["by_site_id"]
+    assert "customer_local" in bucket["by_inference_mode"]
+    assert "legacy_unknown" not in bucket["by_deployment_id"]
+
+
+async def test_mixed_attributed_and_legacy_usage_is_reported_as_mixed(tenants, file_db):
+    attributed = _event(TENANT_A, request_id="a-mix-1", input_tokens=4, output_tokens=1)
+    legacy = _event(TENANT_A, request_id="a-mix-2", input_tokens=2, output_tokens=1)
+    await _seed(file_db, [attributed, legacy])
+    await _attribute(file_db, event=attributed)
+
+    async with file_db() as db:
+        agg = await ua.aggregate_usage(
+            db, tenant_id=TENANT_A, period="total", group_by=("attribution", "deployment_id")
+        )
+
+    assert agg["attribution"] == ua.MIXED_ATTRIBUTION
+    assert agg["coverage"]["attribution_state"] == "mixed"
+    assert agg["coverage"]["attributed_events"] == 1
+    assert agg["coverage"]["legacy_unknown_events"] == 1
+
+    # Both rows are counted, and the legacy row is labelled, not dropped.
+    assert agg["totals"]["attempts"] == 2
+    assert agg["totals"]["total_tokens"] == 8
+    bucket = agg["buckets"][0]
+    assert bucket["by_attribution"]["attributed"]["attempts"] == 1
+    assert bucket["by_attribution"]["legacy_unknown"]["attempts"] == 1
+    assert bucket["by_deployment_id"]["dep-a"]["attempts"] == 1
+    assert bucket["by_deployment_id"]["legacy_unknown"]["attempts"] == 1
+
+
+async def test_cross_tenant_attribution_never_attaches(tenants, file_db):
+    """A sidecar whose tenant disagrees with the event must not attach.
+
+    The join carries the tenant equality, so the mismatched sidecar simply fails
+    to match and the event is counted as legacy usage rather than acquiring
+    another tenant's deployment identity.
+    """
+    event = _event(TENANT_A, request_id="a-cross", input_tokens=3, output_tokens=1)
+    await _seed(file_db, [event])
+    await _attribute(file_db, event=event, tenant_id=TENANT_B, deployment_id="dep-b")
+
+    async with file_db() as db:
+        agg = await ua.aggregate_usage(
+            db, tenant_id=TENANT_A, period="total", group_by=("attribution", "deployment_id")
+        )
+
+    assert agg["attribution"] == ua.LEGACY_ATTRIBUTION
+    assert agg["coverage"]["attributed_events"] == 0
+    assert agg["coverage"]["legacy_unknown_events"] == 1
+    assert agg["totals"]["attempts"] == 1
+    bucket = agg["buckets"][0]
+    assert "dep-b" not in bucket["by_deployment_id"]
+    assert bucket["by_deployment_id"]["legacy_unknown"]["attempts"] == 1
+    assert "dep-b" not in json.dumps(agg)
+
+
+async def test_export_semantics_match_the_aggregate(tenants, file_db):
+    attributed = _event(TENANT_A, request_id="a-exp-1", input_tokens=5, output_tokens=1)
+    legacy = _event(TENANT_A, request_id="a-exp-2", input_tokens=2, output_tokens=1)
+    await _seed(file_db, [attributed, legacy])
+    await _attribute(file_db, event=attributed)
+
+    async with file_db() as db:
+        header, rows = await ua.export_rows(
+            db, tenant_id=TENANT_A, period="day", start=DAY_1, end=DAY_2
+        )
+        agg = await ua.aggregate_usage(db, tenant_id=TENANT_A, period="day")
+
+    assert header[:4] == ["bucket", "attribution", "attributed_events", "legacy_unknown_events"]
+    assert len(rows) == 1
+    row = rows[0]
+    bucket = agg["buckets"][0]
+    # The export reports exactly what the aggregate reports.
+    assert row["attribution"] == bucket["attribution"] == ua.MIXED_ATTRIBUTION
+    assert row["attributed_events"] == bucket["attributed_events"] == 1
+    assert row["legacy_unknown_events"] == bucket["legacy_unknown_events"] == 1
+    assert row["attempts"] == bucket["attempts"] == 2
+    assert row["total_tokens"] == bucket["total_tokens"] == 9
+
+
+async def test_left_join_loses_no_rows_and_never_multiplies(tenants, file_db):
+    """Every M1 row survives the join, and the one-to-one sidecar cannot fan out."""
+    events = [
+        _event(TENANT_A, request_id=f"a-join-{i}", input_tokens=1, output_tokens=1)
+        for i in range(4)
+    ]
+    await _seed(file_db, events)
+
+    # Genuine baseline: the same rows measured BEFORE any sidecar exists.
+    async with file_db() as db:
+        before = await ua.aggregate_usage(db, tenant_id=TENANT_A, period="total")
+
+    await _attribute(file_db, event=events[0], attempt_id="att-1")
+    await _attribute(file_db, event=events[1], attempt_id="att-2")
+
+    async with file_db() as db:
+        after = await ua.aggregate_usage(
+            db, tenant_id=TENANT_A, period="total", group_by=("attribution",)
+        )
+
+    # Adding attribution metadata changes what is measured by exactly nothing.
+    assert before["totals"]["attempts"] == after["totals"]["attempts"] == 4
+    assert before["totals"]["total_tokens"] == after["totals"]["total_tokens"] == 8
+    assert after["coverage"]["attributed_events"] == 2
+    assert after["coverage"]["legacy_unknown_events"] == 2
+
+    bucket = after["buckets"][0]
+    labelled = sum(metrics["attempts"] for metrics in bucket["by_attribution"].values())
+    assert labelled == 4, "every row is labelled exactly once, attributed or legacy"
+    assert bucket["by_attribution"]["attributed"]["attempts"] == 2
+    assert bucket["by_attribution"]["legacy_unknown"]["attempts"] == 2

@@ -6,11 +6,16 @@ pricing, entitlement or billing logic.
 
 Contract notes (from the INF1 "M2 interface agreement"):
 
-* Aggregation joins optional one-to-one attribution with a left join and never
-  drops an unattributed row. INF1-A has not landed yet, so every row's
-  deployment attribution is fixed to the literal ``legacy_unknown``. Inventing a
-  deployment identity from a provider route or a model name is forbidden, so
-  this layer will not do it.
+* Aggregation left joins the one-to-one INF1-A attribution sidecar
+  (``inference_usage_attributions``, unique on ``usage_event_id``) and never drops
+  an unattributed row. The tenant equality between the M1 event and the sidecar
+  lives in the join's ON clause, so a sidecar belonging to another tenant simply
+  fails to attach and the event survives as legacy usage. The relation is one to
+  one, so the join cannot fan out and cannot multiply counts or token sums.
+* A sidecar-less row is reported as exactly ``legacy_unknown``. Attributed rows
+  expose the recorded deployment, runtime profile, site and inference mode.
+  Inventing any of those from a provider route, a model name, an endpoint or any
+  other incidental string is forbidden, so this layer will not do it.
 * Provider-reported and estimated coverage are kept separate. There is no single
   "provider-grade" total that silently sums the two.
 * ``cached_input_tokens`` and ``reasoning_tokens`` are reported on their own and
@@ -26,7 +31,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import case, func, literal, select
+from sqlalchemy import and_, case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.usage import (
@@ -35,20 +40,27 @@ from app.core.usage import (
     UsageCallRole,
     UsageSource,
 )
-from app.models import ModelUsageEvent
+from app.models import InferenceUsageAttribution, ModelUsageEvent
 
 # Version of the aggregate payload shape. Bump when the payload changes shape so
 # a consumer can tell which contract it is reading.
 SCHEMA_VERSION = "m2.usage.v1"
 
-# Every row is attributed to this bucket until INF1-A lands a one-to-one
-# attribution sidecar. It is deliberately a fixed literal and never derived from
-# a provider route or a model name.
+# A row with no attribution sidecar is this, exactly. It is deliberately a fixed
+# literal and is never derived from a provider route, a model name or an endpoint.
 LEGACY_ATTRIBUTION = "legacy_unknown"
+
+# A row whose one-to-one sidecar is present and tenant-consistent.
+ATTRIBUTED = "attributed"
+
+# Reported when a scope holds both kinds, so a consumer can never mistake a mixed
+# window for a fully attributed one.
+MIXED_ATTRIBUTION = "mixed"
 
 _PERIODS: tuple[str, ...] = ("day", "month", "total")
 
 _DEFAULT_GROUP_BY: tuple[str, ...] = (
+    "attribution",
     "model_name",
     "provider_route",
     "execution_class",
@@ -58,9 +70,27 @@ _DEFAULT_GROUP_BY: tuple[str, ...] = (
     "failure_category",
 )
 
-# Dimension column lookup. Each key is a group_by token; the value is the ORM
-# column the breakdown groups on.
+# Whether this row carries a tenant-consistent attribution sidecar. Derived from
+# the join, never from a provider string.
+_INFERRED_ATTRIBUTION = case(
+    (InferenceUsageAttribution.id.is_not(None), ATTRIBUTED), else_=LEGACY_ATTRIBUTION
+)
+
+# Dimension lookup. Each key is a group_by token; the value is the expression the
+# breakdown groups on. The identity dimensions coalesce to the legacy marker, so a
+# sidecar-less row reads exactly ``legacy_unknown`` rather than null or a guess.
 _DIMENSIONS = {
+    "attribution": _INFERRED_ATTRIBUTION,
+    "deployment_id": func.coalesce(
+        InferenceUsageAttribution.deployment_id, LEGACY_ATTRIBUTION
+    ),
+    "runtime_profile_id": func.coalesce(
+        InferenceUsageAttribution.runtime_profile_id, LEGACY_ATTRIBUTION
+    ),
+    "site_id": func.coalesce(InferenceUsageAttribution.site_id, LEGACY_ATTRIBUTION),
+    "inference_mode": func.coalesce(
+        InferenceUsageAttribution.inference_mode, LEGACY_ATTRIBUTION
+    ),
     "model_name": ModelUsageEvent.model_name,
     "provider_route": ModelUsageEvent.provider_route,
     "execution_class": ModelUsageEvent.execution_class,
@@ -146,6 +176,9 @@ def _metrics_columns() -> list:
         _sum_int(ModelUsageEvent.total_tokens).label("total_tokens"),
         _sum_int(ModelUsageEvent.cached_input_tokens).label("cached_input_tokens"),
         _sum_int(ModelUsageEvent.reasoning_tokens).label("reasoning_tokens"),
+        # Coverage split, available on every aggregate so each surface reports it.
+        _count_where(InferenceUsageAttribution.id.is_not(None)).label("attributed_events"),
+        _count_where(InferenceUsageAttribution.id.is_(None)).label("legacy_unknown_events"),
     ]
 
 
@@ -162,6 +195,8 @@ def _as_metrics(row) -> dict:
         "total_tokens": int(mapping["total_tokens"] or 0),
         "cached_input_tokens": int(mapping["cached_input_tokens"] or 0),
         "reasoning_tokens": int(mapping["reasoning_tokens"] or 0),
+        "attributed_events": int(mapping["attributed_events"] or 0),
+        "legacy_unknown_events": int(mapping["legacy_unknown_events"] or 0),
     }
 
 
@@ -179,6 +214,9 @@ def _empty_bucket(bucket: str) -> dict:
         "total_tokens": 0,
         "cached_input_tokens": 0,
         "reasoning_tokens": 0,
+        "attributed_events": 0,
+        "legacy_unknown_events": 0,
+        "by_attribution": {},
         "by_model_name": {},
         "by_provider_route": {},
         "by_execution_class": {},
@@ -186,6 +224,12 @@ def _empty_bucket(bucket: str) -> dict:
         "by_call_role": {},
         "by_status": {},
         "by_failure_category": {},
+        # Present so any dimension can be requested without a KeyError; they stay
+        # empty unless the caller asks for that breakdown.
+        "by_deployment_id": {},
+        "by_runtime_profile_id": {},
+        "by_site_id": {},
+        "by_inference_mode": {},
     }
 
 
@@ -197,6 +241,32 @@ def _normalize_group_by(group_by) -> tuple[str, ...]:
         if token not in _DIMENSIONS:
             raise ValueError(f"Unknown group_by dimension: {token!r}")
     return tokens
+
+
+def _attribution_state(attributed: int, legacy: int) -> str:
+    """Report attributed, legacy or mixed, rather than one blanket label."""
+    if attributed and legacy:
+        return MIXED_ATTRIBUTION
+    if attributed:
+        return ATTRIBUTED
+    return LEGACY_ATTRIBUTION
+
+
+def _attribution_join(stmt):
+    """Left join the one-to-one attribution sidecar onto the M1 ledger.
+
+    Tenant equality lives in the ON clause, so a sidecar belonging to another
+    tenant does not attach and the M1 row is still counted as legacy usage. The
+    sidecar is unique per ``usage_event_id``, so this is genuinely one to one and
+    cannot fan out a row into a doubled count or token sum.
+    """
+    return stmt.select_from(ModelUsageEvent).outerjoin(
+        InferenceUsageAttribution,
+        and_(
+            InferenceUsageAttribution.usage_event_id == ModelUsageEvent.id,
+            InferenceUsageAttribution.tenant_id == ModelUsageEvent.tenant_id,
+        ),
+    )
 
 
 def _filters(tenant_id: str, start: datetime | None, end: datetime | None) -> list:
@@ -270,7 +340,7 @@ async def aggregate_usage(
     clauses = _filters(tenant_id, start, end)
 
     # Per-bucket totals.
-    totals_stmt = (
+    totals_stmt = _attribution_join(
         select(bucket_expr.label("bucket"), *_metrics_columns())
         .where(*clauses)
         .group_by(bucket_expr)
@@ -284,6 +354,9 @@ async def aggregate_usage(
         key = _bucket_of(row._mapping["bucket"], period)
         bucket = _empty_bucket(key)
         bucket.update(_as_metrics(row))
+        bucket["attribution"] = _attribution_state(
+            bucket["attributed_events"], bucket["legacy_unknown_events"]
+        )
         buckets[key] = bucket
         order.append(key)
 
@@ -294,7 +367,7 @@ async def aggregate_usage(
             value_expr = func.coalesce(column, "(none)")
         else:
             value_expr = func.coalesce(column, "(unspecified)")
-        stmt = (
+        stmt = _attribution_join(
             select(
                 bucket_expr.label("bucket"),
                 value_expr.label("value"),
@@ -336,6 +409,8 @@ async def aggregate_usage(
             "total_tokens",
             "cached_input_tokens",
             "reasoning_tokens",
+            "attributed_events",
+            "legacy_unknown_events",
         ):
             totals[field] += bucket[field]
         for token in dimensions:
@@ -345,9 +420,16 @@ async def aggregate_usage(
                 for field, amount in metrics.items():
                     merged[field] += amount
 
-    # Provider-reported and estimated coverage stay separate by construction.
+    totals["attribution"] = _attribution_state(
+        totals["attributed_events"], totals["legacy_unknown_events"]
+    )
+
+    # Provider-reported and estimated coverage stay separate by construction, and
+    # the attributed/legacy split is reported next to it.
     coverage = {
-        "attribution": LEGACY_ATTRIBUTION,
+        "attribution_state": totals["attribution"],
+        "attributed_events": totals["attributed_events"],
+        "legacy_unknown_events": totals["legacy_unknown_events"],
         "by_usage_source": totals.get("by_usage_source", {}),
     }
 
@@ -357,7 +439,7 @@ async def aggregate_usage(
         "start": start.isoformat() if start is not None else None,
         "end": end.isoformat() if end is not None else None,
         "group_by": list(dimensions),
-        "attribution": LEGACY_ATTRIBUTION,
+        "attribution": totals["attribution"],
         "schema_version": SCHEMA_VERSION,
         "generated_at": utcnow().isoformat(),
         "buckets": ordered_buckets,
@@ -378,6 +460,8 @@ def _zero_metrics() -> dict:
         "total_tokens": 0,
         "cached_input_tokens": 0,
         "reasoning_tokens": 0,
+        "attributed_events": 0,
+        "legacy_unknown_events": 0,
     }
 
 
@@ -394,7 +478,7 @@ async def aggregate_by_tenant(
     offset = max(0, int(offset))
 
     tenant_col = ModelUsageEvent.tenant_id
-    stmt = (
+    stmt = _attribution_join(
         select(tenant_col.label("tenant_id"), *_metrics_columns())
         .group_by(tenant_col)
         .order_by(tenant_col)
@@ -408,16 +492,32 @@ async def aggregate_by_tenant(
         ).scalar_one()
         or 0
     )
+    tenants = [
+        {
+            "tenant_id": row._mapping["tenant_id"],
+            **_as_metrics(row),
+            "attribution": _attribution_state(
+                int(row._mapping["attributed_events"] or 0),
+                int(row._mapping["legacy_unknown_events"] or 0),
+            ),
+        }
+        for row in rows
+    ]
+    attributed_total = sum(item["attributed_events"] for item in tenants)
+    legacy_total = sum(item["legacy_unknown_events"] for item in tenants)
     return {
         "generated_at": utcnow().isoformat(),
         "schema_version": SCHEMA_VERSION,
-        "attribution": LEGACY_ATTRIBUTION,
+        "attribution": _attribution_state(attributed_total, legacy_total),
+        "coverage": {
+            "attribution_state": _attribution_state(attributed_total, legacy_total),
+            "attributed_events": attributed_total,
+            "legacy_unknown_events": legacy_total,
+        },
         "total_tenants": total_tenants,
         "limit": limit,
         "offset": offset,
-        "tenants": [
-            {"tenant_id": row._mapping["tenant_id"], **_as_metrics(row)} for row in rows
-        ],
+        "tenants": tenants,
     }
 
 
@@ -457,6 +557,8 @@ async def export_rows(
     header = [
         "bucket",
         "attribution",
+        "attributed_events",
+        "legacy_unknown_events",
         "attempts",
         "succeeded",
         "failed",
@@ -479,6 +581,8 @@ async def export_rows(
             {
                 "bucket": bucket["bucket"],
                 "attribution": bucket["attribution"],
+                "attributed_events": bucket["attributed_events"],
+                "legacy_unknown_events": bucket["legacy_unknown_events"],
                 "attempts": bucket["attempts"],
                 "succeeded": bucket["succeeded"],
                 "failed": bucket["failed"],
