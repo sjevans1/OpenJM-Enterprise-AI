@@ -362,6 +362,7 @@ async def _principal_for(
         group_ids=access.group_ids,
         steward_scopes=access.steward_scopes,
         platform_capabilities=frozenset(c.value for c in platform_capabilities),
+        support_scopes=access.support_scopes,
     )
 
 

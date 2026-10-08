@@ -93,6 +93,9 @@ class Principal:
     # Platform (control-plane) capabilities, always an explicit grant and never
     # derived from the tenant role.
     platform_capabilities: frozenset[str] = field(default_factory=frozenset)
+    # Active, unexpired OpenJM support delegations for this tenant
+    # ("metadata", "content"). Content support never arrives implicitly.
+    support_scopes: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def user_id(self) -> str:
@@ -191,6 +194,10 @@ class Principal:
 
     def platform_capability_strings(self) -> frozenset[str]:
         return frozenset(self.platform_capabilities)
+
+    def has_support_scope(self, scope: str) -> bool:
+        """An active OpenJM support delegation for this tenant and scope."""
+        return str(scope) in self.support_scopes
 
 
 def build_permissions(role: str | None) -> frozenset[Permission]:

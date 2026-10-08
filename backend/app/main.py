@@ -15,6 +15,7 @@ from app.api import (
     data,
     knowledge,
     operations,
+    platform,
     report_exports,
     report_definitions,
     report_runs,
@@ -139,6 +140,7 @@ async def health():
 app.include_router(system.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(platform.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
 app.include_router(connectors.router, prefix="/api")
 app.include_router(operations.router, prefix="/api")
