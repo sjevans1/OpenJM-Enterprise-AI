@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -14,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.governance import DEFAULT_SOURCE_CLASSIFICATION
+from app.core.inference import ROUTE_REASONS
 from app.core.tenancy import (
     DOC_STATE_FAILED,
     DOC_STATE_INDEXING,
@@ -588,7 +590,7 @@ class GroupMembership(Base):
 PLATFORM_OPERATOR_CAPABILITIES_SQL = (
     "('platform:metadata:read','platform:tenants:admin',"
     "'platform:operators:admin','platform:content:support',"
-    "'platform:operations:admin')"
+    "'platform:operations:admin','platform:inference:admin')"
 )
 
 # An *active* grant must always sit inside the current vocabulary, so no code path
@@ -598,6 +600,10 @@ PLATFORM_OPERATOR_CAPABILITIES_SQL = (
 PLATFORM_OPERATOR_CAPABILITY_CHECK = (
     f"status = 'revoked' OR capability IN {PLATFORM_OPERATOR_CAPABILITIES_SQL}"
 )
+
+# Bounded routing-reason vocabulary, shared with the ORM check constraint so the
+# decision record and the schema cannot drift.
+ROUTE_REASONS_SQL = "(" + ",".join(f"'{reason}'" for reason in ROUTE_REASONS) + ")"
 
 
 class PlatformOperator(Base):
@@ -1364,4 +1370,270 @@ class ModelUsageEvent(Base):
     failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# INF1-A: Rahkia inference serving registry
+# ---------------------------------------------------------------------------
+
+
+class InferenceModelRelease(Base):
+    """An immutable model release, addressed by the customer facing Rahkia alias.
+
+    The alias is a name, never a URL and never an approval: an operator creates
+    the release and a binding pins an alias to a specific release version.
+    Weight, tokenizer and lineage references are protected operator data and are
+    not part of any customer response.
+    """
+
+    __tablename__ = "inference_model_releases"
+    __table_args__ = (
+        UniqueConstraint("rahkia_alias", "release_version", name="uq_inference_release_alias_version"),
+        CheckConstraint("status IN ('active','retired')", name="ck_inference_release_status"),
+        CheckConstraint("max_context_tokens > 0", name="ck_inference_release_context"),
+        CheckConstraint("max_output_tokens > 0", name="ck_inference_release_output"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    rahkia_alias: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    release_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    artifact_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    lineage_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    tokenizer_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    tokenizer_revision: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    chat_template_revision: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    capabilities_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    max_context_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    commercial_use_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    evaluation_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class InferenceRuntimeProfile(Base):
+    """How a deployment is executed and measured. No unpinned ``latest``."""
+
+    __tablename__ = "inference_runtime_profiles"
+    __table_args__ = (
+        UniqueConstraint("adapter_kind", "engine_kind", "profile_version", name="uq_inference_runtime_profile"),
+        CheckConstraint("status IN ('active','retired')", name="ck_inference_runtime_status"),
+        CheckConstraint(
+            "usage_method IN ('runtime_reported','tokenizer_estimate','character_estimate','unknown')",
+            name="ck_inference_runtime_usage_method",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    adapter_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_version: Mapped[str] = mapped_column(String(120), nullable=False)
+    profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    image_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    capabilities_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    usage_method: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
+    cancellation_supported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cache_policy: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
+    qualification_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class InferenceDeployment(Base):
+    """A deployment revision of one model release on one runtime profile at a site.
+
+    A local or hosted-dedicated deployment has an owner tenant; a hosted-shared
+    deployment has none. The database enforces exactly that split, so a shared
+    deployment can never be recorded as somebody's dedicated capacity.
+    """
+
+    __tablename__ = "inference_deployments"
+    __table_args__ = (
+        UniqueConstraint("deployment_id", "revision", name="uq_inference_deployment_revision"),
+        CheckConstraint(
+            "inference_mode IN ('customer_local','openjm_local','hosted_dedicated','hosted_shared')",
+            name="ck_inference_deployment_mode",
+        ),
+        CheckConstraint(
+            "lifecycle IN ('disabled','ready','draining','quarantined')",
+            name="ck_inference_deployment_lifecycle",
+        ),
+        CheckConstraint(
+            "connectivity_mode IN ('connected','air_gapped')",
+            name="ck_inference_deployment_connectivity",
+        ),
+        CheckConstraint(
+            "(inference_mode = 'hosted_shared' AND owner_tenant_id IS NULL) "
+            "OR (inference_mode != 'hosted_shared' AND owner_tenant_id IS NOT NULL)",
+            name="ck_inference_deployment_owner_split",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    deployment_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    model_release_id: Mapped[str] = mapped_column(
+        ForeignKey("inference_model_releases.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
+    runtime_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("inference_runtime_profiles.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
+    installation_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    site_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    residency_domain: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    inference_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    endpoint_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    credential_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    lifecycle: Mapped[str] = mapped_column(String(32), default="disabled", nullable=False)
+    connectivity_mode: Mapped[str] = mapped_column(String(32), default="connected", nullable=False)
+    telemetry_policy_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    max_context_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_request_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pool_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accelerator_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accelerator_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tensor_parallel: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pipeline_parallel: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capacity_reservation_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    security_qualification_ref: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class InferenceTenantBinding(Base):
+    """Which deployments one tenant may use. There is no wildcard binding."""
+
+    __tablename__ = "inference_tenant_bindings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "rahkia_alias", name="uq_inference_binding_tenant_alias"),
+        CheckConstraint("status IN ('active','revoked')", name="ck_inference_binding_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    binding_id: Mapped[str] = mapped_column(String(36), index=True, default=new_id, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    tenant_id: Mapped[str] = tenant_column()
+    rahkia_alias: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    allowed_model_release_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    allowed_deployment_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    allowed_sites_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    allowed_modes_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    allowed_data_classes_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    required_capabilities_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    priority_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    allow_hosted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    fallback_policy: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False
+    )
+
+
+class InferenceHealthObservation(Base):
+    """A transient observation. Never authority, and only fresh ones count."""
+
+    __tablename__ = "inference_health_observations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('healthy','degraded','unknown')", name="ck_inference_health_status"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    deployment_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    deployment_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    model_present: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class InferenceRoutingDecision(Base):
+    """An immutable, content free record of one routing evaluation.
+
+    No endpoint, credential, prompt hash or another tenant's resource identifier
+    is ever written here.
+    """
+
+    __tablename__ = "inference_routing_decisions"
+    __table_args__ = (
+        CheckConstraint("reason IN " + ROUTE_REASONS_SQL, name="ck_inference_route_reason"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    attempt_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tenant_id: Mapped[str] = tenant_column()
+    binding_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    binding_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deployment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    deployment_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_release_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    model_release_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    runtime_profile_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class InferenceUsageAttribution(Base):
+    """The one-to-one sidecar beside an M1 usage event.
+
+    ``usage_event_id`` is unique, so an event can never collect two competing
+    attributions and a replay cannot double count. Legacy M1 rows simply have no
+    sidecar and M2 reports them as explicitly unattributed.
+    """
+
+    __tablename__ = "inference_usage_attributions"
+    __table_args__ = (
+        UniqueConstraint("usage_event_id", name="uq_inference_attribution_event"),
+        CheckConstraint(
+            "execution_certainty IN ('not_dispatched','completed','partial','unknown')",
+            name="ck_inference_attribution_certainty",
+        ),
+        CheckConstraint(
+            "completeness IN ('complete','partial','unknown')",
+            name="ck_inference_attribution_completeness",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    usage_event_id: Mapped[str] = mapped_column(
+        ForeignKey("model_usage_events.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[str] = tenant_column()
+    business_request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    logical_call_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    parent_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    routing_decision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    deployment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    deployment_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_release_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    runtime_profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    installation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    site_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    inference_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    execution_certainty: Mapped[str] = mapped_column(String(16), nullable=False)
+    completeness: Mapped[str] = mapped_column(String(16), nullable=False)
+    count_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    tokenizer_revision: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    gateway_queue_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_queue_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    service_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ttft_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generation_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens_per_second: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gpu_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gpu_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
