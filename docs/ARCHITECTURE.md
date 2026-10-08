@@ -10,8 +10,10 @@ OpenJM-managed local, hosted-dedicated and hosted-shared topologies while
 preserving the existing application contract.
 
 This is an architecture proposal, not shipped runtime functionality. Follow
-[INF1 delivery gates](plan/INF1.md); BV3 integration precedes runtime work.
-The vertical-slice sections below retain their historical scope and evidence.
+[INF1 delivery gates](plan/INF1.md); the BV3-A/B/C integration this depended on is
+now in `main` at `18cabaa2`, while INF1 runtime work itself has not begun and is
+not authorized by this document. The vertical-slice sections below retain their
+historical scope and evidence.
 
 
 ## Product contract

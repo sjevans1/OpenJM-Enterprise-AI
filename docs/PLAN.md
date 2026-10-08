@@ -10,10 +10,14 @@ For inference-serving work, use [INF1 delivery and acceptance](plan/INF1.md),
 [contracts](architecture/INF1_CONTRACTS.md) and the
 [executor handoff](INF1_EXECUTION_PROMPT.md).
 
-INF1 architecture is prepared for review; runtime implementation follows
-BV3-C PostgreSQL acceptance and integration of BV3-A/B/C. Then INF1-A and M2 may
-proceed in parallel where contracts do not conflict. Reconcile INF1 admission
-with M3 before commercial completion. No merge authority is implied.
+INF1 architecture is prepared for review. The BV3 gate it waited on is now
+closed: BV3-A/B/C are merged in `main` at `18cabaa2`, after the BV3-C PostgreSQL
+deployment acceptance passed and corrected a downgrade defect in migration
+`0014` (see [BV3-C](plan/BV3_C.md)). INF1 runtime implementation has still not
+started and this documentation does not authorize it; INF1-A and M2 may proceed
+in parallel only once that start is authorized and their contracts do not
+conflict. Reconcile INF1 admission with M3 before commercial completion. No merge
+authority is implied.
 
 The historical pilot's single-user/SQLite and uncompleted-VS5 assumptions do not
 supersede the current accepted code or Issue #45. Preserve its evidence and

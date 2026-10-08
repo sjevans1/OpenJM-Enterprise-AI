@@ -2,20 +2,24 @@
 
 ## Current post-VS8 phase — observed 2026-10-08
 
-**Inspected main:** `8626f422a663ce238157a4023df23b9a5ed43c96` (accepted BV1/BV2/M1 foundations).  
+**Inspected main:** `18cabaa2d03faace8dac69b0b62a143e5e629125` (BV1/BV2/M1 foundations plus the integrated BV3 train).  
 **Execution umbrella:** [Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45); commercialization: [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
 
-BV3-A/B/C remain open at inspection. The agreed next sequence is:
+The BV3 gate is closed. BV3-A, BV3-B and BV3-C are merged in `main` at
+`18cabaa2` (PRs #52, #53, #54) after the BV3-C PostgreSQL deployment acceptance
+passed and corrected a downgrade defect in migration `0014`. Plan records:
+[BV3-A](plan/BV3_A.md), [BV3-B](plan/BV3_B.md), [BV3-C](plan/BV3_C.md).
+Remaining sequence:
 
-1. Finish BV3-C PostgreSQL acceptance and integrate the accepted BV3 train.
-2. Begin **INF1-A** serving contracts/registry/routing/attribution and **M2** usage
-   aggregation in parallel where schema/API ownership is reconciled.
-3. Reconcile INF1 admission/reservation semantics with **M3** before commercial
+1. Authorize and begin **INF1-A** serving contracts/registry/routing/attribution
+   and **M2** usage aggregation in parallel where schema/API ownership is reconciled.
+2. Reconcile INF1 admission/reservation semantics with **M3** before commercial
    completion; follow with INF1 capacity telemetry/reconciliation qualification.
 
 The [INF1 plan](plan/INF1.md) links architecture, contracts, A/B/C acceptance and
-an executor handoff. This documentation does not mark INF1 implemented, accept
-BV3 or authorize a merge. BV4/BV5/BV6 remain under Issue #45's existing scope.
+an executor handoff. This documentation does not mark INF1 implemented or
+authorize a merge; INF1 runtime work has not started, and the BV3 acceptance above
+does not transfer to INF1. BV4/BV5/BV6 remain under Issue #45's existing scope.
 Workspace remains separate.
 
 ## Historical VS4 roadmap snapshot

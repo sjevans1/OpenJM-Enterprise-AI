@@ -1,23 +1,31 @@
 # Hermes handoff — INF1 Rahkia inference serving plane
 
 Work only in `sjevans1/OpenJM-Enterprise-AI`. This is a gated implementation
-handoff, not permission to merge, deploy or skip the active BV3 work.
+handoff, not permission to merge, deploy or begin ahead of an explicit start
+authorization.
 
 Read:
 
 1. [Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45), including its INF1 decision.
 2. [INF1 delivery plan](plan/INF1.md).
 3. [Architecture](architecture/INF1_RAHKIA_SERVING_PLANE.md) and [contracts](architecture/INF1_CONTRACTS.md).
-4. [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46), the accepted M1 code and current BV3 integration evidence.
+4. [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46), the accepted M1 code and the integrated BV3 platform/admin code and BV3 plane records (`docs/plan/BV3_A.md`, `BV3_B.md`, `BV3_C.md`).
 5. Applicable repository instructions and the current CI workflow. Earlier VS4 pilot status is historical, not the current product stage.
 
 ## First action: prove the start gate
 
-Read the live BV3-A/B/C PRs #52/#53/#54 and current main. Verify latest-head
-BV3-C PostgreSQL acceptance, human-authorized integration of the train and
-required green main regression. Do not substitute an older SHA's evidence.
-If the gate is not earned, report its exact missing item and leave runtime and
-migrations untouched. Architecture preparation does not waive this gate.
+Read current `main`, the BV3 PR records and the BV3 plan documents. The BV3
+gate this handoff waited on was earned at `18cabaa2`: BV3-A/B/C are merged (PRs
+#52, #53, #54) after the BV3-C PostgreSQL deployment acceptance passed and
+corrected a downgrade defect in migration `0014`. Confirm the live state against
+`main`, and re-verify every claim against its exact head rather than reusing an
+older SHA's evidence. Do not substitute an older SHA's evidence for a changed
+head.
+
+An earned BV3 gate is not a start authorization. Runtime and migration work still
+requires an explicit start decision; if that has not been given, report the
+missing item and leave runtime and migrations untouched. Architecture preparation
+does not waive this gate.
 
 If earned, use a fresh isolated branch from current main. Preserve existing
 uncommitted work. Reconcile the new docs with the live source before coding.

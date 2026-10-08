@@ -5,8 +5,10 @@ Prepared 2026-10-08 for [Issue #45](https://github.com/sjevans1/OpenJM-Enterpris
 Metering/entitlements remain [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
 
 This package expands the agreed INF1 scope into implementation contracts. It does
-not start the runtime work ahead of BV3-C PostgreSQL acceptance and integration of
-BV3-A/B/C. See [delivery and acceptance](../plan/INF1.md), the
+not start the runtime work: the gate it waited on (BV3-C PostgreSQL acceptance and
+integration of BV3-A/B/C) is now earned in `main` at `18cabaa2`, while the INF1
+runtime start still requires an explicit authorization. See
+[delivery and acceptance](../plan/INF1.md), the
 [data and adapter contracts](INF1_CONTRACTS.md), and the
 [executor handoff](../INF1_EXECUTION_PROMPT.md).
 
@@ -241,7 +243,8 @@ benchmark and workload profile.
 
 ## 9. Code reconciliation and migration approach
 
-Inspected accepted main `8626f422a663ce238157a4023df23b9a5ed43c96`:
+Inspected accepted main `8626f422a663ce238157a4023df23b9a5ed43c96` when this proposal was prepared; the
+current integrated baseline is `18cabaa2d03faace8dac69b0b62a143e5e629125` with BV3-A/B/C merged:
 
 | Existing seam | Observation | INF1 treatment |
 | --- | --- | --- |
@@ -250,7 +253,7 @@ Inspected accepted main `8626f422a663ce238157a4023df23b9a5ed43c96`:
 | `backend/app/models.py::ModelUsageEvent` | Provider route/model name; no deployment identity | Add a one-to-one immutable attribution sidecar keyed to the usage event; legacy rows remain explicitly unattributed |
 | `backend/app/core/usage.py` | `provider_reported` / `estimated`; coarse character estimator | Preserve enum; record tokenizer/count method separately; do not relabel estimates as provider counts |
 | `backend/app/core/config.py` | `local` / `private_remote`; production fallback `none` | Explicit legacy bootstrap binding; no wildcard import or silent fallback enablement |
-| BV3 APIs in PRs #52–#54 | Platform/client authority separation, not integrated at inspection | Re-read integrated code before adding registry APIs or allocating migration IDs |
+| BV3 APIs (PRs #52–#54, now integrated) | Platform/client authority separation, merged in `main` at `18cabaa2` | Re-read the integrated code before adding registry APIs or allocating migration IDs |
 
 Two commercial risks need explicit acceptance coverage: current metering failure
 is tolerated by the gateway; current idempotency uses request/role/attempt and

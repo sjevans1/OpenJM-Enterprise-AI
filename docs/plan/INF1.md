@@ -1,6 +1,6 @@
 # INF1 delivery plan and acceptance gates
 
-Status: **architecture prepared; runtime implementation blocked by the agreed BV3 gate**.
+Status: **architecture prepared; the agreed BV3 gate is closed, INF1 runtime implementation not started**.
 Authority: [Issue #45 INF1 decision](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45#issuecomment-6064270657),
 with commercial work under [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
 
@@ -14,11 +14,11 @@ does not mean any runtime acceptance case passed.
 
 | Item | Observed state |
 | --- | --- |
-| Accepted `main` | `8626f422a663ce238157a4023df23b9a5ed43c96`; BV1/BV2/M1 foundations |
-| BV3-A | [PR #52](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/52), draft/open, head `24d184df8fe27f4eea52d402da6d8a01dad10616` |
-| BV3-B | [PR #53](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/53), draft/open, head `d8b88626751abcc8a323bded96e5ac7482e7c385` |
-| BV3-C | [PR #54](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/54), draft/open, head `f05610b60941b31f4d9dece8640c3eeb7ed4bcce` |
-| INF1 implementation | Not started by this package; BV3 integration is not complete |
+| Accepted `main` | `18cabaa2d03faace8dac69b0b62a143e5e629125`; BV1/BV2/M1 foundations plus the integrated BV3 train |
+| BV3-A | [PR #52](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/52), **merged**, reviewed head `24d184df8fe27f4eea52d402da6d8a01dad10616` |
+| BV3-B | [PR #53](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/53), **merged**, reviewed head `d8b88626751abcc8a323bded96e5ac7482e7c385` |
+| BV3-C | [PR #54](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/54), **merged**, reviewed head `f05610b60941b31f4d9dece8640c3eeb7ed4bcce` |
+| INF1 implementation | Not started by this package; BV3-A/B/C are integrated and the BV3-C PostgreSQL acceptance has passed |
 
 This is a dated observation, not a live status service. Refresh the exact heads,
 PostgreSQL evidence and merged-main state before starting code. An older passing
@@ -28,7 +28,7 @@ run or an older freeze comment cannot accept a changed head.
 
 ```mermaid
 flowchart TD
-    P["BV3-C PostgreSQL acceptance"] --> B["Accept and integrate BV3-A/B/C"]
+    P["BV3-C PostgreSQL acceptance (passed)"] --> B["BV3-A/B/C integrated in main (done)"]
     B --> A["INF1-A serving contract"]
     B --> M["M2 usage aggregation"]
     A --> I["INF1-B capacity and isolation"]
@@ -40,9 +40,10 @@ flowchart TD
     C --> S["Capacity and economics qualification"]
 ```
 
-Architecture preparation may be reviewed now. Runtime/schema changes begin
-only after BV3 is accepted/integrated and its required main regression is green.
-Do not merge BV3 or this package without Shane's explicit approval. Coordinate
+Architecture preparation may be reviewed now. The BV3 integration and its
+required main regression are green at `18cabaa2`, so that precondition is met;
+runtime/schema changes still begin only when the start is explicitly authorized.
+Do not merge this package without Shane's explicit approval. Coordinate
 M2's read-only aggregation with A's attribution work; serialize changes to the
 same schema, usage-context or admin contract. Parallel work does not authorize
 competing migration heads or hidden integration debt.
