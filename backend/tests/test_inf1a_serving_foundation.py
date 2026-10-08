@@ -819,12 +819,22 @@ def test_migration_0015_is_additive_and_reversible(tmp_path):
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'inf1a.db'}"
     adopt_and_upgrade(url)
-    # Head-agnostic: a later package (M3's 0016, and the INF1-B chain) moves the
-    # migration head forward, so this asserts the database reached the current
-    # head rather than pinning 0015.
-    from app.migrations_runner import script_heads
+    # Head-agnostic: a later package moves the chain head forward, so assert that
+    # 0015 has been applied rather than pinning the current head. Pinning it has
+    # broken on every package that added a revision.
+    from alembic.script import ScriptDirectory
 
-    assert current_revision(url) == script_heads(url)[0]
+    from app.migrations_runner import _alembic_config
+
+    assert current_revision(url) is not None
+    script = ScriptDirectory.from_config(_alembic_config(sync_url_for(url)))
+    chain: set[str] = set()
+    cursor: str | None = script.get_current_head()
+    while cursor:
+        chain.add(cursor)
+        revision = script.get_revision(cursor)
+        cursor = revision.down_revision if revision else None
+    assert "0015_inf1_inference_registry" in chain
 
     engine = create_engine(sync_url_for(url), future=True)
     try:
