@@ -36,6 +36,68 @@ export type Principal = {
   email: string | null
   display_name: string | null
   permissions: string[]
+  /**
+   * Server-resolved scope context. These drive navigation *presentation* only;
+   * the backend re-authorizes every request from its own membership database.
+   */
+  department_ids: string[]
+  group_ids: string[]
+  steward_scopes: string[]
+  platform_capabilities: string[]
+}
+
+/** Coerce an unknown server value into a list of strings, defaulting to empty. */
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
+}
+
+/**
+ * GET /api/auth/me returns steward scopes as `{scope_type, scope_id}` objects,
+ * not strings. Flatten them to `"type:id"` keys so the navigation can tell
+ * whether the principal holds any stewardship. A plain string is tolerated too,
+ * so an older or fixture shape cannot silently drop a real grant.
+ */
+export function stewardScopeKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const keys: string[] = []
+  for (const item of value) {
+    if (typeof item === 'string') {
+      if (item) keys.push(item)
+      continue
+    }
+    if (item && typeof item === 'object') {
+      const scopeType = (item as { scope_type?: unknown }).scope_type
+      const scopeId = (item as { scope_id?: unknown }).scope_id
+      if (typeof scopeType === 'string' && typeof scopeId === 'string') {
+        keys.push(`${scopeType}:${scopeId}`)
+      }
+    }
+  }
+  return keys
+}
+
+/**
+ * Normalise the principal returned by GET /api/auth/me. The scope arrays are
+ * optional on the wire (an older backend may omit them), so a missing value
+ * becomes an empty list rather than `undefined` reaching the render path.
+ */
+export function normalizePrincipal(raw: unknown): Principal {
+  const value = (raw ?? {}) as Partial<Principal>
+  return {
+    principal_id: value.principal_id ?? '',
+    tenant_id: value.tenant_id ?? '',
+    subject: value.subject ?? '',
+    role: value.role ?? '',
+    auth_method: value.auth_method ?? '',
+    email: value.email ?? null,
+    display_name: value.display_name ?? null,
+    permissions: stringList(value.permissions),
+    department_ids: stringList(value.department_ids),
+    group_ids: stringList(value.group_ids),
+    steward_scopes: stewardScopeKeys(value.steward_scopes),
+    platform_capabilities: stringList(value.platform_capabilities),
+  }
 }
 
 export type StoredSession = {
@@ -370,7 +432,7 @@ export async function fetchPrincipal(): Promise<Principal> {
       response.status === 401 ? 'unauthenticated' : 'principal_unavailable',
     )
   }
-  return (await response.json()) as Principal
+  return normalizePrincipal(await response.json())
 }
 
 /** Revoke the session server side, then drop local state. */
