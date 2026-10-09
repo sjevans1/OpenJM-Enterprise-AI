@@ -17,6 +17,7 @@ from app.core.context import current_principal
 from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import Conversation, DataSource, Document, Message, SavedReport
+from app.services.document_lifecycle import retrievable_filter
 from app.services.document_policy import (
     access_from_principal,
     connector_origin_document_ids,
@@ -140,8 +141,10 @@ async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool
                 select(Document).where(
                     Document.id.in_(document_ids),
                     Document.tenant_id == tenant_id,
-                    Document.status == "ready",
-                    Document.indexed.is_(True),
+                    # The single authoritative "may this be read" predicate: a
+                    # document that is mid-deletion, failed or partially ingested
+                    # must never revalidate as a valid report source.
+                    *retrievable_filter(),
                 )
             )
         ).scalars().all()
