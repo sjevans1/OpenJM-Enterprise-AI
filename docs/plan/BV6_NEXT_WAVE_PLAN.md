@@ -1,4 +1,4 @@
-# BV6 next-wave plan — governed business-value layer and product-completion gaps
+# BV6 next-wave plan: governed business-value layer and product-completion gaps
 
 Status: **planning document only. No product code. Nothing here is implemented or
 authorized for merge.**
@@ -22,7 +22,7 @@ This is a dated observation. Refresh the head before any implementation starts.
 
 ---
 
-# Part 1 — BV6 governed business-value layer
+# Part 1. BV6 governed business-value layer
 
 Issue #45, section 5, sets the boundary in one paragraph:
 
@@ -306,7 +306,7 @@ implementation is in this document.
 
 ---
 
-# Part 2 — Remaining completion gaps vs the Issue #45 global acceptance
+# Part 2. Remaining completion gaps vs the Issue #45 global acceptance
 
 Only real, repo-grounded gaps. "Grounding" is a file, route or grep result at the
 baseline. Classification uses four bands: MUST (before feature complete), SHOULD
