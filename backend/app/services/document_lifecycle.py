@@ -165,7 +165,9 @@ async def begin_ingest(db: AsyncSession, document_id: str) -> tuple[str, int] | 
 
     Returns ``(token, version)`` or None when the document is already deleted
     or deleted concurrently. The conditional UPDATE is the guard: a document
-    that left a committable state cannot be re-entered.
+    that left a committable state cannot be re-entered. In particular a document
+    already claimed for deletion (``lifecycle_state='deleting'``) is refused, so
+    a late ingest cannot step back into ``indexing`` and defeat the deletion.
     """
     token = str(uuid4())
     result = await db.execute(
@@ -173,6 +175,10 @@ async def begin_ingest(db: AsyncSession, document_id: str) -> tuple[str, int] | 
         .where(
             Document.id == document_id,
             Document.deleted_at.is_(None),
+            # A deletion claim is terminal for ingestion. ``deleted_at`` is still
+            # null while a document is ``deleting``, so the state predicate is
+            # required to keep delete-vs-ingest deterministic across processes.
+            Document.lifecycle_state.notin_((DOC_STATE_DELETING, DOC_STATE_DELETED)),
         )
         .values(
             lifecycle_state=DOC_STATE_INDEXING,
@@ -248,7 +254,11 @@ async def begin_delete(db: AsyncSession, document_id: str) -> bool:
     """Claim a document for deletion, invalidating any in-flight ingestion.
 
     Clearing ``ingest_token`` is deliberate: from this instant the concurrent
-    ingestion attempt can no longer commit.
+    ingestion attempt can no longer commit. ``indexed`` is falsified at the same
+    instant so the legacy ``status``/``indexed`` availability pair stops
+    reporting the document as usable the moment deletion is claimed; otherwise a
+    reader on another worker keeps seeing it as available until the (possibly
+    remote, possibly failed) ``finish_delete`` runs.
     """
     result = await db.execute(
         update(Document)
@@ -258,6 +268,8 @@ async def begin_delete(db: AsyncSession, document_id: str) -> bool:
         )
         .values(
             lifecycle_state=DOC_STATE_DELETING,
+            status="deleting",
+            indexed=False,
             ingest_token=None,
             lifecycle_version=Document.lifecycle_version + 1,
         )

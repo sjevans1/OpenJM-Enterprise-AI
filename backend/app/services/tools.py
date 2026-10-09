@@ -293,8 +293,10 @@ class KnowledgeSearchTool:
                 ownership = or_(ownership, Document.id.in_(connector_document_ids))
             statement = select(Document).where(
                 ownership,
-                Document.status == "ready",
-                Document.indexed.is_(True),
+                # The single authoritative "may this be read" predicate: a
+                # document mid-deletion, failed or partially ingested must not
+                # reach retrieval.
+                *retrievable_filter(),
             )
             if context.report_scope is not None:
                 try:
