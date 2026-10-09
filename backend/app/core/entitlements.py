@@ -51,6 +51,31 @@ class ReservationStatus(str, Enum):
     EXPIRED = "expired"
 
 
+class ExecutionState(str, Enum):
+    """Whether a reservation's request actually reached dispatch.
+
+    Two different authorities govern a reservation, and conflating them is a
+    defect. Pre-dispatch authority is tenant state: an inactive tenant may not
+    create a reservation and may not dispatch a queued one. Post-dispatch
+    authority is this recorded state: once dispatch happened while the tenant was
+    active, settlement depends on the record, not on the tenant's current status.
+    Otherwise a suspension after execution would make consumed inference free.
+    """
+
+    UNDISPATCHED = "undispatched"
+    DISPATCHED = "dispatched"
+    UNCERTAIN = "uncertain"
+
+
+EXECUTION_STATES: tuple[str, ...] = tuple(state.value for state in ExecutionState)
+
+# States that assert the request actually reached dispatch. Settlement is
+# allowed from these and from nothing else.
+POST_DISPATCH_STATES: frozenset[str] = frozenset(
+    {ExecutionState.DISPATCHED.value, ExecutionState.UNCERTAIN.value}
+)
+
+
 class LedgerEntryType(str, Enum):
     """Every movement of available credit is appended, never edited.
 

@@ -1885,6 +1885,10 @@ class UsageReservation(Base):
             name="ck_usage_reservation_status",
         ),
         CheckConstraint("reserved_units >= 0", name="ck_usage_reservation_units"),
+        CheckConstraint(
+            "execution_state IN ('undispatched','dispatched','uncertain')",
+            name="ck_usage_reservation_execution_state",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -1899,6 +1903,15 @@ class UsageReservation(Base):
     status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False)
     reserved_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
     settled_units: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Trusted record of whether the request reached dispatch. Set only by the
+    # execution path while the pre-dispatch conditions still hold, never from a
+    # caller claim, and it is what governs settlement after dispatch.
+    execution_state: Mapped[str] = mapped_column(
+        String(16), default="undispatched", nullable=False
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     finalized_at: Mapped[datetime | None] = mapped_column(

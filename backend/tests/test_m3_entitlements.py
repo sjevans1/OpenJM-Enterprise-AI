@@ -51,10 +51,23 @@ async def _add_tenant(maker, tenant_id):
         await db.commit()
 
 
+async def _dispatch(maker, *, key, tenant_id=LEGACY_TENANT_ID, now=None, uncertain=False):
+    """Record trusted dispatch evidence so settlement is authorized."""
+    async with maker() as db:
+        marker = (
+            ent.mark_execution_uncertain if uncertain else ent.mark_execution_dispatched
+        )
+        row = await marker(db, tenant_id=tenant_id, idempotency_key=key, now=now)
+        return row
+
+
 async def _settle(maker, *, tenant_id=LEGACY_TENANT_ID, key, units, settled=None, now=None):
     async with maker() as db:
         await ent.reserve(
             db, tenant_id=tenant_id, idempotency_key=key, units=units, now=now
+        )
+        await ent.mark_execution_dispatched(
+            db, tenant_id=tenant_id, idempotency_key=key, now=now
         )
         return await ent.finalize(
             db,
@@ -98,6 +111,9 @@ async def test_finalize_twice_settles_once(file_db):
     async with file_db() as db:
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", units=40, now=OCT
+        )
+        await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", now=OCT
         )
         first = await ent.finalize(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", settled_units=25, now=OCT
@@ -167,6 +183,9 @@ async def test_no_float_in_balances_reservations_or_thresholds(file_db):
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", units=40, now=OCT
         )
         assert type(reservation.reserved_units) is int
+        await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", now=OCT
+        )
         settled = await ent.finalize(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", settled_units=25, now=OCT
         )
@@ -410,14 +429,83 @@ async def test_crash_recovery_releases_inflight_without_double_movement(file_db)
 # ---------------------------------------------------------------------------
 
 
-async def test_inactive_tenant_reservation_does_not_settle(file_db):
+async def test_dispatched_then_suspended_still_settles_once(file_db):
+    """Post-dispatch settlement does not depend on the tenant's current status.
+
+    This replaces the earlier assertion that an inactive tenant never settles.
+    That rule is right before dispatch and wrong after it: once execution was
+    dispatched while the tenant was active, the usage exists and refusing to
+    settle it would hand produced inference away for free.
+    """
+    from app.core.entitlements import ReservationStateError
+
     await _configure(file_db, allowance=100)
     async with file_db() as db:
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held", units=40, now=OCT
         )
+        dispatched = await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held", now=OCT
+        )
+    assert dispatched.execution_state == "dispatched"
 
-    # Suspend the tenant while it holds a reservation.
+    # Suspend the tenant AFTER dispatch.
+    async with file_db() as db:
+        tenant = await db.get(Tenant, LEGACY_TENANT_ID)
+        tenant.status = "suspended"
+        await db.commit()
+
+    # The already-dispatched usage still settles, exactly once.
+    async with file_db() as db:
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held",
+            settled_units=40, now=OCT,
+        )
+        again = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held",
+            settled_units=40, now=OCT,
+        )
+    assert settled.status == "settled" and settled.settled_units == 40
+    assert again.id == settled.id
+    assert await _available(file_db) == 60, "settled once, not twice"
+
+    # And the reservation cannot be released out from under the settled usage.
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.release(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held", now=OCT
+            )
+
+
+async def test_suspended_tenant_cannot_reserve(file_db):
+    """Pre-dispatch authority: an inactive tenant must not take a new hold."""
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        tenant = await db.get(Tenant, LEGACY_TENANT_ID)
+        tenant.status = "suspended"
+        await db.commit()
+    async with file_db() as db:
+        with pytest.raises(TenantInactive):
+            await ent.reserve(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", units=10, now=OCT
+            )
+
+
+async def test_suspended_while_queued_cannot_be_dispatched_and_releases_once(file_db):
+    """A tenant suspended while holding a hold cannot reach settlement.
+
+    The M3 half of the queued case: dispatch evidence cannot be recorded for an
+    inactive tenant, so a queued request can never become dispatchable and
+    therefore can never settle. INF1-B independently refuses to dispatch and
+    revalidates before dispatch.
+    """
+    from app.core.entitlements import ReservationStateError
+
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", units=30, now=OCT
+        )
     async with file_db() as db:
         tenant = await db.get(Tenant, LEGACY_TENANT_ID)
         tenant.status = "suspended"
@@ -425,35 +513,124 @@ async def test_inactive_tenant_reservation_does_not_settle(file_db):
 
     async with file_db() as db:
         with pytest.raises(TenantInactive):
+            await ent.mark_execution_dispatched(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT
+            )
+        with pytest.raises(TenantInactive):
+            await ent.mark_execution_uncertain(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT
+            )
+        await db.rollback()
+
+    # The undispatched hold is released exactly once, restoring the allowance.
+    async with file_db() as db:
+        first = await ent.release(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT
+        )
+        second = await ent.release(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT
+        )
+    assert first.status == "released" and second.id == first.id
+    assert await _available(file_db) == 100
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
             await ent.finalize(
-                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held",
-                settled_units=40, now=OCT,
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued",
+                settled_units=30, now=OCT,
             )
 
-    async with file_db() as db:
-        reservation = (
-            await db.execute(
-                select(UsageReservation).where(
-                    UsageReservation.idempotency_key == "held"
-                )
-            )
-        ).scalar_one()
-    assert reservation.status == "reserved"  # untouched, not settled
-    assert await _ledger(file_db, "settlement") == []
-    assert await _available(file_db) == 60  # the hold remains
 
-    # Reactivating the tenant lets the same reservation settle.
+async def test_uncertain_post_dispatch_consumption_is_never_settled_as_zero(file_db):
+    """Uncertain consumption is conservative and explicit, never silently zero."""
+    await _configure(file_db, allowance=100)
     async with file_db() as db:
-        tenant = await db.get(Tenant, LEGACY_TENANT_ID)
-        tenant.status = "active"
-        await db.commit()
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="unc", units=40, now=OCT
+        )
+        marked = await ent.mark_execution_uncertain(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="unc", now=OCT
+        )
+    assert marked.execution_state == "uncertain"
+
+    # A caller reporting zero for an uncertain dispatch does not get it free.
     async with file_db() as db:
         settled = await ent.finalize(
-            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held",
-            settled_units=40, now=OCT,
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="unc",
+            settled_units=0, now=OCT,
+        )
+    assert settled.settled_units == 40, "uncertain must settle the reserved worst case"
+    assert await _available(file_db) == 60
+
+
+async def test_caller_cannot_settle_an_undispatched_reservation(file_db):
+    """No caller claim can substitute for recorded dispatch evidence."""
+    from app.core.entitlements import ReservationStateError
+
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="never", units=10, now=OCT
+        )
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.finalize(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="never",
+                settled_units=10, now=OCT,
+            )
+        await db.rollback()
+    # The hold is untouched and still releasable.
+    assert await _available(file_db) == 90
+    async with file_db() as db:
+        released = await ent.release(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="never", now=OCT
+        )
+    assert released.status == "released"
+
+
+async def test_dispatched_reservation_cannot_be_released(file_db):
+    """Release is a pre-dispatch operation; releasing after dispatch would be free usage."""
+    from app.core.entitlements import ReservationStateError
+
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="d1", units=20, now=OCT
+        )
+        await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="d1", now=OCT
+        )
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.release(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="d1", now=OCT
+            )
+        await db.rollback()
+
+
+async def test_expiry_does_not_free_a_dispatched_hold(file_db):
+    """A dispatched hold represents produced usage, so the expiry sweep skips it."""
+    from datetime import timedelta
+
+    now = OCT
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="late", units=25,
+            ttl_seconds=1, now=now,
+        )
+        await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="late", now=now
+        )
+    later = now + timedelta(minutes=30)
+    async with file_db() as db:
+        expired = await ent.expire_reservations(db, tenant_id=LEGACY_TENANT_ID, now=later)
+    assert expired == 0, "a dispatched hold is not expired away"
+    async with file_db() as db:
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="late",
+            settled_units=25, now=later,
         )
     assert settled.status == "settled"
-
 
 # ---------------------------------------------------------------------------
 # Billing exhaustion: blocks new execution, not history/admin/recovery
@@ -477,6 +654,9 @@ async def test_billing_exhaustion_blocks_execution_but_not_history_or_recovery(
         # Consume the rest, settling fully.
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="full", units=70, now=now
+        )
+        await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="full", now=now
         )
         await ent.finalize(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="full",

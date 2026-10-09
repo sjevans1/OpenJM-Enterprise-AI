@@ -48,7 +48,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-from app.migrations_util import create_table_if_missing, has_table
+from app.migrations_util import add_column_if_missing, create_table_if_missing, has_table
 
 revision = "0016_m3_entitlements"
 down_revision = "0015_inf1_inference_registry"
@@ -257,6 +257,13 @@ def _tables() -> dict[str, sa.Table]:
             sa.Column("status", sa.String(16), nullable=False, server_default="reserved"),
             sa.Column("reserved_units", sa.BigInteger(), nullable=False),
             sa.Column("settled_units", sa.BigInteger(), nullable=True),
+            sa.Column(
+                "execution_state",
+                sa.String(16),
+                nullable=False,
+                server_default="undispatched",
+            ),
+            sa.Column("dispatched_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("finalized_at", sa.DateTime(timezone=True), nullable=True),
@@ -270,6 +277,10 @@ def _tables() -> dict[str, sa.Table]:
                 name="ck_usage_reservation_status",
             ),
             sa.CheckConstraint("reserved_units >= 0", name="ck_usage_reservation_units"),
+            sa.CheckConstraint(
+                "execution_state IN ('undispatched','dispatched','uncertain')",
+                name="ck_usage_reservation_execution_state",
+            ),
         ),
     }
 
@@ -298,6 +309,26 @@ def upgrade() -> None:
     bind = op.get_bind()
     for name, table in _tables().items():
         create_table_if_missing(bind, table)
+
+    # A database that already ran the earlier form of this revision has
+    # usage_reservations without the execution-state columns. Add them rather than
+    # aborting, the same idempotent discipline the other revisions use.
+    if has_table(bind, "usage_reservations"):
+        add_column_if_missing(
+            bind,
+            "usage_reservations",
+            sa.Column(
+                "execution_state",
+                sa.String(16),
+                nullable=False,
+                server_default="undispatched",
+            ),
+        )
+        add_column_if_missing(
+            bind,
+            "usage_reservations",
+            sa.Column("dispatched_at", sa.DateTime(timezone=True), nullable=True),
+        )
     for index_name, table_name, columns in _INDEXES:
         if has_table(bind, table_name):
             op.create_index(index_name, table_name, columns, if_not_exists=True)

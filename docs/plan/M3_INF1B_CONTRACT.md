@@ -47,6 +47,16 @@ Rules that follow, and that both lanes must implement:
    issued key.
 4. **Uncertain consumption stays explicit.** A transport timeout is not proof of
    zero consumption and must not settle as zero.
+5. **Pre-dispatch and post-dispatch authority are separate, and M3 owns the
+   boundary.** Before dispatch the governing fact is tenant state: an inactive
+   tenant may not create a reservation and may not dispatch a queued one. After
+   dispatch the governing fact is the recorded execution state, not the tenant's
+   current status. Once dispatch was recorded while the tenant was active, a later
+   suspension must not prevent settlement, because that would make produced
+   inference free. M3 records dispatch through a trusted seam that the execution
+   path calls while the pre-dispatch conditions still hold; no caller claim can
+   substitute for it, and an undispatched reservation cannot settle. Release is a
+   pre-dispatch operation, and expiry applies only to undispatched holds.
 5. **Billing exhaustion blocks new billable execution** but must not block
    reading existing history, tenant administration or recovery operations.
 

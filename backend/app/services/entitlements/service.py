@@ -42,12 +42,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.entitlements import (
     BillingPeriodStatus,
     EntitlementNotConfigured,
+    ExecutionState,
     HardCapExceeded,
     LedgerEntryType,
     PlanStatus,
     ReservationNotFound,
     ReservationStateError,
     ReservationStatus,
+    POST_DISPATCH_STATES,
     SOFT_THRESHOLDS,
     SubscriptionStatus,
     TENANT_STATUS_ACTIVE,
@@ -73,6 +75,11 @@ _RESERVED = ReservationStatus.RESERVED.value
 _SETTLED = ReservationStatus.SETTLED.value
 _RELEASED = ReservationStatus.RELEASED.value
 _EXPIRED = ReservationStatus.EXPIRED.value
+
+_UNDISPATCHED = ExecutionState.UNDISPATCHED.value
+_DISPATCHED = ExecutionState.DISPATCHED.value
+_UNCERTAIN = ExecutionState.UNCERTAIN.value
+_POST_DISPATCH = POST_DISPATCH_STATES
 
 
 def utcnow() -> datetime:
@@ -414,6 +421,107 @@ def _reserve_capacity_clause(table, units: int):
 # ---------------------------------------------------------------------------
 
 
+async def mark_execution_dispatched(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+    now: datetime | None = None,
+) -> UsageReservation:
+    """Trusted seam: record that the request actually reached dispatch.
+
+    Only the execution path calls this, and only while the pre-dispatch conditions
+    still hold, which is what makes the recorded state trustworthy rather than a
+    caller claim:
+
+    * the reservation exists, is ``reserved`` and has not expired;
+    * the tenant is active *at dispatch time*.
+
+    Once this is recorded, settlement is governed by the record rather than by the
+    tenant's current status, so a suspension afterwards cannot make already
+    produced usage free.
+    """
+    return await _mark_execution(
+        db,
+        tenant_id=tenant_id,
+        idempotency_key=idempotency_key,
+        state=_DISPATCHED,
+        now=now,
+    )
+
+
+async def mark_execution_uncertain(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+    now: datetime | None = None,
+) -> UsageReservation:
+    """Trusted seam: dispatch happened, but what was consumed is unknown.
+
+    A transport timeout is not proof that nothing was consumed, so the hold is
+    marked uncertain rather than released. Settlement of an uncertain reservation
+    is conservative and is never zero.
+    """
+    return await _mark_execution(
+        db,
+        tenant_id=tenant_id,
+        idempotency_key=idempotency_key,
+        state=_UNCERTAIN,
+        now=now,
+    )
+
+
+async def _mark_execution(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+    state: str,
+    now: datetime | None = None,
+) -> UsageReservation:
+    now = _now(now)
+    reservation = await _find_reservation(db, tenant_id, idempotency_key)
+    if reservation is None:
+        raise ReservationNotFound("No reservation for that key")
+    if reservation.execution_state == state:
+        return reservation
+    if reservation.status != _RESERVED:
+        raise ReservationStateError(
+            f"Reservation is {reservation.status} and cannot record dispatch"
+        )
+    if reservation.execution_state in _POST_DISPATCH:
+        # Never downgrade an uncertain dispatch back to a confirmed one.
+        raise ReservationStateError(
+            f"Reservation already records {reservation.execution_state}"
+        )
+    if _naive_utc(now) >= _naive_utc(reservation.expires_at):
+        raise ReservationStateError("Reservation expired before dispatch")
+
+    # Pre-dispatch authority: dispatch only happens while the tenant is active.
+    await _require_active_tenant(db, tenant_id)
+
+    outcome = await db.execute(
+        update(UsageReservation)
+        .where(
+            UsageReservation.id == reservation.id,
+            UsageReservation.status == _RESERVED,
+            UsageReservation.execution_state == _UNDISPATCHED,
+        )
+        .values(execution_state=state, dispatched_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if outcome.rowcount != 1:
+        await db.rollback()
+        current = await _find_reservation(db, tenant_id, idempotency_key)
+        if current is not None and current.execution_state == state:
+            return current
+        raise ReservationStateError("Dispatch could not be recorded")
+    await db.commit()
+    await db.refresh(reservation)
+    return reservation
+
+
 async def reserve(
     db: AsyncSession,
     *,
@@ -502,11 +610,21 @@ async def finalize(
     settled_units: int,
     now: datetime | None = None,
 ) -> UsageReservation:
-    """Settle one completed execution exactly once against the allowance.
+    """Settle one already-dispatched execution exactly once against the allowance.
 
-    Finalizing twice settles once; the second call returns the settled row. An
-    inactive tenant never settles: the reservation is left untouched and the
-    caller is refused.
+    Two authorities, deliberately separated:
+
+    * **Pre-dispatch** authority is tenant state. An inactive tenant cannot create
+      a reservation, cannot dispatch a queued one, and therefore has nothing that
+      can reach settlement.
+    * **Post-dispatch** authority is the trusted execution record. Once dispatch
+      was recorded while the tenant was active, settlement depends on that record,
+      not on the tenant's current status. A suspension after execution must not
+      turn consumed inference into free usage.
+
+    Finalizing twice settles once; the second call returns the settled row. A
+    reservation that never dispatched cannot be settled, so a caller cannot claim
+    execution happened.
     """
     settled_units = _as_int(settled_units, name="settled_units")
     if settled_units < 0:
@@ -522,16 +640,21 @@ async def finalize(
         raise ReservationStateError(
             f"Reservation is {reservation.status} and cannot settle"
         )
-    if _naive_utc(now) >= _naive_utc(reservation.expires_at):
-        await _apply_transition(
-            db, reservation, status=_EXPIRED, reason="expired", now=now
+
+    # Only a recorded dispatch authorizes settlement. This is the trusted seam,
+    # not a caller claim, and it replaces the previous tenant-state re-check.
+    if reservation.execution_state not in _POST_DISPATCH:
+        raise ReservationStateError(
+            "Reservation never dispatched and cannot settle"
         )
-        raise ReservationStateError("Reservation expired before it could settle")
+
+    if reservation.execution_state == _UNCERTAIN:
+        # Conservative: unknown consumption settles at least the reserved amount.
+        # Settling it as zero would hand produced inference away for free.
+        settled_units = max(settled_units, reservation.reserved_units)
+
     if settled_units > reservation.reserved_units:
         raise ValueError("settled_units exceed the reserved units")
-
-    # A suspended or revoked tenant must not settle, even holding a reservation.
-    await _require_active_tenant(db, tenant_id)
 
     transition = (
         update(UsageReservation)
@@ -589,8 +712,10 @@ async def release(
 ) -> UsageReservation:
     """Return a hold taken for a request that failed before dispatch.
 
-    Releasing twice releases once; the second call returns the released row. A
-    released hold never settles.
+    Release is a pre-dispatch operation. Releasing a reservation that already
+    dispatched would make consumed usage free, so it is refused. Releasing twice
+    releases once; the second call returns the released row. A released hold never
+    settles.
     """
     now = _now(now)
     reservation = await _find_reservation(db, tenant_id, idempotency_key)
@@ -600,6 +725,10 @@ async def release(
         return reservation
     if reservation.status == _SETTLED:
         raise ReservationStateError("A settled reservation cannot be released")
+    if reservation.execution_state in _POST_DISPATCH:
+        raise ReservationStateError(
+            "A reservation that already dispatched cannot be released; settle it"
+        )
     await _apply_transition(db, reservation, status=_RELEASED, reason=reason, now=now)
     await db.refresh(reservation)
     return reservation
@@ -663,14 +792,19 @@ async def expire_reservations(
     tenant_id: str | None = None,
     now: datetime | None = None,
 ) -> int:
-    """Release every reservation that is past its expiry. Returns the count.
+    """Release every *undispatched* reservation that is past its expiry.
 
-    Called by recovery: an in-flight hold left by an interrupted process is
-    released exactly once, and never settles.
+    Expiry is a pre-dispatch concept. A hold that already dispatched represents
+    produced usage and must settle, so it is deliberately not expired here; that
+    is what keeps uncertain consumption from silently becoming zero.
+
+    An in-flight hold left by an interrupted process is released exactly once, and
+    never settles.
     """
     now = _now(now)
     query = select(UsageReservation).where(
         UsageReservation.status == _RESERVED,
+        UsageReservation.execution_state == _UNDISPATCHED,
         UsageReservation.expires_at <= _naive_utc(now),
     )
     if tenant_id is not None:
