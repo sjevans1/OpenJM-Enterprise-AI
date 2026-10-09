@@ -19,6 +19,7 @@ from app.api import (
     knowledge,
     operations,
     platform,
+    platform_capacity,
     platform_entitlements,
     platform_usage,
     report_exports,
@@ -150,6 +151,7 @@ app.include_router(platform.router, prefix="/api")
 app.include_router(platform_entitlements.router, prefix="/api")
 app.include_router(inference.router, prefix="/api")
 app.include_router(platform_usage.router, prefix="/api")
+app.include_router(platform_capacity.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
 app.include_router(connectors.router, prefix="/api")

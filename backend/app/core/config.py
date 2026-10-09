@@ -175,6 +175,16 @@ class Settings(BaseSettings):
     scheduler_tick_seconds: int = 30
     scheduler_tick_limit: int = 20
 
+    # --- INF1-C capacity telemetry --------------------------------------------
+    # Aggregate-only upstream telemetry export is opt-in and defaults OFF. While
+    # it is off the exporter refuses to build a payload at all and performs no
+    # outbound call of any kind. The remaining values are display/pinning
+    # metadata carried inside an export envelope when it is enabled.
+    telemetry_export_enabled: bool = False
+    telemetry_installation_id: str = ""
+    telemetry_policy_revision: str = ""
+    telemetry_signing_key_id: str = ""
+
     # --- VS8 backup and retention ---------------------------------------------
     backup_dir: Path = REPO_ROOT / "data" / "backups"
     # Retention is opt-in and bounded; destructive classes support dry-run and
