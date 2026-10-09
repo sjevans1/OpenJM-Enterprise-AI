@@ -86,6 +86,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   localStorage.clear()
+  window.sessionStorage.clear()
+  window.history.replaceState({}, '', '/')
 })
 
 afterEach(() => {
@@ -749,4 +751,171 @@ test('revocation discovered while paging history clears all cached report conten
   await waitFor(() => expect(screen.getByText(/source is no longer available or authorized/i)).toBeTruthy())
   expect(screen.queryByText('Historical confidential answer')).toBeNull()
   expect(screen.queryByText('Historical policy passage')).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// BV4: Chat-first, permission-aware navigation.
+//
+// The navigation offers a governance or administration surface only when the
+// server-resolved principal holds the capability for it. This is presentation
+// only: the FastAPI backend re-authorizes every request, so hiding a surface
+// is never used as the security boundary. These tests drive the OIDC path so
+// the principal context is explicit rather than the development workspace.
+// ---------------------------------------------------------------------------
+
+const OIDC_AUTH_CONFIG = {
+  auth_mode: 'oidc',
+  oidc_configured: true,
+  authorization_endpoint: 'https://idp.example.test/realms/openjm/protocol/openid-connect/auth',
+  issuer: 'https://idp.example.test/realms/openjm',
+  client_id: 'openjm-enterprise-ai',
+  tenant_header: 'X-OpenJM-Tenant',
+}
+
+function principalContext(overrides: Record<string, unknown> = {}) {
+  return {
+    principal_id: 'principal-a',
+    tenant_id: 'tenant-a',
+    subject: 'subject-a',
+    role: 'viewer',
+    auth_method: 'oidc',
+    email: 'viewer@example.test',
+    display_name: 'Viewer Person',
+    permissions: ['chat:use'],
+    department_ids: [],
+    group_ids: [],
+    steward_scopes: [],
+    platform_capabilities: [],
+    ...overrides,
+  }
+}
+
+function storeAuthenticatedSession() {
+  window.sessionStorage.setItem(
+    'openjm.session',
+    JSON.stringify({
+      token: 'openjm-session-token',
+      expiresAt: Date.now() + 3_600_000,
+      principalId: 'principal-a',
+      tenantId: 'tenant-a',
+      role: 'viewer',
+      permissions: ['chat:use'],
+    }),
+  )
+}
+
+function stubAuthenticated(principal: Record<string, unknown>) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/auth/config') return jsonResponse(OIDC_AUTH_CONFIG)
+      if (url === '/api/auth/me') return jsonResponse(principal)
+      return jsonResponse([])
+    }),
+  )
+}
+
+/** The navigation entries the sidebar actually offers, without count pills. */
+function navLabels(): string[] {
+  const nav = document.querySelector('.primary-nav')
+  return Array.from(nav?.querySelectorAll('button.nav-item') ?? []).map((element) => {
+    const clone = element.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('.count-pill').forEach((pill) => pill.remove())
+    return (clone.textContent || '').trim()
+  })
+}
+
+test('an ordinary viewer is offered only Chat', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(principalContext())
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toEqual(['Chat']))
+  expect(screen.queryByRole('button', { name: /Knowledge/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Data/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: /Reports/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: /Administration/ })).toBeNull()
+})
+
+test('a viewer holding reports:read is additionally offered Reports', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(principalContext({ permissions: ['chat:use', 'reports:read'] }))
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toEqual(['Chat', 'Reports']))
+})
+
+test('a knowledge capability holder is offered Knowledge but not Data', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(principalContext({ permissions: ['chat:use', 'knowledge:write'] }))
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toEqual(['Chat', 'Knowledge']))
+})
+
+test('a data capability holder is offered Data but not Knowledge', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(principalContext({ permissions: ['chat:use', 'data:write'] }))
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toEqual(['Chat', 'Data']))
+})
+
+test('a stewardship scope opens the knowledge and data governance surfaces', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(
+    principalContext({ steward_scopes: [{ scope_type: 'group', scope_id: 'finance' }] }),
+  )
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toEqual(['Chat', 'Knowledge', 'Data']))
+})
+
+test('a client administrator is offered Administration', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(principalContext({ role: 'admin', permissions: ['chat:use'] }))
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toContain('Administration'))
+  expect(navLabels()).toEqual(['Chat', 'Knowledge', 'Data', 'Administration'])
+})
+
+test('the explicit Chat/Knowledge/Data/Hybrid selector survives for ordinary users', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(principalContext())
+  const { container } = render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  const selector = container.querySelector('.mode-selector') as HTMLElement | null
+  expect(selector).toBeTruthy()
+  expect(container.querySelector('.mode-label')?.textContent).toBe('Chat')
+
+  fireEvent.click(selector as HTMLElement)
+  const options = Array.from(container.querySelectorAll('.mode-dropdown .mode-option')).map(
+    (element) => (element.textContent || '').trim(),
+  )
+  expect(options).toEqual(['Chat', 'Knowledge', 'Data', 'Hybrid'])
+})
+
+test('platform control-plane capabilities grant no ordinary tenant navigation', async () => {
+  storeAuthenticatedSession()
+  stubAuthenticated(
+    principalContext({
+      permissions: ['chat:use', 'reports:read'],
+      platform_capabilities: ['platform:admin', 'platform:observability'],
+    }),
+  )
+  render(<App />)
+
+  await screen.findByRole('button', { name: 'New conversation' })
+  await waitFor(() => expect(navLabels()).toEqual(['Chat', 'Reports']))
+  const nav = document.querySelector('.primary-nav') as HTMLElement
+  expect(nav.textContent || '').not.toMatch(/platform|control plane/i)
 })
