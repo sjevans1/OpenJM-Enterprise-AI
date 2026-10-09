@@ -1924,3 +1924,154 @@ class UsageReservation(Base):
     released_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+# ---------------------------------------------------------------------------
+# INF1-B: admission, capacity and isolation
+# ---------------------------------------------------------------------------
+#
+# Enforcement is a transactional database operation, not an in-process
+# semaphore, so it holds across API workers. ``capacity_scopes`` carries the
+# one atomic counter per scope; ``capacity_leases`` is the fenced record of a
+# granted slot; ``admission_tickets`` is the durable request state used for the
+# bounded queue, reauthorization after waiting and crash recovery.
+
+ADMISSION_STATES = ("queued", "admitted", "dispatched", "released", "rejected", "expired", "uncertain")
+LEASE_STATES = ("active", "released", "expired", "uncertain")
+POOL_KINDS = ("shared", "dedicated")
+RESERVATION_STATE_VALUES = ("present", "expired", "released", "unknown")
+
+ADMISSION_STATES_SQL = "(" + ",".join(f"'{value}'" for value in ADMISSION_STATES) + ")"
+LEASE_STATES_SQL = "(" + ",".join(f"'{value}'" for value in LEASE_STATES) + ")"
+POOL_KINDS_SQL = "(" + ",".join(f"'{value}'" for value in POOL_KINDS) + ")"
+RESERVATION_STATE_SQL = "(" + ",".join(f"'{value}'" for value in RESERVATION_STATE_VALUES) + ")"
+
+
+class CapacityPool(Base):
+    """One pool of inference capacity: shared across tenants or dedicated.
+
+    A dedicated pool names its owner tenant. The database enforces exactly that
+    split so a shared pool can never be recorded as somebody's dedicated
+    capacity, mirroring the deployment owner split in INF1-A.
+    """
+
+    __tablename__ = "capacity_pools"
+    __table_args__ = (
+        CheckConstraint("pool_kind IN " + POOL_KINDS_SQL, name="ck_capacity_pool_kind"),
+        CheckConstraint(
+            "(pool_kind = 'shared' AND owner_tenant_id IS NULL) "
+            "OR (pool_kind = 'dedicated' AND owner_tenant_id IS NOT NULL)",
+            name="ck_capacity_pool_owner_split",
+        ),
+        CheckConstraint("concurrency_limit >= 1", name="ck_capacity_pool_limit"),
+    )
+
+    pool_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pool_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner_tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    concurrency_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CapacityScope(Base):
+    """The one atomic counter that enforces a scope's concurrency limit.
+
+    ``in_flight`` is incremented only by a conditional update whose WHERE clause
+    re-checks ``in_flight < concurrency_limit`` in the same statement, which is
+    what makes the limit hold across processes without an in-process lock.
+
+    ``next_fence`` is a monotonic counter for the scope. It issues the fence for
+    every lease and the sequence for every queued ticket, so a reclaimed slot
+    always hands out a strictly greater fence than the one it replaced.
+    """
+
+    __tablename__ = "capacity_scopes"
+    __table_args__ = (
+        CheckConstraint("in_flight >= 0", name="ck_capacity_scope_in_flight"),
+        CheckConstraint("concurrency_limit >= 1", name="ck_capacity_scope_limit"),
+        CheckConstraint("next_fence >= 1", name="ck_capacity_scope_fence"),
+    )
+
+    scope_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    in_flight: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    concurrency_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_fence: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+
+
+class CapacityLease(Base):
+    """A fenced grant of one capacity slot to one attempt.
+
+    ``fence`` strictly increases within its scope on every grant, and a lease
+    that has been reclaimed never returns to ``active``. A worker holding a
+    stale fence therefore cannot commit after its slot was reclaimed, which is
+    what stops an expired lease from overbooking a still-running worker.
+    """
+
+    __tablename__ = "capacity_leases"
+    __table_args__ = (
+        UniqueConstraint("lease_token", name="uq_capacity_lease_token"),
+        CheckConstraint("state IN " + LEASE_STATES_SQL, name="ck_capacity_lease_state"),
+        CheckConstraint("fence >= 1", name="ck_capacity_lease_fence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    deployment_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    pool_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    attempt_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    lease_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    fence: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    # Explicit certainty so a crash after dispatch is never rendered as zero.
+    execution_certainty: Mapped[str] = mapped_column(
+        String(16), default="not_dispatched", nullable=False
+    )
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class AdmissionTicket(Base):
+    """Durable state of one request's admission lifecycle.
+
+    The unique ``(tenant_id, attempt_id)`` key makes admission idempotent for an
+    attempt: a replayed or crashed request resolves to its existing ticket
+    rather than acquiring a second slot or queueing twice.
+    """
+
+    __tablename__ = "admission_tickets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "attempt_id", name="uq_admission_ticket_attempt"),
+        CheckConstraint("state IN " + ADMISSION_STATES_SQL, name="ck_admission_ticket_state"),
+        CheckConstraint(
+            "reservation_state IN " + RESERVATION_STATE_SQL,
+            name="ck_admission_ticket_reservation_state",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    attempt_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    deployment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pool_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    inference_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    cache_namespace: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Opaque M3 handle. Stored and compared, never decoded.
+    reservation_handle: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reservation_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    enqueue_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    wait_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_after_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    execution_certainty: Mapped[str] = mapped_column(
+        String(16), default="not_dispatched", nullable=False
+    )
+    failure_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
