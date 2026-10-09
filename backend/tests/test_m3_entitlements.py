@@ -779,7 +779,22 @@ def test_migration_upgrades_and_downgrades_cleanly(tmp_path):
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'm3_migration.db'}"
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0016_m3_entitlements"
+    # Head-agnostic: a later package moves the chain head forward, so assert that
+    # 0016 has been applied rather than pinning the current head.
+    from alembic.script import ScriptDirectory
+
+    from app.migrations_runner import script_heads
+
+    assert current_revision(url) is not None
+    assert current_revision(url) == script_heads(url)[0]
+    script = ScriptDirectory.from_config(_alembic_config(sync_url_for(url)))
+    chain: set[str] = set()
+    cursor: str | None = script.get_current_head()
+    while cursor:
+        chain.add(cursor)
+        revision = script.get_revision(cursor)
+        cursor = revision.down_revision if revision else None
+    assert "0016_m3_entitlements" in chain
 
     sync_url = sync_url_for(url)
     engine = create_engine(sync_url, future=True)
