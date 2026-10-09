@@ -253,3 +253,50 @@ class CreateReportRunRequest(BaseModel):
         strict=True,
         pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     )
+
+
+# --- BV5-A: Chat artifacts ---------------------------------------------------
+# A Chat artifact is a downloadable work product. It is NOT a Governed Saved
+# Report: the response types below hard-code ``approved``/``authoritative`` as
+# ``False`` so no Chat artifact can ever be presented as approved or
+# authoritative, even when it carries evidence-backed provenance.
+ArtifactFormat = Literal["html", "markdown", "text", "csv"]
+
+
+class CreateChatArtifactRequest(BaseModel):
+    """Persist one downloadable Chat work product.
+
+    ``content`` is inert data: it is stored verbatim and served only as an
+    attachment. It is never executed, interpreted as a template, or rendered
+    inline in the application origin. It carries no execution authority.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    format: ArtifactFormat
+    content: str = Field(min_length=1, max_length=4_000_000)
+    conversation_id: str | None = Field(default=None, max_length=36)
+    message_id: str | None = Field(default=None, max_length=36)
+    evidence: list[Evidence] = Field(default_factory=list)
+
+
+class ChatArtifactOut(BaseModel):
+    id: str
+    title: str
+    filename: str
+    mime_type: str
+    artifact_format: ArtifactFormat
+    size_bytes: int
+    state: str
+    is_evidence_backed: bool
+    conversation_id: str | None = None
+    message_id: str | None = None
+    created_at: datetime
+
+
+class ChatArtifactDetail(ChatArtifactOut):
+    # Metadata-only provenance (citations + as-of). Never an approval.
+    provenance: dict = Field(default_factory=dict)
+    approved: Literal[False] = False
+    authoritative: Literal[False] = False

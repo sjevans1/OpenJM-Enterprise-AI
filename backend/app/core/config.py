@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     database_url: str = _sqlite_url_for(REPO_ROOT / "data" / "openjm.db")
     upload_dir: Path = REPO_ROOT / "data" / "uploads"
 
+    # --- BV5-A chat artifacts -------------------------------------------------
+    # Downloadable work products created by General Chat. Storage lives under the
+    # upload directory so it is covered by the existing backup/restore set; keys
+    # are opaque and server-generated, never a caller-supplied path.
+    artifacts_dir: Path = REPO_ROOT / "data" / "uploads" / "artifacts"
+    # Bounded artifact size and an explicit MIME allow-list. A format whose
+    # resolved MIME is not listed is refused, never coerced to another type.
+    max_artifact_bytes: int = 2_000_000
+    artifact_allowed_mime_types: str = "text/html,text/markdown,text/plain,text/csv"
+
     model_base_url: str = "http://127.0.0.1:18080/v1"
     model_api_key: str = ""
     model_name: str = "gemma-4-12b-local"
@@ -192,7 +202,14 @@ class Settings(BaseSettings):
                 return f"{scheme}:///{resolved}"
         return value
 
-    @field_validator("upload_dir", "vector_path", "credential_key_file", "backup_dir", mode="after")
+    @field_validator(
+        "upload_dir",
+        "artifacts_dir",
+        "vector_path",
+        "credential_key_file",
+        "backup_dir",
+        mode="after",
+    )
     @classmethod
     def resolve_repo_relative_paths(cls, value: Path) -> Path:
         if value.is_absolute():
@@ -201,6 +218,7 @@ class Settings(BaseSettings):
 
     def ensure_directories(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.vector_path.mkdir(parents=True, exist_ok=True)
         self.credential_key_file.parent.mkdir(parents=True, exist_ok=True)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +235,15 @@ class Settings(BaseSettings):
     @property
     def trusted_host_list(self) -> list[str]:
         return [item.strip() for item in self.trusted_hosts.split(",") if item.strip()]
+
+    @property
+    def artifact_allowed_mime_list(self) -> list[str]:
+        """The artifact MIME allow-list (lower-cased, comma-separated setting)."""
+        return [
+            item.strip().lower()
+            for item in self.artifact_allowed_mime_types.split(",")
+            if item.strip()
+        ]
 
 
 @lru_cache

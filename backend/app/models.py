@@ -2075,3 +2075,72 @@ class AdmissionTicket(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, onupdate=now_utc
     )
+
+
+# --- BV5-A: Chat artifacts ---------------------------------------------------
+# A Chat artifact is a downloadable work product produced during General Chat
+# (an HTML, Markdown, plain-text or CSV document the user can retrieve instead
+# of reading file source in the transcript). It is DELIBERATELY SEPARATE from a
+# Governed Saved Report: an ordinary Chat artifact is never labelled approved or
+# authoritative and grants no execution authority. When an artifact is
+# evidence-backed, its citations and as-of provenance are preserved in
+# ``provenance_json`` as metadata only.
+
+
+class ChatArtifact(Base):
+    """Metadata for one downloadable Chat work product.
+
+    ``storage_key`` is an opaque, server-generated key resolved only by the
+    controlled storage abstraction (``app.services.artifacts``); a caller never
+    supplies a filesystem path, so ``..``/absolute/backslash names cannot escape
+    the artifact store. ``state`` is the retention/deletion gate: only an
+    ``active`` artifact is downloadable, while ``deleted``/``revoked`` rows stay
+    for audit and can never be served again.
+    """
+
+    __tablename__ = "chat_artifacts"
+    __table_args__ = (
+        UniqueConstraint("storage_key", name="uq_chat_artifact_storage_key"),
+        CheckConstraint(
+            "state IN ('active','deleted','revoked')", name="ck_chat_artifact_state"
+        ),
+        CheckConstraint(
+            "artifact_format IN ('html','markdown','text','csv')",
+            name="ck_chat_artifact_format",
+        ),
+        CheckConstraint("size_bytes >= 0", name="ck_chat_artifact_size"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    # The owner key is tenant-qualified (``Principal.user_id``), so an ownership
+    # predicate is tenant-correct by construction.
+    user_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    filename: Mapped[str] = mapped_column(String(240), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    is_evidence_backed: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    provenance_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, onupdate=now_utc
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
