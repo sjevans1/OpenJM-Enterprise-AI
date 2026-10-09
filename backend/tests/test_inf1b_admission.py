@@ -718,7 +718,20 @@ def test_migration_0017_is_additive_and_reversible(tmp_path):
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'inf1b.db'}"
     adopt_and_upgrade(url)
-    assert current_revision(url) == "0017_inf1b_admission"
+    # Head-agnostic: a later package moves the chain head forward, so assert that
+    # 0017 has been applied rather than pinning the current head. Pinning it has
+    # broken on every package that added a revision.
+    from alembic.script import ScriptDirectory
+
+    assert current_revision(url) is not None
+    script = ScriptDirectory.from_config(_alembic_config(sync_url_for(url)))
+    chain: set[str] = set()
+    cursor: str | None = script.get_current_head()
+    while cursor:
+        chain.add(cursor)
+        revision = script.get_revision(cursor)
+        cursor = revision.down_revision if revision else None
+    assert "0017_inf1b_admission" in chain
 
     engine = create_engine(sync_url_for(url), future=True)
     try:
