@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -1637,3 +1638,289 @@ class InferenceUsageAttribution(Base):
     gpu_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     gpu_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+# ---------------------------------------------------------------------------
+# #46 M3: commercial entitlement foundation
+#
+# Plans and allowances are versioned: changing commercial terms adds a new
+# version rather than editing history, and an existing billing period keeps the
+# allowance version it started with. Every monetary, credit and allowance amount
+# is an integer minor unit in a BigInteger column and a Python int; no float
+# participates in a balance, a reservation, a price or a threshold comparison.
+#
+# The credit ledger is append-only. The billing-period row carries the current
+# counters that the concurrency-safe reservation guard updates atomically; the
+# ledger carries the immutable history of how the counters reached their value.
+# ---------------------------------------------------------------------------
+
+
+class Plan(Base):
+    """A commercial plan header. Terms live in versioned :class:`PlanVersion`."""
+
+    __tablename__ = "entitlement_plans"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_entitlement_plan_slug"),
+        CheckConstraint("status IN ('active','retired')", name="ck_entitlement_plan_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PlanVersion(Base):
+    """One version of a plan's commercial terms. Immutable once created.
+
+    A change in terms is a new row with ``version = previous + 1``, never an
+    edit of an earlier row, so a billing period can always be traced back to the
+    exact terms it was opened under.
+    """
+
+    __tablename__ = "entitlement_plan_versions"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "version", name="uq_entitlement_plan_version"),
+        CheckConstraint("version >= 1", name="ck_entitlement_plan_version_number"),
+        CheckConstraint(
+            "included_allowance_units >= 0", name="ck_entitlement_plan_version_allowance"
+        ),
+        CheckConstraint(
+            "status IN ('active','retired')", name="ck_entitlement_plan_version_status"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    plan_id: Mapped[str] = mapped_column(
+        ForeignKey("entitlement_plans.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    included_allowance_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    overage_allowed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PriceSchedule(Base):
+    """A versioned, integer-only price/conversion schedule placeholder.
+
+    This table records versioned integer rates and the minor-unit scale they are
+    expressed in. It deliberately contains no price-computation logic and no
+    currency-conversion logic: M3 stores the schedule a later increment would
+    read, and nothing here converts tokens to money or money to money.
+    """
+
+    __tablename__ = "entitlement_price_schedules"
+    __table_args__ = (
+        UniqueConstraint("schedule_key", "version", name="uq_entitlement_price_schedule"),
+        CheckConstraint("version >= 1", name="ck_entitlement_price_version_number"),
+        CheckConstraint("rate_units >= 0", name="ck_entitlement_price_rate"),
+        CheckConstraint("minor_unit_scale >= 0", name="ck_entitlement_price_scale"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    schedule_key: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    minor_unit_scale: Mapped[int] = mapped_column(Integer, default=6, nullable=False)
+    # Integer minor units per one ``unit_basis`` of usage. No float.
+    rate_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    unit_basis: Mapped[str] = mapped_column(
+        String(32), default="per_1000_tokens", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class TenantSubscription(Base):
+    """A tenant's binding to one plan version. At most one per tenant."""
+
+    __tablename__ = "entitlement_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_entitlement_subscription_tenant"),
+        CheckConstraint(
+            "status IN ('active','suspended','revoked')",
+            name="ck_entitlement_subscription_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    plan_version_id: Mapped[str] = mapped_column(
+        ForeignKey("entitlement_plan_versions.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class UsageAllowance(Base):
+    """A versioned tenant allowance. Immutable once created.
+
+    The allowance is the granted allowance units for a tenant, versioned
+    independently of the plan so terms can change without rewriting history. A
+    billing period snapshots the allowance version and amount it opened with.
+    """
+
+    __tablename__ = "entitlement_allowances"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "version", name="uq_entitlement_allowance_version"),
+        CheckConstraint("version >= 1", name="ck_entitlement_allowance_version_number"),
+        CheckConstraint("allowance_units >= 0", name="ck_entitlement_allowance_units"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_version_id: Mapped[str] = mapped_column(
+        ForeignKey("entitlement_plan_versions.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    allowance_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class BillingPeriod(Base):
+    """One tenant billing period, holding the counters the guard updates.
+
+    ``allowance_units``, ``allowance_version`` and ``allowance_id`` are the
+    snapshot this period opened with and never change afterwards, so a later
+    allowance version cannot rewrite an existing period. ``purchased_units``,
+    ``held_units`` and ``consumed_units`` are the mutable current counters; the
+    reservation guard updates them with a single conditional ``UPDATE`` whose
+    ``WHERE`` clause is the hard-cap test, which is what makes it concurrency
+    safe on both SQLite and PostgreSQL.
+    """
+
+    __tablename__ = "entitlement_billing_periods"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period_key", name="uq_entitlement_billing_period"),
+        CheckConstraint("status IN ('open','closed')", name="ck_entitlement_billing_status"),
+        CheckConstraint(
+            "allowance_units >= 0 AND purchased_units >= 0 "
+            "AND held_units >= 0 AND consumed_units >= 0",
+            name="ck_entitlement_billing_counters",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    period_key: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    plan_version_id: Mapped[str] = mapped_column(
+        ForeignKey("entitlement_plan_versions.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    allowance_id: Mapped[str | None] = mapped_column(
+        ForeignKey("entitlement_allowances.id", ondelete="RESTRICT"), nullable=True
+    )
+    allowance_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    allowance_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    purchased_units: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    held_units: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    consumed_units: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CreditLedgerEntry(Base):
+    """Append-only history of available-credit movements.
+
+    A row is written once and never edited or deleted: a correction is a new
+    ``adjustment`` row, not an edit. ``amount_units`` is a signed integer minor
+    unit delta and ``balance_after_units`` is the available balance immediately
+    after it, so the ledger reconciles to ``allowance + purchased - consumed``.
+    Immutability is enforced by the service and the ORM event guards, and by a
+    database trigger created in migration ``0016_m3_entitlements``.
+    """
+
+    __tablename__ = "credit_ledger_entries"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_credit_ledger_idempotency"),
+        CheckConstraint(
+            "entry_type IN "
+            "('grant','purchase','hold','release','expiry','settlement','adjustment')",
+            name="ck_credit_ledger_entry_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    billing_period_id: Mapped[str] = mapped_column(
+        ForeignKey("entitlement_billing_periods.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    entry_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    balance_after_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reservation_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class UsageReservation(Base):
+    """A commercial reservation of allowance, addressed by an opaque handle.
+
+    ``handle`` is a server-issued opaque string. It encodes no capacity,
+    placement or isolation meaning, and INF1-B must never parse it for meaning.
+    ``idempotency_key`` makes reserve, finalize and release idempotent: the same
+    key resolves to the same reservation and each transition runs once.
+    """
+
+    __tablename__ = "usage_reservations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_usage_reservation_key"),
+        UniqueConstraint("handle", name="uq_usage_reservation_handle"),
+        CheckConstraint(
+            "status IN ('reserved','settled','released','expired')",
+            name="ck_usage_reservation_status",
+        ),
+        CheckConstraint("reserved_units >= 0", name="ck_usage_reservation_units"),
+        CheckConstraint(
+            "execution_state IN "
+            "('undispatched','dispatching','dispatched','uncertain')",
+            name="ck_usage_reservation_execution_state",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = tenant_column()
+    billing_period_id: Mapped[str] = mapped_column(
+        ForeignKey("entitlement_billing_periods.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    handle: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False)
+    reserved_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    settled_units: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Trusted record of how far the request got, as
+    # undispatched -> dispatching -> dispatched | uncertain. ``dispatching`` is
+    # recorded at the model-network dispatch boundary, so a crash after it means
+    # consumption is unknown rather than zero. Set only by the service seams while
+    # their conditions hold, never from a caller claim, and it governs settlement
+    # after dispatch.
+    execution_state: Mapped[str] = mapped_column(
+        String(16), default="undispatched", nullable=False
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

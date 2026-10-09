@@ -635,6 +635,22 @@ async def export_usage(
     )
 
 
+@router.get("/entitlements")
+async def entitlements_summary(
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(_ADMIN),
+):
+    """Bounded, tenant-scoped plan, allowance and soft-threshold read surface.
+
+    Requires ``tenant:admin`` and is scoped to the caller's tenant by a SQL
+    predicate, so it can never read another tenant's plan, allowance or credits.
+    """
+    try:
+        return await client_admin.entitlement_summary(db, principal=principal)
+    except Exception as exc:  # noqa: BLE001 - mapped to HTTP below
+        raise _http_for(exc) from exc
+
+
 @router.get("/audit")
 async def recent_audit(
     limit: int = Query(default=50, ge=1, le=200),
