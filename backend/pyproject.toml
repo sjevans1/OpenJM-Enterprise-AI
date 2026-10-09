@@ -21,7 +21,11 @@ dependencies = [
   "sentence-transformers>=3.0",
   "pandas==2.2.3",
   "cryptography>=43.0",
-  "sqlglot>=25.0"
+  "sqlglot>=25.0",
+  # BV5-B controlled PDF/DOCX rendering. reportlab builds the PDF, python-docx
+  # builds the DOCX. No weasyprint, headless browser or pandoc is used.
+  "reportlab>=4.0",
+  "python-docx>=1.1"
 ]
 
 [project.optional-dependencies]
@@ -29,6 +33,9 @@ dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "httpx>=0.27",
+  # BV5-B test-only verifier: opens the rendered PDF to assert real magic bytes
+  # and citation retention.
+  "pypdf>=4.0",
   # Bundled PostgreSQL binaries so the PostgreSQL metadata-compatibility tests
   # run for real in CI instead of skipping.
   "pgserver>=0.1.4"

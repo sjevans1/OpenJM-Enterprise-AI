@@ -27,11 +27,13 @@ from app.core.identity import Permission, Principal
 from app.db import get_db
 from app.models import ChatArtifact, Conversation, Message, now_utc
 from app.schemas import (
+    ArtifactRenderFormat,
     ChatArtifactDetail,
     ChatArtifactOut,
     CreateChatArtifactRequest,
 )
 from app.services import artifacts as artifacts_service
+from app.services import artifacts_render as render_service
 from app.services.artifacts import (
     ArtifactError,
     content_sha256,
@@ -149,7 +151,7 @@ async def create_artifact(
 ) -> ChatArtifactDetail:
     """Persist one downloadable Chat work product owned by the caller."""
     try:
-        mime = artifacts_service.ensure_allowed(payload.format)
+        mime = artifacts_service.ensure_storable(payload.format)
         filename = artifacts_service.safe_filename(payload.title, payload.format)
         data = artifacts_service.validate_content(payload.format, payload.content)
     except ArtifactError as exc:
@@ -245,6 +247,63 @@ async def download_artifact(
     if artifact.mime_type == "text/html":
         headers["Content-Security-Policy"] = _HTML_POLICY
     return Response(content=data, media_type=artifact.mime_type, headers=headers)
+
+
+@router.get("/{artifact_id}/render/{target}")
+async def render_artifact(
+    artifact_id: str,
+    target: ArtifactRenderFormat,
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.CHAT_USE)),
+) -> Response:
+    """Render an owned, active artifact to PDF or DOCX and return it as an attachment.
+
+    BV5-B. Rendering is a pure transform of the artifact's already-authorized
+    content and provenance: it never fetches a remote asset, never executes or
+    templates content, and never writes to the store or the database. A render
+    failure therefore leaves no phantom artifact behind — the caller gets a
+    bounded error instead of a false success. The rendered bytes are
+    size-checked against ``max_artifact_bytes`` before they are returned.
+
+    Authorization is the same owner+tenant gate as ``/download`` and the result
+    is served only as an attachment.
+    """
+    artifact = await _owned_artifact(db, artifact_id)
+    if artifact is None or artifact.state != "active":
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    try:
+        data = _storage().read(artifact.storage_key)
+    except ArtifactError as exc:
+        raise _http(exc) from None
+
+    provenance = None
+    if artifact.provenance_json:
+        try:
+            provenance = json.loads(artifact.provenance_json)
+        except (TypeError, ValueError):
+            provenance = None
+
+    try:
+        rendered = render_service.render_artifact(
+            content=data.decode("utf-8", errors="replace"),
+            provenance=provenance,
+            target=target,
+            title=artifact.title,
+        )
+        filename = artifacts_service.safe_filename(artifact.title, target)
+    except ArtifactError as exc:
+        raise _http(exc) from None
+
+    headers = dict(_BASE_HEADERS)
+    # Always an attachment: never rendered inline in the application origin.
+    headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    # No active content is expected, but keep the restrictive policy as defense.
+    headers["Content-Security-Policy"] = _HTML_POLICY
+    return Response(
+        content=rendered,
+        media_type=render_service.RENDER_MIME[target],
+        headers=headers,
+    )
 
 
 @router.delete("/{artifact_id}", response_model=ChatArtifactOut)

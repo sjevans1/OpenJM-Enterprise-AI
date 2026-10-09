@@ -30,18 +30,33 @@ from app.core.config import get_settings
 # The supported formats and the single MIME type each maps to. This mapping is
 # the allow-list vocabulary; ``ensure_allowed`` additionally intersects it with
 # the operator-configured ``artifact_allowed_mime_types``.
+#
+# BV5-B adds the two RENDER targets. They are part of the format/MIME vocabulary
+# (so ``resolve_mime``/``safe_filename`` know them) but are NOT storable as a
+# ``chat_artifacts`` row: the table's ``ck_chat_artifact_format`` CHECK admits
+# exactly ``STORABLE_FORMATS``. See ``app.services.artifacts_render``.
 FORMAT_MIME: dict[str, str] = {
     "html": "text/html",
     "markdown": "text/markdown",
     "text": "text/plain",
     "csv": "text/csv",
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 FORMAT_EXTENSION: dict[str, str] = {
     "html": "html",
     "markdown": "md",
     "text": "txt",
     "csv": "csv",
+    "pdf": "pdf",
+    "docx": "docx",
 }
+
+# Formats that may be PERSISTED as a chat artifact row. ``pdf``/``docx`` are
+# render-only and deliberately excluded: adding them would require relaxing the
+# chat_artifacts CHECK constraint, a schema change outside this package.
+STORABLE_FORMATS = frozenset({"html", "markdown", "text", "csv"})
+RENDER_ONLY_FORMATS = frozenset(set(FORMAT_MIME) - STORABLE_FORMATS)
 
 _KEY_RE = re.compile(r"^[0-9a-f]{32}$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -89,6 +104,18 @@ def ensure_allowed(fmt: str) -> str:
     if mime not in allowed_mimes():
         raise ArtifactUnsupported("Artifact MIME type is not permitted")
     return mime
+
+
+def ensure_storable(fmt: str) -> str:
+    """Authorize a format for PERSISTENCE as a chat artifact row.
+
+    A render-only format (``pdf``/``docx``) is refused here: the
+    ``chat_artifacts`` table's CHECK constraint admits only ``STORABLE_FORMATS``
+    and a render target is produced on demand, never stored as a row.
+    """
+    if fmt not in STORABLE_FORMATS:
+        raise ArtifactUnsupported("Artifact format is not storable")
+    return ensure_allowed(fmt)
 
 
 def validate_stored_filename(name: str) -> str:
