@@ -300,3 +300,12 @@ class ChatArtifactDetail(ChatArtifactOut):
     provenance: dict = Field(default_factory=dict)
     approved: Literal[False] = False
     authoritative: Literal[False] = False
+
+
+# --- BV5-B: controlled PDF/DOCX rendering ------------------------------------
+# A render target is a downloadable rendering of an existing (stored) artifact.
+# 'pdf' and 'docx' are RENDER-ONLY targets: they are never persisted as a row's
+# `artifact_format`, because the chat_artifacts CHECK constraint admits exactly
+# the four storable formats above. Rendering is a read-only transform that
+# carries no execution authority and never fetches a remote asset.
+ArtifactRenderFormat = Literal["pdf", "docx"]
