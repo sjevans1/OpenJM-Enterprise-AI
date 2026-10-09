@@ -52,19 +52,28 @@ async def _add_tenant(maker, tenant_id):
 
 
 async def _dispatch(maker, *, key, tenant_id=LEGACY_TENANT_ID, now=None, uncertain=False):
-    """Record trusted dispatch evidence so settlement is authorized."""
+    """Cross the dispatch boundary and record the outcome.
+
+    The two-step flow is the point of the lifecycle: begin_dispatch records the
+    boundary, and the promotion records what happened at it.
+    """
     async with maker() as db:
+        await ent.begin_dispatch(
+            db, tenant_id=tenant_id, idempotency_key=key, now=now
+        )
         marker = (
             ent.mark_execution_uncertain if uncertain else ent.mark_execution_dispatched
         )
-        row = await marker(db, tenant_id=tenant_id, idempotency_key=key, now=now)
-        return row
+        return await marker(db, tenant_id=tenant_id, idempotency_key=key, now=now)
 
 
 async def _settle(maker, *, tenant_id=LEGACY_TENANT_ID, key, units, settled=None, now=None):
     async with maker() as db:
         await ent.reserve(
             db, tenant_id=tenant_id, idempotency_key=key, units=units, now=now
+        )
+        await ent.begin_dispatch(
+            db, tenant_id=tenant_id, idempotency_key=key, now=now
         )
         await ent.mark_execution_dispatched(
             db, tenant_id=tenant_id, idempotency_key=key, now=now
@@ -112,6 +121,7 @@ async def test_finalize_twice_settles_once(file_db):
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", units=40, now=OCT
         )
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", now=OCT)
         await ent.mark_execution_dispatched(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", now=OCT
         )
@@ -183,6 +193,7 @@ async def test_no_float_in_balances_reservations_or_thresholds(file_db):
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", units=40, now=OCT
         )
         assert type(reservation.reserved_units) is int
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", now=OCT)
         await ent.mark_execution_dispatched(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="k1", now=OCT
         )
@@ -444,6 +455,7 @@ async def test_dispatched_then_suspended_still_settles_once(file_db):
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held", units=40, now=OCT
         )
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held", now=OCT)
         dispatched = await ent.mark_execution_dispatched(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="held", now=OCT
         )
@@ -513,10 +525,12 @@ async def test_suspended_while_queued_cannot_be_dispatched_and_releases_once(fil
 
     async with file_db() as db:
         with pytest.raises(TenantInactive):
+            await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT)
             await ent.mark_execution_dispatched(
                 db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT
             )
         with pytest.raises(TenantInactive):
+            await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT)
             await ent.mark_execution_uncertain(
                 db, tenant_id=LEGACY_TENANT_ID, idempotency_key="queued", now=OCT
             )
@@ -547,6 +561,7 @@ async def test_uncertain_post_dispatch_consumption_is_never_settled_as_zero(file
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="unc", units=40, now=OCT
         )
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="unc", now=OCT)
         marked = await ent.mark_execution_uncertain(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="unc", now=OCT
         )
@@ -596,6 +611,7 @@ async def test_dispatched_reservation_cannot_be_released(file_db):
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="d1", units=20, now=OCT
         )
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="d1", now=OCT)
         await ent.mark_execution_dispatched(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="d1", now=OCT
         )
@@ -618,6 +634,7 @@ async def test_expiry_does_not_free_a_dispatched_hold(file_db):
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="late", units=25,
             ttl_seconds=1, now=now,
         )
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="late", now=now)
         await ent.mark_execution_dispatched(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="late", now=now
         )
@@ -655,6 +672,7 @@ async def test_billing_exhaustion_blocks_execution_but_not_history_or_recovery(
         await ent.reserve(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="full", units=70, now=now
         )
+        await ent.begin_dispatch(db, tenant_id=LEGACY_TENANT_ID, idempotency_key="full", now=now)
         await ent.mark_execution_dispatched(
             db, tenant_id=LEGACY_TENANT_ID, idempotency_key="full", now=now
         )
@@ -906,3 +924,248 @@ async def test_platform_entitlement_metadata_is_aggregate_only(file_db):
     assert type(metadata["credit_ledger_entries"]) is int
     assert metadata["subscriptions_by_status"].get("active") == 1
     assert "tenant_id" not in metadata
+
+
+# ---------------------------------------------------------------------------
+# The dispatch boundary: undispatched -> dispatching -> dispatched | uncertain
+# ---------------------------------------------------------------------------
+
+
+async def test_crash_before_dispatch_boundary_is_safely_released(file_db):
+    """A hold that never crossed the boundary produces nothing and is freed."""
+    from datetime import timedelta
+
+    now = OCT
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="early", units=30,
+            ttl_seconds=1, now=now,
+        )
+    later = now + timedelta(minutes=30)
+    async with file_db() as db:
+        released = await ent.recover_inflight(db, tenant_id=LEGACY_TENANT_ID, now=later)
+    assert released == 1
+    assert await _available(file_db) == 100, "an undispatched hold is fully released"
+    async with file_db() as db:
+        row = (
+            await db.execute(
+                select(UsageReservation).where(
+                    UsageReservation.idempotency_key == "early"
+                )
+            )
+        ).scalar_one()
+    assert row.status == "expired"
+    assert row.execution_state == "undispatched"
+
+
+async def test_crash_after_boundary_before_response_recovers_as_uncertain(file_db):
+    """Dispatch intent was recorded, so recovery must not free the hold."""
+    from datetime import timedelta
+
+    now = OCT
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="midflight", units=30,
+            ttl_seconds=1, now=now,
+        )
+        await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="midflight", now=now
+        )
+    later = now + timedelta(minutes=30)
+    async with file_db() as db:
+        recovered = await ent.recover_inflight(db, tenant_id=LEGACY_TENANT_ID, now=later)
+    assert recovered == 1
+    async with file_db() as db:
+        row = (
+            await db.execute(
+                select(UsageReservation).where(
+                    UsageReservation.idempotency_key == "midflight"
+                )
+            )
+        ).scalar_one()
+    assert row.execution_state == "uncertain", "never back to undispatched"
+    assert row.status == "reserved", "the hold is not released"
+    # And it is not free: the conservative worst case is still chargeable.
+    async with file_db() as db:
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="midflight",
+            settled_units=0, now=later,
+        )
+    assert settled.settled_units == 30
+
+
+async def test_successful_execution_settles_actual_not_the_full_reservation(file_db):
+    """dispatching -> dispatched, then actual usage settles, not the worst case."""
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="ok", units=40, now=OCT
+        )
+        dispatching = await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="ok", now=OCT
+        )
+        assert dispatching.execution_state == "dispatching"
+        promoted = await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="ok", now=OCT
+        )
+        assert promoted.execution_state == "dispatched"
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="ok",
+            settled_units=12, now=OCT,
+        )
+    # The request succeeded with known usage below the reservation.
+    assert settled.execution_state == "dispatched"
+    assert settled.settled_units == 12
+    assert await _available(file_db) == 88, "actual usage settles, not 40"
+
+
+async def test_timeout_promotes_to_uncertain_and_reconciles_conservatively(file_db):
+    """An ambiguous runtime outcome is not proof of zero consumption."""
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="slow", units=25, now=OCT
+        )
+        await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="slow", now=OCT
+        )
+        uncertain = await ent.mark_execution_uncertain(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="slow", now=OCT
+        )
+        assert uncertain.execution_state == "uncertain"
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="slow",
+            settled_units=0, now=OCT,
+        )
+    assert settled.settled_units == 25, "conservative worst case, never zero"
+    assert await _available(file_db) == 75
+
+
+async def test_stale_dispatching_cannot_expire_or_release_to_zero(file_db):
+    """A dispatching hold crossed the boundary, so neither release nor expiry frees it."""
+    from datetime import timedelta
+
+    from app.core.entitlements import ReservationStateError
+
+    now = OCT
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="stale", units=35,
+            ttl_seconds=1, now=now,
+        )
+        await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="stale", now=now
+        )
+    later = now + timedelta(minutes=30)
+
+    async with file_db() as db:
+        expired = await ent.expire_reservations(db, tenant_id=LEGACY_TENANT_ID, now=later)
+    assert expired == 0, "the expiry sweep must not free a dispatching hold"
+
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.release(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="stale", now=later
+            )
+        await db.rollback()
+
+    # It can only be reconciled as uncertain, at the reserved worst case.
+    async with file_db() as db:
+        await ent.recover_inflight(db, tenant_id=LEGACY_TENANT_ID, now=later)
+    async with file_db() as db:
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="stale",
+            settled_units=0, now=later,
+        )
+    assert settled.settled_units == 35
+    assert await _available(file_db) == 65
+
+
+async def test_normal_usage_below_reservation_settles_the_actual_amount(file_db):
+    """The common path must not be overcharged to the reserved amount."""
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="small", units=50, now=OCT
+        )
+        await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="small", now=OCT
+        )
+        await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="small", now=OCT
+        )
+        settled = await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="small",
+            settled_units=3, now=OCT,
+        )
+    assert settled.settled_units == 3
+    assert await _available(file_db) == 97, "the unused reservation is returned"
+    assert settled.execution_state == "dispatched", "a success never stays uncertain"
+
+
+async def test_execution_transitions_are_idempotent_and_cannot_move_backwards(file_db):
+    """Replays are no-ops; every other transition is refused."""
+    from app.core.entitlements import ReservationStateError
+
+    await _configure(file_db, allowance=100)
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", units=20, now=OCT
+        )
+        first = await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", now=OCT
+        )
+        again = await ent.begin_dispatch(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", now=OCT
+        )
+        assert again.id == first.id and again.execution_state == "dispatching"
+
+    # Skipping the boundary is impossible: a fresh undispatched hold cannot be
+    # promoted straight to dispatched, so no caller can assert execution.
+    async with file_db() as db:
+        await ent.reserve(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="skip", units=5, now=OCT
+        )
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.mark_execution_dispatched(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="skip", now=OCT
+            )
+        await db.rollback()
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.mark_execution_uncertain(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="skip", now=OCT
+            )
+        await db.rollback()
+
+    async with file_db() as db:
+        promoted = await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", now=OCT
+        )
+        replayed = await ent.mark_execution_dispatched(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", now=OCT
+        )
+        assert replayed.id == promoted.id and replayed.execution_state == "dispatched"
+
+        # No moving backwards, and no re-deciding a decided reservation.
+        with pytest.raises(ReservationStateError):
+            await ent.mark_execution_uncertain(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", now=OCT
+            )
+        await db.rollback()
+
+    async with file_db() as db:
+        await ent.finalize(
+            db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem",
+            settled_units=20, now=OCT,
+        )
+    async with file_db() as db:
+        with pytest.raises(ReservationStateError):
+            await ent.begin_dispatch(
+                db, tenant_id=LEGACY_TENANT_ID, idempotency_key="idem", now=OCT
+            )
+        await db.rollback()

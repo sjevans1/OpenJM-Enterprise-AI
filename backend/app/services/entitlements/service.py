@@ -41,6 +41,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.entitlements import (
     BillingPeriodStatus,
+    DISPATCH_INTENT_STATES,
+    DISPATCH_STALE_SECONDS,
     EntitlementNotConfigured,
     ExecutionState,
     HardCapExceeded,
@@ -77,9 +79,11 @@ _RELEASED = ReservationStatus.RELEASED.value
 _EXPIRED = ReservationStatus.EXPIRED.value
 
 _UNDISPATCHED = ExecutionState.UNDISPATCHED.value
+_DISPATCHING = ExecutionState.DISPATCHING.value
 _DISPATCHED = ExecutionState.DISPATCHED.value
 _UNCERTAIN = ExecutionState.UNCERTAIN.value
 _POST_DISPATCH = POST_DISPATCH_STATES
+_DISPATCH_INTENT = DISPATCH_INTENT_STATES
 
 
 def utcnow() -> datetime:
@@ -421,6 +425,38 @@ def _reserve_capacity_clause(table, units: int):
 # ---------------------------------------------------------------------------
 
 
+async def begin_dispatch(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+    now: datetime | None = None,
+) -> UsageReservation:
+    """Trusted seam: record dispatch intent at the model-network boundary.
+
+    This is the M3 counterpart of INF1-B's ``mark_dispatched``. Both lanes record
+    the same boundary, so a crash after it means consumption is unknown on both
+    sides rather than zero.
+
+    The pre-dispatch conditions are enforced here and only here, which is what
+    makes the record trustworthy: the reservation is ``reserved``, it has not
+    expired, and the tenant is active at dispatch time.
+
+    From this point the hold represents at least possible consumption. It can no
+    longer be released or expired as though nothing happened, and a stale
+    ``dispatching`` record is recovered as ``uncertain`` rather than freed.
+    """
+    return await _mark_execution(
+        db,
+        tenant_id=tenant_id,
+        idempotency_key=idempotency_key,
+        state=_DISPATCHING,
+        from_states=(_UNDISPATCHED,),
+        require_active_tenant=True,
+        now=now,
+    )
+
+
 async def mark_execution_dispatched(
     db: AsyncSession,
     *,
@@ -428,24 +464,21 @@ async def mark_execution_dispatched(
     idempotency_key: str,
     now: datetime | None = None,
 ) -> UsageReservation:
-    """Trusted seam: record that the request actually reached dispatch.
+    """Promote ``dispatching`` to ``dispatched`` once the outcome is known.
 
-    Only the execution path calls this, and only while the pre-dispatch conditions
-    still hold, which is what makes the recorded state trustworthy rather than a
-    caller claim:
-
-    * the reservation exists, is ``reserved`` and has not expired;
-    * the tenant is active *at dispatch time*.
-
-    Once this is recorded, settlement is governed by the record rather than by the
-    tenant's current status, so a suspension afterwards cannot make already
-    produced usage free.
+    Only that transition is accepted, so a reservation that never recorded
+    dispatch intent cannot be promoted and no caller can assert execution by
+    calling this directly. The tenant's current status is deliberately not
+    consulted: dispatch was authorized while the tenant was active, and a later
+    suspension must not make produced usage unsettleable.
     """
     return await _mark_execution(
         db,
         tenant_id=tenant_id,
         idempotency_key=idempotency_key,
         state=_DISPATCHED,
+        from_states=(_DISPATCHING,),
+        require_active_tenant=False,
         now=now,
     )
 
@@ -457,17 +490,19 @@ async def mark_execution_uncertain(
     idempotency_key: str,
     now: datetime | None = None,
 ) -> UsageReservation:
-    """Trusted seam: dispatch happened, but what was consumed is unknown.
+    """Promote ``dispatching`` to ``uncertain`` when the outcome is ambiguous.
 
-    A transport timeout is not proof that nothing was consumed, so the hold is
-    marked uncertain rather than released. Settlement of an uncertain reservation
-    is conservative and is never zero.
+    A timeout or an ambiguous runtime answer is not proof that nothing was
+    consumed, so the reservation becomes explicitly uncertain rather than
+    released. Only ``dispatching -> uncertain`` is accepted.
     """
     return await _mark_execution(
         db,
         tenant_id=tenant_id,
         idempotency_key=idempotency_key,
         state=_UNCERTAIN,
+        from_states=(_DISPATCHING,),
+        require_active_tenant=False,
         now=now,
     )
 
@@ -478,8 +513,16 @@ async def _mark_execution(
     tenant_id: str,
     idempotency_key: str,
     state: str,
+    from_states: tuple[str, ...],
+    require_active_tenant: bool,
     now: datetime | None = None,
 ) -> UsageReservation:
+    """Shared transition guard for the execution lifecycle.
+
+    Replays of the same transition are idempotent. Anything else is refused: a
+    transition may not skip the dispatch boundary, may not move backwards, and may
+    not re-open a decided reservation.
+    """
     now = _now(now)
     reservation = await _find_reservation(db, tenant_id, idempotency_key)
     if reservation is None:
@@ -488,27 +531,31 @@ async def _mark_execution(
         return reservation
     if reservation.status != _RESERVED:
         raise ReservationStateError(
-            f"Reservation is {reservation.status} and cannot record dispatch"
+            f"Reservation is {reservation.status} and cannot change execution state"
         )
-    if reservation.execution_state in _POST_DISPATCH:
-        # Never downgrade an uncertain dispatch back to a confirmed one.
+    if reservation.execution_state not in from_states:
         raise ReservationStateError(
-            f"Reservation already records {reservation.execution_state}"
+            f"Reservation is {reservation.execution_state} and cannot become {state}"
         )
-    if _naive_utc(now) >= _naive_utc(reservation.expires_at):
-        raise ReservationStateError("Reservation expired before dispatch")
+    if require_active_tenant:
+        if _naive_utc(now) >= _naive_utc(reservation.expires_at):
+            raise ReservationStateError("Reservation expired before dispatch")
+        await _require_active_tenant(db, tenant_id)
 
-    # Pre-dispatch authority: dispatch only happens while the tenant is active.
-    await _require_active_tenant(db, tenant_id)
+    # dispatched_at records when the dispatch boundary was crossed, so it is set
+    # on entry to dispatching and kept for the later outcome states.
+    values: dict = {"execution_state": state}
+    if state == _DISPATCHING:
+        values["dispatched_at"] = now
 
     outcome = await db.execute(
         update(UsageReservation)
         .where(
             UsageReservation.id == reservation.id,
             UsageReservation.status == _RESERVED,
-            UsageReservation.execution_state == _UNDISPATCHED,
+            UsageReservation.execution_state == reservation.execution_state,
         )
-        .values(execution_state=state, dispatched_at=now)
+        .values(**values)
         .execution_options(synchronize_session=False)
     )
     if outcome.rowcount != 1:
@@ -516,7 +563,7 @@ async def _mark_execution(
         current = await _find_reservation(db, tenant_id, idempotency_key)
         if current is not None and current.execution_state == state:
             return current
-        raise ReservationStateError("Dispatch could not be recorded")
+        raise ReservationStateError("Execution state could not be recorded")
     await db.commit()
     await db.refresh(reservation)
     return reservation
@@ -643,6 +690,10 @@ async def finalize(
 
     # Only a recorded dispatch authorizes settlement. This is the trusted seam,
     # not a caller claim, and it replaces the previous tenant-state re-check.
+    if reservation.execution_state == _DISPATCHING:
+        raise ReservationStateError(
+            "Reservation is still dispatching; record the runtime outcome first"
+        )
     if reservation.execution_state not in _POST_DISPATCH:
         raise ReservationStateError(
             "Reservation never dispatched and cannot settle"
@@ -725,9 +776,10 @@ async def release(
         return reservation
     if reservation.status == _SETTLED:
         raise ReservationStateError("A settled reservation cannot be released")
-    if reservation.execution_state in _POST_DISPATCH:
+    if reservation.execution_state in _DISPATCH_INTENT:
         raise ReservationStateError(
-            "A reservation that already dispatched cannot be released; settle it"
+            "A reservation that crossed the dispatch boundary cannot be released; "
+            "settle it or reconcile it as uncertain"
         )
     await _apply_transition(db, reservation, status=_RELEASED, reason=reason, now=now)
     await db.refresh(reservation)
@@ -824,13 +876,56 @@ async def recover_inflight(
     *,
     tenant_id: str | None = None,
     now: datetime | None = None,
+    stale_after_seconds: int = DISPATCH_STALE_SECONDS,
 ) -> int:
-    """Crash recovery: release expired in-flight holds without double movement.
+    """Crash recovery for holds left behind by an interrupted process.
 
-    Idempotent and safe to run repeatedly. A reservation whose hold is released
-    here cannot later settle, so recovery never double counts.
+    Two recoveries, deliberately different, because conflating them is how
+    consumption gets lost:
+
+    * an **undispatched** hold past its expiry is released, because nothing was
+      produced;
+    * a **dispatching** reservation older than the stale bound is promoted to
+      ``uncertain``, because dispatch intent was recorded and the outcome is
+      unknown. It is never returned to ``undispatched`` and never freed, so the
+      worst-case reserved amount stays chargeable.
+
+    Idempotent and safe to run repeatedly; a second run finds nothing new. Returns
+    the number of reservations recovered.
     """
-    return await expire_reservations(db, tenant_id=tenant_id, now=now)
+    now = _now(now)
+    released = await expire_reservations(db, tenant_id=tenant_id, now=now)
+
+    cutoff = _naive_utc(now) - timedelta(seconds=max(0, int(stale_after_seconds)))
+    query = select(UsageReservation).where(
+        UsageReservation.status == _RESERVED,
+        UsageReservation.execution_state == _DISPATCHING,
+    )
+    if tenant_id is not None:
+        query = query.where(UsageReservation.tenant_id == tenant_id)
+    rows = (await db.execute(query)).scalars().all()
+
+    promoted = 0
+    for reservation in rows:
+        if reservation.dispatched_at is None:
+            continue
+        if _naive_utc(reservation.dispatched_at) > cutoff:
+            continue
+        outcome = await db.execute(
+            update(UsageReservation)
+            .where(
+                UsageReservation.id == reservation.id,
+                UsageReservation.status == _RESERVED,
+                UsageReservation.execution_state == _DISPATCHING,
+            )
+            .values(execution_state=_UNCERTAIN)
+            .execution_options(synchronize_session=False)
+        )
+        if outcome.rowcount == 1:
+            promoted += 1
+    if promoted:
+        await db.commit()
+    return int(released) + promoted
 
 
 # ---------------------------------------------------------------------------

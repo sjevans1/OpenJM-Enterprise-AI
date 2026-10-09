@@ -57,6 +57,27 @@ Rules that follow, and that both lanes must implement:
    path calls while the pre-dispatch conditions still hold; no caller claim can
    substitute for it, and an undispatched reservation cannot settle. Release is a
    pre-dispatch operation, and expiry applies only to undispatched holds.
+
+   **The execution lifecycle is explicit, and the two lanes record the same
+   boundary:**
+
+   ```
+   undispatched --begin_dispatch--> dispatching --mark_execution_dispatched--> dispatched
+                                                  \--mark_execution_uncertain--> uncertain
+   ```
+
+   * `begin_dispatch` is M3's counterpart of INF1-B's `mark_dispatched`. Both lanes
+     record the model-network dispatch boundary, so a crash after it means
+     consumption is unknown on both sides rather than zero.
+   * `dispatching` is neither releasable nor expirable. A stale `dispatching`
+     record is recovered as `uncertain`, never returned to `undispatched`.
+   * `dispatched` means the outcome is known, so actual usage settles normally and
+     a successful request is never charged the full reservation when the real usage
+     was lower.
+   * `uncertain` means the outcome is unknown and settles conservatively at the
+     reserved worst case, never zero.
+   * Transitions are idempotent on replay and cannot skip the boundary or move
+     backwards.
 5. **Billing exhaustion blocks new billable execution** but must not block
    reading existing history, tenant administration or recovery operations.
 

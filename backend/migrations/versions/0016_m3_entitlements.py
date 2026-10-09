@@ -278,7 +278,8 @@ def _tables() -> dict[str, sa.Table]:
             ),
             sa.CheckConstraint("reserved_units >= 0", name="ck_usage_reservation_units"),
             sa.CheckConstraint(
-                "execution_state IN ('undispatched','dispatched','uncertain')",
+                "execution_state IN "
+                "('undispatched','dispatching','dispatched','uncertain')",
                 name="ck_usage_reservation_execution_state",
             ),
         ),
@@ -329,6 +330,16 @@ def upgrade() -> None:
             "usage_reservations",
             sa.Column("dispatched_at", sa.DateTime(timezone=True), nullable=True),
         )
+        # A database that already ran the earlier form of this revision also has
+        # the narrower execution-state constraint, so widen it in place. SQLite
+        # cannot alter a constraint, so batch mode recreates the table.
+        with op.batch_alter_table("usage_reservations") as batch:
+            batch.drop_constraint("ck_usage_reservation_execution_state", type_="check")
+            batch.create_check_constraint(
+                "ck_usage_reservation_execution_state",
+                "execution_state IN "
+                "('undispatched','dispatching','dispatched','uncertain')",
+            )
     for index_name, table_name, columns in _INDEXES:
         if has_table(bind, table_name):
             op.create_index(index_name, table_name, columns, if_not_exists=True)

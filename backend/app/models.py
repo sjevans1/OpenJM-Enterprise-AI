@@ -1886,7 +1886,8 @@ class UsageReservation(Base):
         ),
         CheckConstraint("reserved_units >= 0", name="ck_usage_reservation_units"),
         CheckConstraint(
-            "execution_state IN ('undispatched','dispatched','uncertain')",
+            "execution_state IN "
+            "('undispatched','dispatching','dispatched','uncertain')",
             name="ck_usage_reservation_execution_state",
         ),
     )
@@ -1903,9 +1904,12 @@ class UsageReservation(Base):
     status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False)
     reserved_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
     settled_units: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # Trusted record of whether the request reached dispatch. Set only by the
-    # execution path while the pre-dispatch conditions still hold, never from a
-    # caller claim, and it is what governs settlement after dispatch.
+    # Trusted record of how far the request got, as
+    # undispatched -> dispatching -> dispatched | uncertain. ``dispatching`` is
+    # recorded at the model-network dispatch boundary, so a crash after it means
+    # consumption is unknown rather than zero. Set only by the service seams while
+    # their conditions hold, never from a caller claim, and it governs settlement
+    # after dispatch.
     execution_state: Mapped[str] = mapped_column(
         String(16), default="undispatched", nullable=False
     )

@@ -63,17 +63,36 @@ class ExecutionState(str, Enum):
     """
 
     UNDISPATCHED = "undispatched"
+    # Recorded immediately at the trusted model-network dispatch boundary. INF1-B
+    # treats its own mark_dispatched as dispatch intent at the same boundary, so a
+    # crash after this point means consumption is unknown, never zero.
+    DISPATCHING = "dispatching"
     DISPATCHED = "dispatched"
     UNCERTAIN = "uncertain"
 
 
 EXECUTION_STATES: tuple[str, ...] = tuple(state.value for state in ExecutionState)
 
-# States that assert the request actually reached dispatch. Settlement is
-# allowed from these and from nothing else.
+# States recorded only after the dispatch boundary was crossed. The hold now
+# represents at least possible consumption, so none of these may be released or
+# expired as though nothing had happened.
+DISPATCH_INTENT_STATES: frozenset[str] = frozenset(
+    {
+        ExecutionState.DISPATCHING.value,
+        ExecutionState.DISPATCHED.value,
+        ExecutionState.UNCERTAIN.value,
+    }
+)
+
+# States whose outcome is known or explicitly unknown. Settlement is allowed from
+# these and from nothing else; a still-dispatching reservation has no outcome yet.
 POST_DISPATCH_STATES: frozenset[str] = frozenset(
     {ExecutionState.DISPATCHED.value, ExecutionState.UNCERTAIN.value}
 )
+
+# How long a dispatching reservation may stay without a recorded outcome before
+# recovery treats it as a crash and conservatively promotes it to uncertain.
+DISPATCH_STALE_SECONDS = 900
 
 
 class LedgerEntryType(str, Enum):
