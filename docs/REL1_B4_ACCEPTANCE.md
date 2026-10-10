@@ -1,23 +1,23 @@
 # REL1-B4 host-acceptance evidence
 
-REL1-B4 closes the REL1 offline-release train: a deterministic release archive
-(B4-F), tamper-negative and path-traversal coverage (B4-D), machine-testable
-Windows/WSL2 contract checks (B4-E), and this host-acceptance record (B4-H).
+REL1-B4 closes the REL1 offline-release train: the production application-wheel
+install (removing the offline editable-install blocker), a deterministic release
+archive (B4-F), tamper-negative and path-traversal coverage (B4-D),
+machine-testable Windows/WSL2 contract checks (B4-E), and this host-acceptance
+record (B4-H).
 
-This is the canonical evidence table. Rows marked `PASS` were executed and the
-result recorded; rows marked `NOT RUN` were not executed in this environment and
-are **not claimed**. Where a stricter equivalent was executed on the acceptance
-host it is stated explicitly under the row.
+Rows marked `PASS` were executed and the result recorded. Rows marked `NOT RUN`
+were not executed in this environment and are **not claimed**. Where a stricter
+equivalent was executed on the acceptance host it is stated under the row.
 
 ## Environment of record
 
 | Field | Value |
 | --- | --- |
-| Acceptance host | WSL2 (Ubuntu guest) on the maintainer workstation |
-| OS | Linux (WSL2 guest; `uname` Microsoft-standard kernel) |
+| Acceptance host | WSL2 (Ubuntu guest) on the maintainer workstation, non-root |
 | Python | 3.11.15 |
 | Node / npm | 22.23.2 / 10.9.8 |
-| Source Git SHA | `f1f06b5825f224e778dbb8b10cba19f19561f250` |
+| Source Git SHA (artifact build) | `44ceb0c7ba15b5cee00a0a5e73d2ee9b4a7d830d` (branch `rel1-b4-acceptance`, base `main@f1f06b58`) |
 | Free disk during acceptance | ~813 GB |
 
 ## Reference identity
@@ -37,102 +37,82 @@ host it is stated explicitly under the row.
 
 | Field | Value |
 | --- | --- |
-| Production wheelhouse | 181 distributions, 3.1 GB, built from `backend/requirements.lock` (`scripts/build-python-wheelhouse.sh`, `--require-hashes --only-binary=:all:`) |
-| Bundle | `openjm-rel1-0.2.0/`, 876 payload files, 3.1 GB |
+| Production wheelhouse | 181 distributions, 3.1 GB, from `backend/requirements.lock` (`--require-hashes --only-binary=:all:`) |
+| Application wheel | `openjm_enterprise_ai_backend-0.2.0-py3-none-any.whl`, sha256 `cde425359f38295dac899d358e57ea0b823387135d228179fbeacb9803a4f081` |
+| Bundle | `openjm-rel1-0.2.0/`, 884 payload files, 3.1 GB |
 | npm offline cache | 26 MB, deterministic digest `ea249931ecd51bf628e075f0c6062e0996c3ba4f405c99c99d5bbb527703fc2e` |
-| `RELEASE-MANIFEST.json` sha256 | `d9f56c72ecd96898237e702157f7c8370904b32402023f9bec8ce00d84f9ead6` (reproduced identically on a clean rebuild) |
+| `RELEASE-MANIFEST.json` sha256 | `f3c9926c79c4b7c57929a62c1f57b66cad8d070b26578b71fc425a0d47739236` |
 | Release archive | `openjm-rel1-0.2.0.tar.gz` |
-| Archive bytes | `3242771473` |
-| Archive sha256 | `033aeada4c392b87b39307b7c997ba48dd9ea8d7364bb8527684e3f84ef98fe4` |
+| Archive bytes | `3243220300` |
+| Archive sha256 | `00fa8adbd6409b5fa840d4196989fd6c9e14469f159ea157df8da67af27718ba` (identical across two builds) |
 
 ## Acceptance table
 
 | # | Item | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Clean Linux **development** install (`scripts/install-linux.sh --profile development`) | NOT RUN | Installer not executed here; no separate clean host available. |
-| 2 | Clean Linux **production** install (`scripts/install-linux.sh --profile production`) | NOT RUN / PARTIAL | Installer not executed here; the equivalent committed-lock offline install (item 3) was executed manually on this host. |
-| 3 | Offline committed-lock install (full bundle, committed lock) | PASS | `scripts/rel1-offline-acceptance.sh` on the assembled bundle: `python offline install: OK` (181 wheels, `--no-index --find-links wheelhouse --require-hashes`), registry-blocked `npm ci` (138 packages) + production build OK, `REL1 offline acceptance passed (registry-blocked)`. No registry fallback. |
-| 4 | Trusted-digest verification (out-of-band manifest sha) | PASS | `scripts/release-integrity.py verify <bundle> --expected-manifest-sha256 d9f56c72...` -> `verified release payload: 876 files`. Code negative case: `test_wrong_trusted_manifest_sha256_is_rejected`. |
-| 5 | Tamper-negative coverage | PASS | `backend/tests/test_rel1b_tamper_negative.py` (all cases). Additionally observed fail-closed in practice: after a readiness run mutated the bundle, archiving refused with `bundle verification failed` (unexpected payload files: `__pycache__/*.pyc`, `app/data/openjm.db`, `app/data/credentials.key`, npm cache logs). |
-| 6 | Deterministic release archive | PASS | Two independent builds of the real 3.1 GB payload produced identical bytes `3242771473` and identical sha256 `033aeada...`. Code test: `test_rel1b_archive.py`. |
-| 7 | Windows/WSL2 **runtime** install | NOT RUN | No real Windows host exercised; `scripts/install-wsl2.ps1` not run. |
+| 1 | Clean Linux **development** install (`install-linux.sh --profile development`) | NOT RUN | Not executed on a separate clean host; development retains the editable install. |
+| 2 | Clean Linux **production** install (`install-linux.sh --profile production`) | PARTIAL (offline dependency + wheel install PASS; full PostgreSQL production profile NOT RUN) | The supported installer ran offline from the bundle: dependency install from the bundled wheelhouse (`--no-index --require-hashes`) and application-wheel install (`--no-deps`) both succeeded (see item 3). It then stopped at the fail-closed production preflight (`PermissionError` writing `/var/lib/openjm`; the production profile also requires a PostgreSQL-backed config). The host is non-root with no PostgreSQL, so the full PG production profile is not runnable here. |
+| 3 | Offline committed-lock install (full bundle, committed lock) | PASS | Installer offline step: `app` imported from `site-packages` (`.../backend/.venv/lib/python3.11/site-packages/app/__init__.py`), `pip show openjm-enterprise-ai-backend` = 0.2.0, and no `pytest`/`pgserver`/`pytest-asyncio` present (production excludes dev extras). No editable install, no build backend, no PYTHONPATH, no package index. |
+| 4 | Trusted-digest verification (out-of-band manifest sha) | PASS | `release-integrity.py verify <bundle> --expected-manifest-sha256 f3c9926c...` -> `verified release payload: 884 files` (fresh environment). Code negative case: `test_wrong_trusted_manifest_sha256_is_rejected`. |
+| 5 | Tamper-negative coverage | PASS | `backend/tests/test_rel1b_tamper_negative.py` (all cases). Observed fail-closed in practice: a mutated bundle was refused at archive time (`bundle verification failed`; unexpected payload files). |
+| 6 | Deterministic release archive | PASS | Two independent builds of the real 3.1 GB payload: identical bytes `3243220300` and identical sha256 `00fa8adb...`. Code test: `test_rel1b_archive.py`. |
+| 7 | Windows/WSL2 **runtime** install | NOT RUN | No real Windows host exercised; `install-wsl2.ps1` not run. |
 | 8 | Windows/WSL2 **contract** (scripts only) | PASS | `backend/tests/test_rel1b_windows_contract.py`. |
-| 9 | Migration (`openjm_ops.py upgrade`) | PASS | Offline host run: `Running upgrade 0020_bv6_report_curation -> 0021_support_content_scope`; `schema head: 0021_support_content_scope`; `RESULT: OK`; application version `0.2.0`. |
-| 10 | `/api/ready` | PASS | Offline host run after migration: `/api/ready` -> 200 `{"ready":true,"status":"ready"}`; `/api/health` -> 200; uvicorn `Application startup complete`. |
-| 11 | Frontend production build | PASS | Registry-blocked `npm ci --offline` + `npm run build` from the release npm cache: `tsc --noEmit && vite build` OK, `dist/index.html` emitted. |
+| 9 | Migration (`openjm_ops.py upgrade`) | PASS | Installer-built venv (wheel install, no PYTHONPATH): `0020_bv6_report_curation -> 0021_support_content_scope`; head `0021_support_content_scope`; `RESULT: OK`; version `0.2.0`. |
+| 10 | `/api/ready` / `/api/health` | PASS | Installer-built venv: `/api/ready` -> 200 `{"ready":true,"status":"ready"}`; `/api/health` -> 200; uvicorn `Application startup complete` (self-migrating wheel install). |
+| 11 | Frontend production build | PASS | Registry-blocked `npm ci` from the release cache (138 packages) + `npm run build`: `tsc --noEmit && vite build` OK, `dist/index.html` emitted. |
 | 12 | Browser / persona journey | NOT RUN | No browser/auth journey executed against the deployed build. |
 
 ## Production application wheel
 
-The backend build backend is Hatchling, which is **not** in the production
-wheelhouse or `backend/requirements.lock`, so the installer's editable app step
-(`pip install --no-deps -e .`) cannot build the application on a registry-blocked
-offline host. Rather than add `hatchling` to the runtime lock, the release bundle
-now ships a pre-built application wheel:
+The backend build backend (Hatchling) is not in the production wheelhouse or the
+lock, so the installer's editable app step cannot run on a registry-blocked host.
+Rather than add Hatchling to the runtime lock, the bundle ships a pre-built
+application wheel:
 
-- **Built by** `scripts/build-rel1-bundle.sh` (from the controlled build env,
-  which has network; build isolation is allowed there) with
-  `python -m pip wheel --no-deps --wheel-dir "$BUNDLE/python/app" "$ROOT/backend"`.
-  It asserts exactly one wheel named
-  `openjm_enterprise_ai_backend-<PRODUCT_VERSION>-*.whl` is produced.
-- **Shipped at** `python/app/openjm_enterprise_ai_backend-<version>-*.whl`
-  (a sibling of the `app/` tree), so the manifest generated last covers it
-  automatically (it is listed in `RELEASE-MANIFEST.json`).
-- **Installed by** `scripts/install-linux.sh --profile production`: the lock is
-  installed from the bundled wheelhouse with
-  `--no-index --find-links python/wheelhouse --require-hashes`, then the single
-  bundled wheel is installed with `--no-deps` (never editable, never from a
-  package index, never with build isolation). A missing or ambiguous wheel is a
-  hard failure:
-  `production install requires the bundled application wheel at python/app/openjm_enterprise_ai_backend-<version>-*.whl`.
-- **Development** keeps the existing editable install
-  (`pip install --quiet --no-deps -e .`).
+- Built by `scripts/build-rel1-bundle.sh` (controlled build env, network allowed)
+  via `python -m pip wheel --no-deps --wheel-dir "$BUNDLE/python/app" "$ROOT/backend"`;
+  asserts exactly one `openjm_enterprise_ai_backend-<PRODUCT_VERSION>-*.whl`.
+- Shipped at `python/app/`, covered by `RELEASE-MANIFEST.json` (generated last).
+- Installed by `install-linux.sh --profile production`: the lock is installed
+  from the bundled wheelhouse with `--no-index --find-links python/wheelhouse
+  --require-hashes`, then the single bundled wheel with `--no-deps` (never
+  editable, never from an index, never with build isolation). A missing or
+  ambiguous wheel is a hard failure. Development keeps the editable install.
+- **Self-migrating:** the wheel force-includes `migrations/` and `alembic.ini`
+  (Hatchling `force-include`) because `app/migrations_runner.py` resolves the
+  Alembic script directory relative to the installed package root. Without this
+  the wheel install could not migrate itself; with it, startup migrations and
+  `/api/ready` succeed (items 9 and 10). Regression test:
+  `backend/tests/test_rel1b_app_wheel_packaging.py`.
 
-The production runtime lock is unchanged: no new runtime dependency and no
-`hatchling` were added. Code coverage for this contract lives in
-`backend/tests/test_rel1b_app_wheel.py` (hermetic). The real production install
-on a clean/offline host is still run by the lead; the host rows below are not
-promoted by this change.
+The production runtime lock is unchanged: no new runtime dependency, no Hatchling.
+Coverage lives in `backend/tests/test_rel1b_app_wheel.py` and
+`test_rel1b_app_wheel_packaging.py`. The prior limitation ("installer editable
+install cannot complete offline; backend run via PYTHONPATH") is **resolved for
+production**.
 
 ## Blocked / decision required
 
-- **Offline editable app install (`pip install --no-deps -e .`)** — resolved for
-  production by shipping a pre-built application wheel in the bundle (see
-  "Production application wheel" above). The prior recommendation to vendor the
-  build backend or drop the editable path is superseded for the production
-  profile; development retains the editable install. Installer semantics for the
-  production profile changed from editable source install to bundled-wheel
-  install.
+- **Full PostgreSQL production profile** (root-owned paths + PostgreSQL metadata
+  DB) is NOT RUN here: the acceptance host is non-root and has no PostgreSQL. The
+  installer's fail-closed preflight behaved correctly. Running the full
+  production profile on a prepared host remains outstanding.
 
 ## Code-tested coverage detail
 
-### Tamper-negative (B4-D) — `backend/tests/test_rel1b_tamper_negative.py`
-
-Verification fails closed (raises before any install/execute step) for:
-modified payload file; deleted payload file; unexpected extra payload file;
-modified manifest; wrong externally trusted manifest sha256; symlink payload;
-path-traversal manifest entry (`..`); absolute-path manifest entry; reserved-file
-manifest entry. Each case rebuilds its own bundle; a clean bundle is proven to
-verify, so the rejections are real.
-
-### Deterministic archive (B4-F) — `scripts/build-rel1-archive.sh`
-
-Verifies the bundle (optionally against an external trusted digest) before
-writing anything; refuses unverified payloads. Deterministic flags:
-`--sort=name`, `--mtime=@0`, `--numeric-owner --owner=0 --group=0`,
-`--format=gnu`, `gzip -n`; members relative to `openjm-rel1-<version>/`; refuses
-in-repo output; never committed.
-
-### Windows/WSL2 contract (B4-E) — `backend/tests/test_rel1b_windows_contract.py`
-
-`install-wsl2.ps1` forwards `--profile $Profile` (explicit default, never
-silently dropped) and `--skip-frontend`, delegates to `scripts/install-linux.sh`
-(no divergent dependency path), and neither it nor `install-linux.sh` carries
-`[dev]`; Python 3.11 and Node 22 are enforced in the canonical installer.
+- **Tamper-negative (B4-D)** — `backend/tests/test_rel1b_tamper_negative.py`:
+  modified/deleted/unexpected payload; modified manifest; wrong trusted digest;
+  symlink; path-traversal/absolute/reserved manifest entries.
+- **Deterministic archive (B4-F)** — `scripts/build-rel1-archive.sh`: verifies
+  before writing; `--sort=name --mtime=@0 --numeric-owner --owner=0 --group=0
+  --format=gnu`, `gzip -n`; relative members; refuses in-repo output.
+- **Windows/WSL2 contract (B4-E)** — `backend/tests/test_rel1b_windows_contract.py`:
+  profile + `--skip-frontend` forwarded to the canonical installer, no divergent
+  dependency path, `[dev]` absent, Python 3.11 / Node 22 enforced.
 
 ## Not run
 
-Separate clean Linux host for B4-A/B installer runs; real Windows/WSL2 runtime;
-browser/persona journey. These require environments not available here and are
-not claimed. The offline equivalent executed on this host is recorded under items
-3, 4, 9, 10 and 11.
+Clean Linux **development** installer on a separate host; the full PostgreSQL
+**production** profile; real Windows/WSL2 runtime; browser/persona journey. These
+require environments not available here and are not claimed.
