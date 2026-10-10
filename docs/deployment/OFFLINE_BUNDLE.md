@@ -1,8 +1,6 @@
-# Offline bundle structure (design)
+# Offline bundle structure (REL1-B)
 
-**Status: proposed for REL1. Not implemented.** The repository does not yet ship
-an offline bundle and `scripts/install-linux.sh` does not yet accept one. This
-document defines the structure the REL1 packaging work should produce. It is
+**Status: REL1-B implementation in progress.** The connected-build bundle is produced by `scripts/build-rel1b-bundle.py` and consumed by the self-contained `install/install-offline.sh` carried inside the bundle. The production container-image export/load gate remains required before REL1-B acceptance. It is
 grounded in what a connected install fetches today
 ([CONNECTED_VS_AIRGAPPED.md](CONNECTED_VS_AIRGAPPED.md)); every requirement here
 exists because a connected step would otherwise need the network.
@@ -46,7 +44,7 @@ openjm-rel1-bundle-<version>-<arch>/
 | Repository source tarball | the installer builds from a checkout | `docs/INSTALLATION.md` |
 | Python wheels + a lock | `pip install -e ".[dev]"` would reach PyPI | `scripts/install-linux.sh` |
 | Frontend dependencies or a prebuilt `dist` | `npm ci` would reach the registry | `scripts/install-linux.sh` |
-| Container image tarballs | Compose would pull `python:3.11-slim`, `node:20-bookworm-slim`, `caddy:2`, `postgres:16` | `deploy/compose/Dockerfile`, `Dockerfile.proxy`, `docker-compose.prod.yml` |
+| Container image tarballs | Compose would pull `python:3.11-slim`, `node:22-bookworm-slim`, `caddy:2`, `postgres:16` | `deploy/compose/Dockerfile`, `Dockerfile.proxy`, `docker-compose.prod.yml` |
 | Embedding model files | first retrieval would download `sentence-transformers/all-MiniLM-L6-v2` | `backend/app/core/config.py` |
 | Manifest and checksums | verify what crossed the air gap | [RELEASE_MANIFEST.md](RELEASE_MANIFEST.md) |
 

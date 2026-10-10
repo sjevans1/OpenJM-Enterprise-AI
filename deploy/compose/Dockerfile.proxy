@@ -4,7 +4,7 @@
 # tree baked in at /srv/openjm/frontend (the root the Caddyfile serves) plus the
 # Caddyfile. This guarantees the assets the proxy serves are actually present in
 # the running container, with no host bind mount and no separate build step.
-FROM node:20-bookworm-slim AS frontend
+FROM node:22-bookworm-slim AS frontend
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./

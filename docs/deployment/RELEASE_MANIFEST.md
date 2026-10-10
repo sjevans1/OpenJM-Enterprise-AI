@@ -1,8 +1,6 @@
 # Release manifest and checksum design
 
-**Status: proposed for REL1. Not implemented.** The repository does not yet emit
-a release manifest or a checksum file. This document defines the schema so the
-REL1 packaging work has a fixed target. It is grounded in the existing release
+**Status: REL1-B implementation in progress.** `scripts/build-rel1b-bundle.py` now emits `BUNDLE-MANIFEST.json` plus `SHA256SUMS` for the connected-build/offline-install payload. Production image capture remains an acceptance gate before this is complete. It is grounded in the existing release
 identity (`backend/app/version.py`), the existing backup manifest as the
 precedent for a versioned, checksummed artefact
 ([BACKUP_RESTORE_CONTRACT.md](BACKUP_RESTORE_CONTRACT.md)), and the Alembic head
@@ -14,7 +12,7 @@ revision.
 | --- | --- | --- |
 | product | `app.version.build_info` | `/api/version`, `/api/health`, `/api/config/public` |
 | version | `app.version.PRODUCT_VERSION` | `/api/version`, `/api/health` |
-| release_train | `app.version.RELEASE_TRAIN` (currently `VS8`) | `/api/version` |
+| release_train | `app.version.RELEASE_TRAIN` (currently `REL1`) | `/api/version` |
 | release_id | `OPENJM_RELEASE_ID` | `/api/version`, `/api/config/public` |
 | schema head | the Alembic script head (currently `0021_support_content_scope`) | `/api/ready` |
 
