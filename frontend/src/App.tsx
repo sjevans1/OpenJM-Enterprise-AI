@@ -41,11 +41,11 @@ import {
   logout,
   onAuthLost,
   type AuthState,
-  type Principal,
 } from './auth'
 import ConnectorsPanel from './ConnectorsPanel'
 import OperationsPanel from './OperationsPanel'
 import AdminPanel from './AdminPanel'
+import ArtifactCard from './ArtifactCard'
 
 const CALLBACK_PATH = '/auth/callback'
 
@@ -75,52 +75,6 @@ export function canAdminister(
   if (!principal) return false
   if (principal.permissions.includes('tenant:admin')) return true
   return principal.role === 'admin' || principal.role === 'owner'
-}
-
-/**
- * Which tenant surfaces the navigation offers, derived ONLY from the
- * server-resolved principal context. This is presentation, not the security
- * boundary: the FastAPI backend re-authorizes every request, and hiding an
- * entry never substitutes for that.
- *
- * The platform control plane (`platform_capabilities`) is a separate axis and
- * is intentionally absent here — it never adds an ordinary tenant entry.
- */
-export type NavVisibility = {
-  chat: boolean
-  reports: boolean
-  knowledge: boolean
-  data: boolean
-  administration: boolean
-}
-
-const NO_NAV: NavVisibility = {
-  chat: false,
-  reports: false,
-  knowledge: false,
-  data: false,
-  administration: false,
-}
-
-/** The development workspace resolves the local owner, which holds every capability. */
-const FULL_NAV: NavVisibility = {
-  chat: true,
-  reports: true,
-  knowledge: true,
-  data: true,
-  administration: true,
-}
-
-export function navVisibilityFor(principal: Principal): NavVisibility {
-  const administer = canAdminister(principal)
-  const steward = principal.steward_scopes.length > 0
-  return {
-    chat: principal.permissions.includes('chat:use'),
-    reports: principal.permissions.includes('reports:read'),
-    knowledge: principal.permissions.includes('knowledge:write') || steward || administer,
-    data: principal.permissions.includes('data:write') || steward || administer,
-    administration: administer,
-  }
 }
 
 function formatBytes(bytes: number) {
@@ -353,15 +307,11 @@ export default function App() {
   const pendingRunIntentRef = useRef<ReportRunIntent | null>(null)
   const pendingReportId = useRef<string | null>(null)
   const [authState, setAuthState] = useState<AuthState>({ status: 'loading' })
-  // Chat-first, permission-aware navigation. The dev workspace resolves the
-  // local owner server-side, so it keeps every surface; an authenticated
-  // principal gets exactly the surfaces its resolved capabilities grant.
-  const nav: NavVisibility =
-    authState.status === 'dev'
-      ? FULL_NAV
-      : authState.status === 'authenticated'
-        ? navVisibilityFor(authState.principal)
-        : NO_NAV
+  // Client administration visibility. Dev mode has no principal but resolves the
+  // local owner on the server, which does hold tenant:admin.
+  const administer =
+    authState.status === 'dev' ||
+    (authState.status === 'authenticated' && canAdminister(authState.principal))
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -544,6 +494,7 @@ export default function App() {
         execution_class: response.execution_class,
         requested_mode: response.mode,
         evidence: response.evidence,
+        artifacts: response.artifacts ?? [],
         created_at: new Date().toISOString(),
       }
       setMessages((current) => [...current, assistant])
@@ -665,6 +616,21 @@ export default function App() {
         : undefined
     const base = (priorUser?.content || message.content || 'Saved report').replace(/\s+/g, ' ').trim()
     return (base || 'Saved report').slice(0, 120)
+  }
+
+  // The card is removed from the transcript immediately after the server
+  // confirms retirement; the artifact can no longer be downloaded.
+  const removeArtifact = (messageId: string, artifactId: string) => {
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              artifacts: (message.artifacts || []).filter((artifact) => artifact.id !== artifactId),
+            }
+          : message,
+      ),
+    )
   }
 
   const isRevocationError = (error: unknown) => (
@@ -1047,59 +1013,48 @@ export default function App() {
         </button>
 
         <nav className="primary-nav">
-          {nav.chat && (
-            <button
-              className={view === 'chat' ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView('chat')}
-            >
-              <MessageSquareText size={17} />
-              Chat
-            </button>
-          )}
-          {nav.knowledge && (
-            <button
-              className={view === 'knowledge' ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView('knowledge')}
-            >
-              <FolderOpen size={17} />
-              Knowledge
-              <span className="count-pill">{documents.length}</span>
-            </button>
-          )}
-          {nav.data && (
-            <button
-              className={view === 'data' ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView('data')}
-            >
-              <Database size={17} />
-              Data
-              <span className="count-pill">{dataSources.length}</span>
-            </button>
-          )}
+          <button
+            className={view === 'chat' ? 'nav-item active' : 'nav-item'}
+            onClick={() => setView('chat')}
+          >
+            <MessageSquareText size={17} />
+            Chat
+          </button>
+          <button
+            className={view === 'knowledge' ? 'nav-item active' : 'nav-item'}
+            onClick={() => setView('knowledge')}
+          >
+            <FolderOpen size={17} />
+            Knowledge
+            <span className="count-pill">{documents.length}</span>
+          </button>
+          <button
+            className={view === 'data' ? 'nav-item active' : 'nav-item'}
+            onClick={() => setView('data')}
+          >
+            <Database size={17} />
+            Data
+            <span className="count-pill">{dataSources.length}</span>
+          </button>
 
-          {nav.reports && (
-            <button
-              className={view === 'reports' ? 'nav-item active' : 'nav-item'}
-              onClick={() => {
-                reportOpenSequence.current += 1
-                pendingReportId.current = null
-                setView('reports')
-                setActiveReport(null)
-                clearReportExecution()
-                setReportError(null)
-                loadReports()
-              }}
-            >
-              <Gauge size={17} />
-              Reports
-              <span className="count-pill">{reports.length}</span>
-            </button>
-          )}
+          <button
+            className={view === 'reports' ? 'nav-item active' : 'nav-item'}
+            onClick={() => {
+              reportOpenSequence.current += 1
+              pendingReportId.current = null
+              setView('reports')
+              setActiveReport(null)
+              clearReportExecution()
+              setReportError(null)
+              loadReports()
+            }}
+          >
+            <Gauge size={17} />
+            Reports
+            <span className="count-pill">{reports.length}</span>
+          </button>
 
-          {/* The OpenJM platform control plane is a separate surface and is
-              never mixed into ordinary tenant navigation: no platform
-              capability adds an entry here. */}
-          {nav.administration && (
+          {administer && (
             <>
               <div className="nav-divider" />
               <button
@@ -1260,6 +1215,17 @@ export default function App() {
                         <div className="message-content">{message.content}</div>
                         {message.role === 'assistant' && (
                           <EvidencePanel evidence={message.evidence || []} />
+                        )}
+                        {message.role === 'assistant' && (message.artifacts?.length || 0) > 0 && (
+                          <div className="artifact-stack">
+                            {message.artifacts!.map((artifact) => (
+                              <ArtifactCard
+                                key={artifact.id}
+                                artifact={artifact}
+                                onDeleted={() => removeArtifact(message.id, artifact.id)}
+                              />
+                            ))}
+                          </div>
                         )}
                         {message.role === 'assistant' && (message.evidence?.length || 0) > 0 && (
                           <div className="snapshot-actions">

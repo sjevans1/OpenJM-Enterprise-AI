@@ -12,8 +12,9 @@ from app.core.config import get_settings
 from app.core.context import current_principal
 from app.core.identity import Permission, Principal
 from app.db import get_db
-from app.models import Conversation, Message
+from app.models import ChatArtifact, Conversation, Message
 from app.schemas import (
+    ChatArtifactOut,
     ChatRequest,
     ChatResponse,
     ConversationDetail,
@@ -21,6 +22,8 @@ from app.schemas import (
     Evidence,
     MessageOut,
 )
+from app.services import artifact_journey
+from app.services.artifact_journey import ARTIFACT_SYSTEM_INSTRUCTION
 from app.services.model_gateway import (
     ModelGatewayError,
     OpenAICompatibleModelGateway,
@@ -42,7 +45,9 @@ def _decode_evidence(raw: str | None) -> list[Evidence]:
         return []
 
 
-def _message_out(message: Message) -> MessageOut:
+def _message_out(
+    message: Message, artifacts: list[ChatArtifactOut] | None = None
+) -> MessageOut:
     return MessageOut(
         id=message.id,
         role=message.role,
@@ -50,6 +55,7 @@ def _message_out(message: Message) -> MessageOut:
         execution_class=message.execution_class,
         requested_mode=message.requested_mode,
         evidence=_decode_evidence(message.evidence_json),
+        artifacts=artifacts or [],
         created_at=message.created_at,
     )
 
@@ -103,12 +109,18 @@ async def get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    artifacts = await artifact_journey.artifacts_by_message(
+        db, current_principal(), conversation.id
+    )
     return ConversationDetail(
         id=conversation.id,
         title=conversation.title,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
-        messages=[_message_out(message) for message in conversation.messages],
+        messages=[
+            _message_out(message, artifacts.get(message.id, []))
+            for message in conversation.messages
+        ],
     )
 
 
@@ -165,11 +177,19 @@ async def chat(
     db.add(user_message)
     conversation.updated_at = datetime.now(timezone.utc)
 
+    artifact_journey_enabled = plan.requested_mode == "chat"
+
     if plan.direct_answer is not None:
         answer = plan.direct_answer
     else:
+        system_prompt = plan.system_prompt
+        if artifact_journey_enabled:
+            system_prompt = f"{system_prompt}\n\n{ARTIFACT_SYSTEM_INSTRUCTION}"
         provider_messages = [
-            {"role": "system", "content": plan.system_prompt},
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
             *history[-20:],
             {"role": "user", "content": request.message},
         ]
@@ -213,6 +233,37 @@ async def chat(
         ),
     )
     db.add(assistant_message)
+    # Flush first so the artifact can be linked to this assistant turn's id.
+    await db.flush()
+
+    # The model proposed; the server decides. A bounded artifact directive is
+    # validated and, if permitted, created through the controlled artifact
+    # boundary (opaque storage key, server-normalised filename). The directive
+    # block is stripped from the visible answer, so raw source never reaches the
+    # transcript. A refused/malformed directive yields a bounded note and no
+    # phantom artifact; the turn itself is never corrupted.
+    artifacts: list[ChatArtifactOut] = []
+    if artifact_journey_enabled:
+        outcome = await artifact_journey.maybe_create_artifact(
+            db,
+            current_principal(),
+            text=answer,
+            conversation_id=conversation.id,
+            message_id=assistant_message.id,
+            evidence=plan.evidence,
+        )
+        content = outcome.text
+        if outcome.failure_message:
+            content = f"{content}\n\n{outcome.failure_message}".strip()
+        if outcome.artifact is not None:
+            artifacts.append(artifact_journey.chat_artifact_out(outcome.artifact))
+    else:
+        # Knowledge/Data/Hybrid are governed answer modes, not artifact-creation
+        # surfaces. Even if a model emits an artifact-looking fence, preserve it
+        # as ordinary response text and never execute the artifact boundary.
+        content = answer
+    assistant_message.content = content
+
     conversation.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(assistant_message)
@@ -220,8 +271,9 @@ async def chat(
     return ChatResponse(
         conversation_id=conversation.id,
         message_id=assistant_message.id,
-        answer=answer,
+        answer=content,
         execution_class=plan.execution_class,
         mode=plan.requested_mode,
         evidence=plan.evidence,
+        artifacts=artifacts,
     )

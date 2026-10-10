@@ -23,6 +23,29 @@ export type Message = {
   execution_class?: string | null
   requested_mode?: ExecutionMode | null
   evidence: Evidence[]
+  artifacts?: ChatArtifact[]
+  created_at: string
+}
+
+export type ChatArtifactFormat = 'html' | 'markdown' | 'text' | 'csv'
+
+/**
+ * Metadata + download affordance for a Chat artifact. This is a Chat work
+ * product, NOT a Governed Saved Report: the object never carries the file
+ * content, base64 or the storage key — only the server artifact id, the
+ * server-normalised filename, MIME type and size.
+ */
+export type ChatArtifact = {
+  id: string
+  title: string
+  filename: string
+  mime_type: string
+  artifact_format: ChatArtifactFormat
+  size_bytes: number
+  state: string
+  is_evidence_backed: boolean
+  conversation_id?: string | null
+  message_id?: string | null
   created_at: string
 }
 
@@ -44,6 +67,7 @@ export type ChatResponse = {
   execution_class: 'general' | 'knowledge' | 'structured' | 'hybrid'
   mode: ExecutionMode
   evidence: Evidence[]
+  artifacts?: ChatArtifact[]
 }
 
 export type DocumentRecord = {
@@ -470,6 +494,39 @@ export const api = {
         mode: mode || 'chat',
       }),
     }),
+
+  // BV5-C Chat artifacts. Every response is metadata + a server artifact id;
+  // the browser never receives file content in the transcript. Downloads go
+  // through the authorized fetch so the request carries the caller's credential.
+  artifacts: () => request<ChatArtifact[]>('/api/artifacts'),
+
+  artifact: (id: string) =>
+    request<ChatArtifact>(`/api/artifacts/${encodeURIComponent(id)}`),
+
+  downloadArtifact: (id: string, fallbackName: string) =>
+    downloadExport(`/api/artifacts/${encodeURIComponent(id)}/download`, fallbackName),
+
+  downloadArtifactRender: (id: string, target: 'pdf' | 'docx', fallbackName: string) =>
+    downloadExport(
+      `/api/artifacts/${encodeURIComponent(id)}/render/${target}`,
+      fallbackName,
+    ),
+
+  deleteArtifact: async (id: string): Promise<void> => {
+    const response = await authorizedFetch(`/api/artifacts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      let message = 'Could not remove the artifact'
+      try {
+        const body = await response.json()
+        message = body.detail || message
+      } catch {
+        // keep generic message
+      }
+      throw new ApiError(message, response.status)
+    }
+  },
 
   documents: () => request<DocumentRecord[]>('/api/knowledge/documents'),
 

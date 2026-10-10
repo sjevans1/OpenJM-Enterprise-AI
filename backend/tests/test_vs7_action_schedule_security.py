@@ -332,13 +332,16 @@ EXPECTED_TOOL_NAMES = sorted(
         "audit.list",
         "data_source.set_currency",
         "data_source.set_enabled",
+        # BV5-C: creates a downloadable, user-scoped Chat artifact. It declares
+        # no path/url/shell argument and is confined to the artifact store.
+        "artifact.create",
         *CONNECTOR_TOOL_NAMES,
     ]
 )
 
 
 def test_no_generic_network_tool_exists():
-    """The tool surface is exactly the pre-existing tools plus the six connector tools."""
+    """The tool surface is exactly the declared tools plus the six connector tools."""
     names = registry.names()
     assert names == EXPECTED_TOOL_NAMES
 
