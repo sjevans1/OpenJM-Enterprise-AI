@@ -27,6 +27,7 @@ from app.api import (
     report_definitions,
     report_runs,
     reports,
+    support,
     system,
 )
 from app.core.config import get_settings
@@ -165,3 +166,4 @@ app.include_router(report_definitions.router, prefix="/api")
 app.include_router(report_runs.router, prefix="/api")
 app.include_router(report_exports.router, prefix="/api")
 app.include_router(report_curation.router, prefix="/api")
+app.include_router(support.router, prefix="/api")

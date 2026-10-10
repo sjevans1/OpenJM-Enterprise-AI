@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.governance import (
+    DEFAULT_SOURCE_CLASSIFICATION,
     StewardScopeType,
     is_known_classification,
     is_known_steward_scope_type,
@@ -1058,6 +1059,9 @@ async def grant_support_delegation(
     principal_id: str,
     scope: str,
     expires_at: datetime | None = None,
+    classification_ceiling: str = DEFAULT_SOURCE_CLASSIFICATION,
+    allowed_group_ids: list[str] | None = None,
+    department_id: str | None = None,
 ) -> SupportDelegation:
     """Delegate tenant-scoped OpenJM support authority to one operator account.
 
@@ -1065,6 +1069,12 @@ async def grant_support_delegation(
     support additionally requires the actor to hold ``CONTENT_SUPPORT``: an
     authority cannot be delegated by someone who does not hold it. The delegation
     is scoped to one tenant, auditable, revocable and optionally time-bounded.
+
+    A ``content`` delegation is *bounded* by ``classification_ceiling`` (the most
+    classified source it may reach), ``allowed_group_ids`` and ``department_id``.
+    A support read against it is permitted only when a document satisfies both the
+    delegation's bounds and the tenant's classification/source policy, so a
+    delegation never replaces or widens classification or source authorization.
     """
     _require_operator(actor)
     if scope not in SUPPORT_SCOPES:
@@ -1079,12 +1089,46 @@ async def grant_support_delegation(
         if expiry is not None and expiry <= utcnow():
             raise ValueError("Support delegation expiry must be in the future")
 
+    if not is_known_classification(classification_ceiling):
+        raise ValueError(
+            f"Unsupported classification ceiling: {classification_ceiling!r}"
+        )
+
     tenant = await db.get(Tenant, tenant_id)
     if tenant is None:
         raise ValueError("Unknown tenant")
     account = await db.get(PrincipalAccount, principal_id)
     if account is None:
         raise ValueError("Unknown principal account")
+
+    if department_id is not None:
+        department = (
+            await db.execute(
+                select(Department.id).where(
+                    Department.tenant_id == tenant_id,
+                    Department.id == department_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if department is None:
+            raise ValueError("Department does not belong to the target tenant")
+
+    groups = sorted({str(group) for group in (allowed_group_ids or []) if str(group)})
+    if groups:
+        found = set(
+            (
+                await db.execute(
+                    select(AccessGroup.id).where(
+                        AccessGroup.tenant_id == tenant_id,
+                        AccessGroup.id.in_(groups),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if found != set(groups):
+            raise ValueError("Allowed group does not belong to the target tenant")
 
     existing = (
         await db.execute(
@@ -1095,11 +1139,18 @@ async def grant_support_delegation(
             )
         )
     ).scalar_one_or_none()
+    bounded = {
+        "classification_ceiling": classification_ceiling,
+        "allowed_group_ids_json": json.dumps(groups),
+        "department_id": department_id,
+    }
     if existing is not None:
         existing.status = "active"
         existing.revoked_at = None
         existing.expires_at = expires_at
         existing.granted_by = actor.principal_id
+        for field, value in bounded.items():
+            setattr(existing, field, value)
         await db.flush()
         delegation = existing
     else:
@@ -1110,6 +1161,7 @@ async def grant_support_delegation(
             status="active",
             granted_by=actor.principal_id,
             expires_at=expires_at,
+            **bounded,
         )
         db.add(delegation)
         await db.flush()
@@ -1120,7 +1172,13 @@ async def grant_support_delegation(
         action="platform.support.grant",
         resource_type="support_delegation",
         resource_id=f"{tenant_id}:{principal_id}:{scope}",
-        metadata={"scope": scope, "expires_at": expires_at.isoformat() if expires_at else None},
+        metadata={
+            "scope": scope,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "classification_ceiling": classification_ceiling,
+            "allowed_group_ids": groups,
+            "department_id": department_id,
+        },
     )
     return delegation
 

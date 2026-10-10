@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_platform
 from app.core.config import get_settings
+from app.core.governance import DEFAULT_SOURCE_CLASSIFICATION, SOURCE_CLASSIFICATIONS
 from app.core.identity import AuthorizationError, Principal
 from app.core.platform import PlatformCapability, normalize_platform_capabilities
 from app.db import get_db
@@ -87,6 +88,14 @@ class SupportGrantRequest(BaseModel):
     principal_id: str = Field(min_length=1, max_length=64)
     scope: str = Field(pattern="^(metadata|content)$")
     expires_at: datetime | None = None
+    # Bounded content scope. Ignored for a ``metadata`` delegation (which reaches
+    # no content); the defaults are the safe minimum.
+    classification_ceiling: str = Field(
+        default=DEFAULT_SOURCE_CLASSIFICATION,
+        pattern="^(" + "|".join(SOURCE_CLASSIFICATIONS) + ")$",
+    )
+    allowed_group_ids: list[str] | None = None
+    department_id: str | None = None
 
 
 class SupportDelegationOut(BaseModel):
@@ -96,6 +105,9 @@ class SupportDelegationOut(BaseModel):
     status: str
     created_at: datetime
     expires_at: datetime | None = None
+    classification_ceiling: str = DEFAULT_SOURCE_CLASSIFICATION
+    allowed_group_ids_json: str = "[]"
+    department_id: str | None = None
 
 
 class PlatformStatusOut(BaseModel):
@@ -345,6 +357,9 @@ async def grant_support(
             principal_id=payload.principal_id,
             scope=payload.scope,
             expires_at=payload.expires_at,
+            classification_ceiling=payload.classification_ceiling,
+            allowed_group_ids=payload.allowed_group_ids,
+            department_id=payload.department_id,
         )
     except Exception as exc:  # noqa: BLE001
         raise _http_for(exc) from exc
