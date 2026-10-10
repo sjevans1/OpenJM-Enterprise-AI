@@ -70,20 +70,25 @@ class ArtifactError(Exception):
     """Bounded artifact failure carrying the HTTP status the API must return."""
 
     status_code = 400
+    # A log-safe, bounded category (never derived from user content).
+    code = "artifact_error"
 
 
 class ArtifactUnsupported(ArtifactError):
     status_code = 422
+    code = "unsupported"
 
 
 class ArtifactTooLarge(ArtifactError):
     status_code = 413
+    code = "too_large"
 
 
 class ArtifactNameError(ArtifactError):
     """A filename or storage key that could address outside one directory."""
 
     status_code = 422
+    code = "unsafe_name"
 
 
 def resolve_mime(fmt: str) -> str:

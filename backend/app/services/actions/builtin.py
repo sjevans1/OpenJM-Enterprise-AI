@@ -307,6 +307,13 @@ def _register_all() -> None:
 
     register_connector_tools(registry)
 
+    # BV5-C chat artifact creation. Exposed through the same registry so it is
+    # governed, permission-bound, tenant-scoped, idempotent and audited like
+    # every other declared capability.
+    from app.services.actions.artifact_tools import register_artifact_tools
+
+    register_artifact_tools(registry)
+
 
 _register_all()
 

@@ -25,18 +25,18 @@ from app.api.deps import require
 from app.core.context import current_principal
 from app.core.identity import Permission, Principal
 from app.db import get_db
-from app.models import ChatArtifact, Conversation, Message, now_utc
+from app.models import ChatArtifact, now_utc
 from app.schemas import (
     ArtifactRenderFormat,
     ChatArtifactDetail,
     ChatArtifactOut,
     CreateChatArtifactRequest,
 )
+from app.services import artifact_journey as journey
 from app.services import artifacts as artifacts_service
 from app.services import artifacts_render as render_service
 from app.services.artifacts import (
     ArtifactError,
-    content_sha256,
     storage as _storage,
 )
 
@@ -58,19 +58,7 @@ def _http(exc: ArtifactError) -> HTTPException:
 
 
 def _out(artifact: ChatArtifact) -> ChatArtifactOut:
-    return ChatArtifactOut(
-        id=artifact.id,
-        title=artifact.title,
-        filename=artifact.filename,
-        mime_type=artifact.mime_type,
-        artifact_format=artifact.artifact_format,
-        size_bytes=artifact.size_bytes,
-        state=artifact.state,
-        is_evidence_backed=artifact.is_evidence_backed,
-        conversation_id=artifact.conversation_id,
-        message_id=artifact.message_id,
-        created_at=artifact.created_at,
-    )
+    return journey.chat_artifact_out(artifact)
 
 
 def _detail(artifact: ChatArtifact) -> ChatArtifactDetail:
@@ -96,90 +84,32 @@ async def _owned_artifact(db: AsyncSession, artifact_id: str) -> ChatArtifact | 
     return (await db.execute(_owned(db, artifact_id))).scalars().first()
 
 
-async def _validate_linkage(
-    db: AsyncSession,
-    principal: Principal,
-    conversation_id: str | None,
-    message_id: str | None,
-) -> None:
-    """Refuse a conversation/message link the caller does not own.
-
-    Linkage is derived from the trusted principal, never trusted from the
-    request: a caller cannot attach an artifact to another owner's conversation.
-    """
-    conversation = None
-    if conversation_id is not None:
-        conversation = (
-            await db.execute(
-                select(Conversation).where(
-                    Conversation.id == conversation_id,
-                    Conversation.user_id == principal.user_id,
-                    Conversation.tenant_id == principal.tenant_id,
-                )
-            )
-        ).scalars().first()
-        if conversation is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-    if message_id is not None:
-        message = (
-            await db.execute(select(Message).where(Message.id == message_id))
-        ).scalars().first()
-        if message is None:
-            raise HTTPException(status_code=404, detail="Message not found")
-        owner = (
-            await db.execute(
-                select(Conversation).where(
-                    Conversation.id == message.conversation_id,
-                    Conversation.user_id == principal.user_id,
-                    Conversation.tenant_id == principal.tenant_id,
-                )
-            )
-        ).scalars().first()
-        if owner is None:
-            raise HTTPException(status_code=404, detail="Message not found")
-        if conversation is not None and message.conversation_id != conversation.id:
-            raise HTTPException(
-                status_code=422, detail="Message does not belong to the conversation"
-            )
-
-
 @router.post("", response_model=ChatArtifactDetail)
 async def create_artifact(
     payload: CreateChatArtifactRequest,
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require(Permission.CHAT_USE)),
 ) -> ChatArtifactDetail:
-    """Persist one downloadable Chat work product owned by the caller."""
+    """Persist one downloadable Chat work product owned by the caller.
+
+    Validation, linkage checking and idempotency are shared with the Chat
+    journey and the governed ``artifact.create`` action
+    (``app.services.artifact_journey.persist_chat_artifact``).
+    """
     try:
-        mime = artifacts_service.ensure_storable(payload.format)
-        filename = artifacts_service.safe_filename(payload.title, payload.format)
-        data = artifacts_service.validate_content(payload.format, payload.content)
+        artifact = await journey.persist_chat_artifact(
+            db,
+            principal,
+            title=payload.title,
+            fmt=payload.format,
+            content=payload.content,
+            conversation_id=payload.conversation_id,
+            message_id=payload.message_id,
+            evidence=payload.evidence,
+        )
     except ArtifactError as exc:
         raise _http(exc) from None
 
-    await _validate_linkage(db, principal, payload.conversation_id, payload.message_id)
-
-    key = artifacts_service.new_storage_key()
-    _storage().write(key, data)
-    is_backed, provenance_json = artifacts_service.provenance_payload(payload.evidence)
-
-    artifact = ChatArtifact(
-        tenant_id=principal.tenant_id,
-        user_id=principal.user_id,
-        conversation_id=payload.conversation_id,
-        message_id=payload.message_id,
-        title=payload.title.strip()[:240],
-        filename=filename,
-        mime_type=mime,
-        artifact_format=payload.format,
-        size_bytes=len(data),
-        storage_key=key,
-        sha256=content_sha256(data),
-        state="active",
-        is_evidence_backed=is_backed,
-        provenance_json=provenance_json,
-    )
-    db.add(artifact)
     await db.commit()
     await db.refresh(artifact)
     return _detail(artifact)

@@ -29,6 +29,35 @@ class Evidence(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+# --- BV5-A/C: Chat artifact metadata -----------------------------------------
+# A Chat artifact is a downloadable work product. It is NOT a Governed Saved
+# Report: an artifact is never approved and never authoritative, and its
+# response types hard-code those flags so the distinction cannot be blurred.
+# Defined here (before the chat/message types) so ``MessageOut`` and
+# ``ChatResponse`` can carry an assistant turn's artifact references.
+ArtifactFormat = Literal["html", "markdown", "text", "csv"]
+
+
+class ChatArtifactOut(BaseModel):
+    """Metadata + download affordance for one Chat artifact.
+
+    Carries the server artifact id, normalised filename, MIME type and size —
+    never the content, base64 or the storage key.
+    """
+
+    id: str
+    title: str
+    filename: str
+    mime_type: str
+    artifact_format: ArtifactFormat
+    size_bytes: int
+    state: str
+    is_evidence_backed: bool
+    conversation_id: str | None = None
+    message_id: str | None = None
+    created_at: datetime
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     conversation_id: str | None = None
@@ -42,6 +71,7 @@ class ChatResponse(BaseModel):
     execution_class: ExecutionClass
     mode: ExecutionMode = "chat"
     evidence: list[Evidence] = Field(default_factory=list)
+    artifacts: list[ChatArtifactOut] = Field(default_factory=list)
 
 
 class MessageOut(BaseModel):
@@ -51,6 +81,7 @@ class MessageOut(BaseModel):
     execution_class: str | None = None
     requested_mode: ExecutionMode | None = None
     evidence: list[Evidence] = Field(default_factory=list)
+    artifacts: list[ChatArtifactOut] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -260,9 +291,8 @@ class CreateReportRunRequest(BaseModel):
 # Report: the response types below hard-code ``approved``/``authoritative`` as
 # ``False`` so no Chat artifact can ever be presented as approved or
 # authoritative, even when it carries evidence-backed provenance.
-ArtifactFormat = Literal["html", "markdown", "text", "csv"]
-
-
+# ``ArtifactFormat`` and ``ChatArtifactOut`` are defined above (before the chat
+# types) so an assistant turn can carry its artifact references.
 class CreateChatArtifactRequest(BaseModel):
     """Persist one downloadable Chat work product.
 
@@ -279,20 +309,6 @@ class CreateChatArtifactRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=36)
     message_id: str | None = Field(default=None, max_length=36)
     evidence: list[Evidence] = Field(default_factory=list)
-
-
-class ChatArtifactOut(BaseModel):
-    id: str
-    title: str
-    filename: str
-    mime_type: str
-    artifact_format: ArtifactFormat
-    size_bytes: int
-    state: str
-    is_evidence_backed: bool
-    conversation_id: str | None = None
-    message_id: str | None = None
-    created_at: datetime
 
 
 class ChatArtifactDetail(ChatArtifactOut):

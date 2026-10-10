@@ -46,6 +46,7 @@ import {
 import ConnectorsPanel from './ConnectorsPanel'
 import OperationsPanel from './OperationsPanel'
 import AdminPanel from './AdminPanel'
+import ArtifactCard from './ArtifactCard'
 
 const CALLBACK_PATH = '/auth/callback'
 
@@ -544,6 +545,7 @@ export default function App() {
         execution_class: response.execution_class,
         requested_mode: response.mode,
         evidence: response.evidence,
+        artifacts: response.artifacts ?? [],
         created_at: new Date().toISOString(),
       }
       setMessages((current) => [...current, assistant])
@@ -665,6 +667,21 @@ export default function App() {
         : undefined
     const base = (priorUser?.content || message.content || 'Saved report').replace(/\s+/g, ' ').trim()
     return (base || 'Saved report').slice(0, 120)
+  }
+
+  // The card is removed from the transcript immediately after the server
+  // confirms retirement; the artifact can no longer be downloaded.
+  const removeArtifact = (messageId: string, artifactId: string) => {
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              artifacts: (message.artifacts || []).filter((artifact) => artifact.id !== artifactId),
+            }
+          : message,
+      ),
+    )
   }
 
   const isRevocationError = (error: unknown) => (
@@ -1260,6 +1277,17 @@ export default function App() {
                         <div className="message-content">{message.content}</div>
                         {message.role === 'assistant' && (
                           <EvidencePanel evidence={message.evidence || []} />
+                        )}
+                        {message.role === 'assistant' && (message.artifacts?.length || 0) > 0 && (
+                          <div className="artifact-stack">
+                            {message.artifacts!.map((artifact) => (
+                              <ArtifactCard
+                                key={artifact.id}
+                                artifact={artifact}
+                                onDeleted={() => removeArtifact(message.id, artifact.id)}
+                              />
+                            ))}
+                          </div>
                         )}
                         {message.role === 'assistant' && (message.evidence?.length || 0) > 0 && (
                           <div className="snapshot-actions">
