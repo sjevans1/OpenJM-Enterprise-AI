@@ -70,13 +70,84 @@ The checksum file inside the bundle detects accidental corruption but is not an
 independent trust anchor. A production release should distribute the expected
 manifest digest out-of-band (for example, a signed release record).
 
+## Implemented offline asset assembly (REL1-B3)
+
+The bundle is assembled by `scripts/build-rel1-bundle.sh`, which produces the
+layout above and generates the manifest last, then verifies it immediately:
+
+```bash
+scripts/build-rel1-bundle.sh <output_dir>            # version read from version.py
+scripts/build-rel1-bundle.sh --lock <lock> <out>     # alternative pinned lock (tests/CI)
+```
+
+The version is never hardcoded: it is read from
+`backend/app/version.py::PRODUCT_VERSION`, and an explicit `--version` must match
+it. The committed production lock (`backend/requirements.lock`) is copied verbatim
+into `python/`; `app/` is staged by `scripts/stage-release-payload.sh` under the
+exclusion policy below.
+
+### Offline npm dependency artifact (proven, not assumed)
+
+`frontend/package-lock.json` remains authoritative. `scripts/build-npm-offline-cache.sh`
+proves the exact approach rather than assuming `npm ci --offline` "just works":
+
+1. copies `package.json` + `package-lock.json` into an isolated workdir;
+2. runs `npm ci --cache <dir>` once to fetch the packages and populate a
+   release-local npm cache;
+3. **proves** the cache alone supports a *registry-blocked* `npm ci --offline`
+   (registry pointed at `http://127.0.0.1:9/`, a connection-refusing address) —
+   the acceptance target is a registry-blocked run, not a warm machine;
+4. normalizes the cache with `scripts/normalize-npm-cache.py`.
+
+`npm ci --offline` with an *empty* cache and the registry blocked fails hard
+(`ENOTCACHED`), which is the negative control: the populated cache is what makes
+the offline install succeed.
+
+### Reproducibility (byte-for-byte, at the payload level)
+
+The npm cache's `_cacache/content-v2` store is content-addressed by the tarball
+integrity from the lock, so it is already deterministic. The `_cacache/index-v5`
+bucket entries, however, embed volatile fetch metadata (`time`,
+`metadata.resHeaders.date`). `normalize-npm-cache.py` rewrites every index entry
+to a canonical form (`key`, `integrity`, `size`, a zeroed `time`) and recomputes
+the cacache bucket hash (`sha1` of the JSON string) so npm still accepts it. It
+also drops `_logs`, `_update-notifier-last-checked` and `tmp`.
+
+The result: for the same source tree and the same lock inputs, two independent
+bundle builds produce a **byte-for-byte identical** payload and `RELEASE-MANIFEST.json`
+(verified locally; the wheelhouse wheels are re-downloaded but are themselves
+immutable, content-addressed artifacts). No zip/tar is created by the builder;
+reproducibility is defined and proven at the manifest/payload level. If an
+archive is produced downstream, its metadata (timestamps, uid/gid, entry order)
+must be normalized to preserve this property.
+
+### Python third-party dependencies
+
+`python/wheelhouse` is populated from the committed lock by
+`scripts/build-python-wheelhouse.sh` (hash-pinned, binary-only). It installs with
+`--no-index --find-links python/wheelhouse --require-hashes` and no PyPI access.
+
+### Registry-blocked acceptance
+
+`scripts/rel1-offline-acceptance.sh <bundle_dir>` verifies the manifest, then
+installs Python from the wheelhouse with `--no-index` and npm from `npm/cache`
+with `--offline` against a dead registry, and runs the production frontend build.
+CI runs it as a bounded smoke (see the `rel1_offline_bundle_gate` job); the final
+committed-lock install on a real host is REL1-B4.
+
+### Excluded from the payload
+
+`.git`, `.hermes` (Hermes state), real env/secret files (`.env`, `.env.*`), the
+committed config templates are retained (`.env.example`,
+`.env.production.example` — no secrets, and `install-linux.sh` copies one to
+create `.env`), developer virtualenvs (`.venv*`), `node_modules`, build output
+(`dist`), Python/test caches (`__pycache__`, `*.pyc`, `.pytest_cache`, …), and
+generated private data (`data/`, `*.db`). `node_modules` is never committed and
+the npm cache is always emitted outside the repository tree.
+
 ## Remaining REL1-B acceptance
 
-NOT RUN / not yet implemented in B1:
-- Python production/development dependency resolution and frozen lock;
-- wheelhouse creation and hash-checked offline pip install;
-- npm offline-cache assembly and registry-blocked `npm ci`;
-- final bundle assembly;
+NOT RUN / not yet implemented:
 - clean Linux development installation;
 - fully provisioned production Linux installation;
 - Windows/WSL2 runtime installation;

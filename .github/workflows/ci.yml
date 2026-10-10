@@ -127,6 +127,75 @@ jobs:
           bash scripts/build-python-wheelhouse.sh \
             "$RUNNER_TEMP/openjm-wheelhouse" backend/requirements.lock
 
+  rel1_offline_bundle_gate:
+    name: REL1 / offline bundle + registry-blocked acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend and test dependencies
+        working-directory: backend
+        run: python -m pip install --prefer-binary -e ".[dev]"
+
+      - name: Validate release-tooling scripts
+        run: |
+          for script in \
+            scripts/build-rel1-bundle.sh \
+            scripts/build-npm-offline-cache.sh \
+            scripts/stage-release-payload.sh \
+            scripts/rel1-offline-acceptance.sh \
+            scripts/build-python-wheelhouse.sh; do
+            bash -n "$script"
+          done
+          python -m json.tool frontend/package-lock.json >/dev/null
+
+      - name: REL1-B bundle determinism and exclusion tests
+        working-directory: backend
+        run: |
+          python -m pytest -q --tb=short \
+            tests/test_rel1b_bundle_assembly.py \
+            tests/test_rel1b_release_integrity.py \
+            tests/test_rel1b_release_locks.py
+
+      - name: Assemble a bundle from a pinned lock
+        # CI smoke: assembly of the real layout (payload + lock + wheelhouse +
+        # npm cache + manifest) with a small, fast, hash-pinned lock so the
+        # registry-blocked acceptance below stays bounded. The committed
+        # production lock's wheelhouse is proven by the drift gate; the final
+        # full-lock install on a real host is REL1-B4.
+        run: |
+          set -euo pipefail
+          SMOKE_LOCK="$RUNNER_TEMP/smoke-requirements.lock"
+          python -m pip download --no-deps --only-binary=:all: --dest "$RUNNER_TEMP/smoke" six==1.16.0
+          SIX_HASH="$(sha256sum "$RUNNER_TEMP"/smoke/six-*.whl | awk '{print $1}')"
+          printf 'six==1.16.0 \\\n    --hash=sha256:%s\n' "$SIX_HASH" > "$SMOKE_LOCK"
+          bash scripts/build-rel1-bundle.sh --lock "$SMOKE_LOCK" "$RUNNER_TEMP/bundle"
+
+      - name: Registry-blocked acceptance (python --no-index + npm --offline)
+        # Proves the assembled bundle installs/builds with public registries
+        # refused: pip --no-index --find-links wheelhouse --require-hashes, and
+        # npm ci --offline against npm/cache pointing at a dead registry. This is
+        # the CI-level proof; REL1-B4 runs the same script on a real host.
+        run: |
+          bash scripts/rel1-offline-acceptance.sh \
+            "$RUNNER_TEMP/bundle/openjm-rel1-0.2.0"
+
   frontend:
     name: Frontend / Node 22
     runs-on: ubuntu-latest
