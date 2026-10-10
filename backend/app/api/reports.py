@@ -125,10 +125,18 @@ def _authorized_tables(source: DataSource) -> set[str]:
     return {item.strip().lower() for item in payload if item.strip()}
 
 
-async def _sources_available(db: AsyncSession, evidence: list[Evidence]) -> bool:
+async def _sources_available(
+    db: AsyncSession, evidence: list[Evidence], principal: Principal | None = None
+) -> bool:
+    """Revalidate the report's pinned sources under current authorization.
+
+    ``principal`` defaults to the request context principal. Callers that need to
+    evaluate authorization for an explicit actor (BV6 curation revalidates under
+    the acting principal) pass it directly.
+    """
     document_ids, source_ids = _source_ids(evidence)
     structured_tables = _structured_tables(evidence)
-    principal = current_principal()  # Replace only via VS5 trusted identity context.
+    principal = principal or current_principal()  # Replace only via VS5 trusted identity context.
     access = access_from_principal(principal)
     tenant_id = principal.tenant_id
     if document_ids:

@@ -22,6 +22,7 @@ from app.api import (
     platform_capacity,
     platform_entitlements,
     platform_usage,
+    report_curation,
     report_exports,
     report_definitions,
     report_runs,
@@ -163,3 +164,4 @@ app.include_router(reports.router, prefix="/api")
 app.include_router(report_definitions.router, prefix="/api")
 app.include_router(report_runs.router, prefix="/api")
 app.include_router(report_exports.router, prefix="/api")
+app.include_router(report_curation.router, prefix="/api")

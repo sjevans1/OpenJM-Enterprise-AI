@@ -270,6 +270,41 @@ class SavedReport(Base):
     snapshot_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
+    # --- BV6-A governed report curation ---
+    # ``curation_state`` is the evidentiary state of this snapshotted report:
+    # one of none/under_review/approved/authoritative. ``featured`` is a
+    # SEPARATE presentation/catalog flag and NEVER overwrites the curation
+    # state, so a tenant-admin highlight can never be mistaken for, or silently
+    # promote, authoritative evidentiary meaning. Saving a report always
+    # produces ``none`` and ``featured`` false; nothing here changes retrieval
+    # ranking or trains a model.
+    #
+    # The state vocabulary is enforced in app.services.report_curation (and by
+    # tests), not by a DB CHECK constraint: these columns are added to live
+    # tables by an additive migration, where SQLite cannot add a CHECK after the
+    # fact, so a model-level constraint would drift from a migrated deployment.
+    curation_state: Mapped[str] = mapped_column(
+        String(16), default="none", server_default="none", nullable=False
+    )
+    # Human-readable reason for the last transition (bounded, never free SQL).
+    curation_reason: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    # Linkage to the append-only audit row written for the last transition.
+    curation_audit_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Departmental ownership, derived deterministically from the pinned source
+    # scope (never guessed from a display name or email); null when the scope
+    # carries no single department.
+    curation_department_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The two distinct authorized principals required for ``authoritative``.
+    curation_first_approver_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    curation_second_approver_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    curation_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Presentation/catalog highlight. Admin-only; carries no evidentiary weight.
+    featured: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+
 
 class ReportDefinitionVersion(Base):
     """Immutable scoped definition. No SQL, model output or execution authority."""

@@ -325,3 +325,31 @@ class ChatArtifactDetail(ChatArtifactOut):
 # the four storable formats above. Rendering is a read-only transform that
 # carries no execution authority and never fetches a remote asset.
 ArtifactRenderFormat = Literal["pdf", "docx"]
+
+
+# BV6-A: governed report curation. ``curation_state`` is the evidentiary state;
+# ``featured`` is a separate presentation flag and never overwrites it.
+class ReportCurationView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report_id: str
+    curation_state: str
+    featured: bool
+    department_id: str | None = None
+    reason: str | None = None
+    updated_at: datetime | None = None
+
+
+class CurationTransitionRequest(BaseModel):
+    """A reason is optional free text, bounded server-side; never SQL or a plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=240)
+
+
+class CurationFeatureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    featured: bool
+    reason: str | None = Field(default=None, max_length=240)
