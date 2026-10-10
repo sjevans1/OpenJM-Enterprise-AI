@@ -1,79 +1,34 @@
 # OpenJM Enterprise AI — Product Roadmap
 
-## Current post-VS8 phase — observed 2026-10-08
+Observed at accepted `main@c5ed073a332da7a8dd120dc3d85bf8e2328a0511` on 2026-10-10.
 
-**Inspected main:** `18cabaa2d03faace8dac69b0b62a143e5e629125` (BV1/BV2/M1 foundations plus the integrated BV3 train).  
-**Execution umbrella:** [Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45); commercialization: [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
+## Current phase: productization and final qualification
 
-The BV3 gate is closed. BV3-A, BV3-B and BV3-C are merged in `main` at
-`18cabaa2` (PRs #52, #53, #54) after the BV3-C PostgreSQL deployment acceptance
-passed and corrected a downgrade defect in migration `0014`. Plan records:
-[BV3-A](plan/BV3_A.md), [BV3-B](plan/BV3_B.md), [BV3-C](plan/BV3_C.md).
-Remaining sequence:
+The feature-heavy post-VS8 phase is substantially complete. The roadmap is now deliberately narrow.
 
-1. Authorize and begin **INF1-A** serving contracts/registry/routing/attribution
-   and **M2** usage aggregation in parallel where schema/API ownership is reconciled.
-2. Reconcile INF1 admission/reservation semantics with **M3** before commercial
-   completion; follow with INF1 capacity telemetry/reconciliation qualification.
+Accepted foundation includes VS1-VS8; BV1-BV6; M1-M3; INF1-A/B/C; E1-E3; and delegated support-content access. Current detail is in `docs/ACCEPTANCE_MATRIX.md`.
 
-The [INF1 plan](plan/INF1.md) links architecture, contracts, A/B/C acceptance and
-an executor handoff. This documentation does not mark INF1 implemented or
-authorize a merge; INF1 runtime work has not started, and the BV3 acceptance above
-does not transfer to INF1. BV4/BV5/BV6 remain under Issue #45's existing scope.
-Workspace remains separate.
+## Next: REL1
 
-## Historical VS4 roadmap snapshot
+### REL1-A — reproducible deployment
+Canonical release identity; deterministic inputs; supported Linux/Windows delivery; production bootstrap; health/readiness verification.
 
-The remaining sections record the earlier VS4 stage and then-planned VS5–VS8
-work. They preserve history and do not override the current phase above. Refresh
-live PR/main evidence before execution.
+### REL1-B — installer/appliance packaging
+Guided install experience; offline/air-gapped bundle where required; release manifest + checksums; bundled dependencies/model artifacts as required by profile.
 
-## Delivered foundation
+### REL1-C — upgrade, rollback and operations lifecycle
+Upgrade path; rollback boundaries; backup/restore integration; doctor/support-bundle tooling; failure diagnosis and recovery.
 
-| Area | Delivered state |
-| --- | --- |
-| VS1 — Chat + Knowledge | Server-owned conversations, document catalog, real RAG evidence/citations and deletion acceptance. |
-| VS2 — Structured Data | User-scoped relational sources, encrypted credentials, schema discovery, governed read-only SQL and execution traces. |
-| RAG Phase E | Evidence deduplication and bounded neighboring-chunk expansion. |
-| VS3 — Explicit execution modes | Chat, Knowledge, Data, independent Hybrid and policy-dependent Hybrid with grounded SQL/policy controls. |
-| VS4-A | Immutable permission-scoped saved snapshots. |
-| VS4-B1/B2A/B2B | Explicit Chat preflight, immutable source-bound definitions and source scope propagated before retrieval/planning/execution. |
-| VS4-B2C1/B2C2 | Immutable ReportRun lifecycle/history and explicit manual governed execution with idempotency, budgets, reauthorization and bounded results. |
-| VS4-C1 | Manual Reports UX: definition selection, explicit confirmation, retry/idempotency handling, immutable run history/failure/revocation UX. |
-| VS4-C2 | Governed exports of already-persisted bounded results: structured CSV and escaped self-contained HTML/print artifacts. |
+### REL1-D — repository normalization and handoff
+Current architecture/status/README; threat model; API/integration index; troubleshooting/incident/release runbooks; final golden journeys; zero-tribal-knowledge handoff rehearsal.
 
-## VS4 — accepted
+## After REL1: Rahkia specialist integration
 
-VS4 closed through PR #32, merge `86164252c38c74e1d7417d61c310951472ff81f8`. Post-merge main CI run `37435164243` passed the full backend regression and frontend. Integrated VS4-D acceptance passed 39/39 assembled runtime/browser assertions plus 10/10 synthetic upgrade/recovery checks. Retained limitations are carried forward explicitly into VS5 and issues #6/#7.
+Do not connect the current product to Rahkia during REL1. After product completion, wire the stable inference contract to Rahkia and qualify model/runtime call paths, M1/M2/M3 attribution, hardware, security, performance and supported deployment topologies.
 
-## Planned remaining vertical slices
+## Product decisions retained for v1
 
-### VS5 — Identity, authorization and tenancy
-Replace the development `dev_user_id` assumption with trusted identity/tenant context, OIDC/SSO and negative isolation/revocation tests. Issue #6 document lifecycle concurrency and #7 versioned application-metadata migrations remain prerequisites for production multi-user claims.
-
-### VS6 — Bounded actions / agent runtime
-Add explicit read/write tool classes, planning budgets, approval boundaries for mutation, idempotency and reconciliation. No model-direct arbitrary network or SQL authority.
-
-### VS7 — Connectors and automations
-Permission-aware, revocable integrations and scheduling only after VS5/VS6 controls. Workspace remains a separately deployed optional product connected only through versioned APIs under issue #9.
-
-### VS8 — Product operations and delivery
-Repeatable on-prem packaging, observability, backup/restore, update/rollback, retention, secure defaults, performance/load acceptance and commercialization gates.
-
-## Known parallel correctness work
-
-- Issue #6 — cross-process document lifecycle correctness.
-- Issue #7 — versioned SQLite/PostgreSQL application-metadata migrations.
-- Issue #9 — optional disabled-by-default Workspace API boundary.
-- PR #5 — stale Phase E draft; reconcile/close, never merge wholesale.
-- PR #13 — stale documentation draft. Its useful roadmap/README content is being reconciled into VS4-D rather than merged blindly.
-
-## Delivery rules
-
-1. Branch from current `main`; no direct feature pushes to main.
-2. Preserve unrelated local files and use isolated synthetic acceptance fixtures.
-3. Focused tests during iteration; exact-head fast/full hosted CI at review gates.
-4. Negative security cases fail closed and prove no unauthorized tool execution.
-5. Real-model/browser evidence is required where the contract calls for it.
-6. Do not claim VS5–VS8 or production multi-user readiness from VS4 acceptance.
-
+- `public`/`internal` with `tenant_visible=true` are tenant-wide within the tenant boundary.
+- source-level classification is the v1 governance unit.
+- explicit Chat/Knowledge/Data/Hybrid modes remain until implicit routing is proven safe.
+- Workspace remains a standalone product and repository.
