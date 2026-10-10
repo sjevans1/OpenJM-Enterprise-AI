@@ -62,17 +62,47 @@ host it is stated explicitly under the row.
 | 11 | Frontend production build | PASS | Registry-blocked `npm ci --offline` + `npm run build` from the release npm cache: `tsc --noEmit && vite build` OK, `dist/index.html` emitted. |
 | 12 | Browser / persona journey | NOT RUN | No browser/auth journey executed against the deployed build. |
 
+## Production application wheel
+
+The backend build backend is Hatchling, which is **not** in the production
+wheelhouse or `backend/requirements.lock`, so the installer's editable app step
+(`pip install --no-deps -e .`) cannot build the application on a registry-blocked
+offline host. Rather than add `hatchling` to the runtime lock, the release bundle
+now ships a pre-built application wheel:
+
+- **Built by** `scripts/build-rel1-bundle.sh` (from the controlled build env,
+  which has network; build isolation is allowed there) with
+  `python -m pip wheel --no-deps --wheel-dir "$BUNDLE/python/app" "$ROOT/backend"`.
+  It asserts exactly one wheel named
+  `openjm_enterprise_ai_backend-<PRODUCT_VERSION>-*.whl` is produced.
+- **Shipped at** `python/app/openjm_enterprise_ai_backend-<version>-*.whl`
+  (a sibling of the `app/` tree), so the manifest generated last covers it
+  automatically (it is listed in `RELEASE-MANIFEST.json`).
+- **Installed by** `scripts/install-linux.sh --profile production`: the lock is
+  installed from the bundled wheelhouse with
+  `--no-index --find-links python/wheelhouse --require-hashes`, then the single
+  bundled wheel is installed with `--no-deps` (never editable, never from a
+  package index, never with build isolation). A missing or ambiguous wheel is a
+  hard failure:
+  `production install requires the bundled application wheel at python/app/openjm_enterprise_ai_backend-<version>-*.whl`.
+- **Development** keeps the existing editable install
+  (`pip install --quiet --no-deps -e .`).
+
+The production runtime lock is unchanged: no new runtime dependency and no
+`hatchling` were added. Code coverage for this contract lives in
+`backend/tests/test_rel1b_app_wheel.py` (hermetic). The real production install
+on a clean/offline host is still run by the lead; the host rows below are not
+promoted by this change.
+
 ## Blocked / decision required
 
-- **Offline editable app install (`pip install --no-deps -e .`).** The application
-  build backend `hatchling` is not present in the production wheelhouse or in
-  `backend/requirements.lock`, so the installer's editable app step cannot build
-  the application in a registry-blocked environment. For this acceptance the
-  backend was run from the bundle source via `PYTHONPATH` instead. This is a
-  release-tooling gap, not a security or product regression. Options for human
-  decision: vendor the build backend into the offline payload, ship a pre-built
-  application wheel, or drop the editable install from the offline path and run
-  from source. Installer semantics were not changed.
+- **Offline editable app install (`pip install --no-deps -e .`)** — resolved for
+  production by shipping a pre-built application wheel in the bundle (see
+  "Production application wheel" above). The prior recommendation to vendor the
+  build backend or drop the editable path is superseded for the production
+  profile; development retains the editable install. Installer semantics for the
+  production profile changed from editable source install to bundled-wheel
+  install.
 
 ## Code-tested coverage detail
 
