@@ -18,34 +18,15 @@ revision.
 | release_id | `OPENJM_RELEASE_ID` | `/api/version`, `/api/config/public` |
 | schema head | the Alembic script head (currently `0021_support_content_scope`) | `/api/ready` |
 
-### A drift to resolve before REL1
+### Release identity normalization (REL1-A)
 
-The product version is defined in one place at runtime
-(`backend/app/version.py`, `PRODUCT_VERSION = "0.2.0"`) but the build manifests
-disagree with it: `backend/pyproject.toml` declares `version = "0.1.0"` and
-`frontend/package.json` declares `version = "0.1.0"`. The version module's own
-comment says to keep the three in step.
+REL1-A establishes `backend/app/version.py::PRODUCT_VERSION` as the
+canonical product version and machine-checks the backend package metadata,
+frontend package metadata and npm lock metadata against it. They are normalized
+to `0.2.0`, and the release train is `REL1`.
 
-**Recommended canonical source.** `backend/app/version.py` `PRODUCT_VERSION` is
-the canonical source. It is already the value the running system reports:
-`/api/version`, `/api/health` and `/api/config/public` all surface it, the
-FastAPI application version is set from it, and the backup manifest
-(`app/ops/backup.py`) stamps it. `docs/RELEASE.md` already names
-`backend/app/version.py` as the single source of truth for the runtime product
-version. The two package manifests are build metadata that must agree with it,
-not independent authorities.
-
-**Minimal safe normalization.** Two isolated one-line edits bring the build
-manifests into agreement: set `version` in `backend/pyproject.toml` and in
-`frontend/package.json` to `0.2.0`. Neither edit changes runtime behaviour, and
-neither file is imported by application code. A short test that asserts the three
-values are equal would prevent the drift recurring. This is the smallest change
-that removes the contradiction a release manifest would otherwise carry; a
-build-time derivation from the Python source is the more durable option but is a
-larger change and is not required to close the finding.
-
-This is recorded as a finding for the REL1 packaging work. It is not corrected
-in this documentation lane, which changes no product code.
+The runtime and package manifests must remain identical. A mismatch is an
+acceptance failure, not a documentation-only warning.
 
 ## Proposed release manifest schema
 

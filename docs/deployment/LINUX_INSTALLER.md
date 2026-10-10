@@ -34,7 +34,7 @@ scripts/install-linux.sh [--profile development|production] [--skip-frontend]
 1. **Prerequisites (version-checked).** `git` required. Python must be 3.11
    (the script probes `python3.11`, `python3.12`, `python3` and accepts only a
    3.11 interpreter; DB-GPT pins aiohttp 3.8.4, which does not build on 3.12).
-   Unless `--skip-frontend`, Node 20+ and `npm` are required.
+   Unless `--skip-frontend`, Node 22 and `npm` are required.
 2. **Configuration template.** If `.env` exists it is left untouched. Otherwise
    the profile-appropriate template is copied and the operator is told to edit
    it. The production copy is a reminder to set real secrets before start.
@@ -82,3 +82,12 @@ frontend build) Node availability. An air-gapped install needs the offline
 bundle described in [OFFLINE_BUNDLE.md](OFFLINE_BUNDLE.md); the installer does
 not yet accept an offline source. That extension is REL1 packaging work, not
 present in this lane.
+
+## REL1-A post-install verifier
+
+Every successful install finishes by running
+`scripts/verify-rel1a-install.py`. It checks the canonical release identity,
+Python 3.11, Node 22 when the frontend is included, the requested profile,
+the backend virtual environment and the built frontend directory. Production
+installs install runtime backend dependencies only; development installs include
+the `[dev]` extras.

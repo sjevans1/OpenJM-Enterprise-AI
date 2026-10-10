@@ -20,6 +20,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-wsl2.ps1 `
 | --- | --- | --- |
 | `-Distro` | `Ubuntu` | the WSL distribution to target |
 | `-RepoPath` | the script's parent directory | the Windows repository path to map |
+| `-Profile` | `development` | explicit `development` or `production` profile passed through to the Linux installer |
+| `-SkipFrontend` | off | pass `--skip-frontend` to the Linux installer |
 | `-SkipInstall` | off | verify prerequisites then stop without installing |
 | `-AllowDistroInstall` | off | permit installing the target distribution explicitly |
 | `-DetectOnly` | off | run detection and exit, with no install or delegation |
@@ -41,8 +43,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-wsl2.ps1 `
 4. **Verify prerequisites inside WSL.** The script checks that the mapped
    directory exists and `python3.11` is present; if not, it installs
    `python3.11`, `python3.11-venv`, `python3-pip`, `git` and `curl` inside the
-   distribution, and reminds the operator to install Node 20+.
-5. **Delegate.** `wsl -d <Distro> -- bash -lc "cd '<wslPath>' && bash scripts/install-linux.sh"`.
+   distribution, and reminds the operator to install Node 22.
+5. **Delegate.** The bootstrap passes the explicit profile (and optional frontend skip) to the same Linux installer, e.g. `bash scripts/install-linux.sh --profile production`.
    A non-zero exit fails the bootstrap.
 6. **Print the start command** for launching the backend inside WSL.
 

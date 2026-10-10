@@ -20,6 +20,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "$PROFILE" == "development" || "$PROFILE" == "production" ]] || {
+  echo "ERROR: --profile must be development or production" >&2
+  exit 2
+}
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 echo "== OpenJM install ($PROFILE profile) at $ROOT =="
@@ -42,7 +47,7 @@ echo "python: $($PY --version)"
 if [[ "$SKIP_FRONTEND" -eq 0 ]]; then
   command -v node >/dev/null 2>&1 || fail "Node.js 22 is required for the frontend"
   NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-  [[ "$NODE_MAJOR" -ge 20 ]] || fail "Node 20+ required (found $(node --version))"
+  [[ "$NODE_MAJOR" -eq 22 ]] || fail "Node.js 22 is required (found $(node --version))"
   command -v npm >/dev/null 2>&1 || fail "npm is required"
 fi
 
@@ -66,9 +71,13 @@ if [[ ! -d .venv ]]; then
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
-python -m pip install --quiet --upgrade pip
-python -m pip install --quiet --prefer-binary -e ".[dev]"
-echo "backend dependencies installed"
+echo "pip: $(python -m pip --version)"
+if [[ "$PROFILE" == "production" ]]; then
+  python -m pip install --quiet --prefer-binary -e "."
+else
+  python -m pip install --quiet --prefer-binary -e ".[dev]"
+fi
+echo "backend dependencies installed ($PROFILE profile)"
 
 # --- 4. Configuration preflight (fail closed on a production misfit) --------
 python -m app.core.preflight || fail "configuration preflight failed; fix .env before starting"
@@ -84,6 +93,13 @@ if [[ "$SKIP_FRONTEND" -eq 0 ]]; then
   (cd frontend && npm ci --no-audit --no-fund && npm run build)
   echo "frontend built into frontend/dist"
 fi
+
+VERIFY_ARGS=(--profile "$PROFILE")
+if [[ "$SKIP_FRONTEND" -eq 1 ]]; then
+  VERIFY_ARGS+=(--skip-frontend)
+fi
+backend/.venv/bin/python scripts/verify-rel1a-install.py "${VERIFY_ARGS[@]}"
+echo "REL1-A post-install verification passed"
 
 cat <<'EOF'
 

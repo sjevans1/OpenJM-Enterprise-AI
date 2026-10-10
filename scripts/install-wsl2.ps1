@@ -21,6 +21,9 @@
 param(
   [string]$Distro = "Ubuntu",
   [string]$RepoPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+  [ValidateSet("development", "production")]
+  [string]$Profile = "development",
+  [switch]$SkipFrontend,
   [switch]$SkipInstall,
   [switch]$AllowDistroInstall,
   [switch]$DetectOnly
@@ -94,11 +97,13 @@ if ($SkipInstall) {
 }
 
 # --- 5. Run the same installer used on a native Linux host -------------------
-wsl -d $Distro -- bash -lc "cd '$wslPath' && bash scripts/install-linux.sh"
+$linuxArgs = "--profile $Profile"
+if ($SkipFrontend) { $linuxArgs += " --skip-frontend" }
+wsl -d $Distro -- bash -lc "cd '$wslPath' && bash scripts/install-linux.sh $linuxArgs"
 $exit = $LASTEXITCODE
 if ($exit -ne 0) { Fail "Linux installer failed inside WSL (exit $exit)." }
 
 Write-Host ""
-Write-Host "== WSL2 bootstrap complete =="
+Write-Host "== WSL2 bootstrap complete ($Profile profile) =="
 Write-Host "Start the backend inside WSL:"
 Write-Host "  wsl -d $Distro -- bash -lc `"cd '$wslPath/backend' && source .venv/bin/activate && env -u PYTHONPATH -u PYTHONHOME .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`""

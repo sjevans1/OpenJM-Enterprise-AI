@@ -20,7 +20,7 @@ See `docs/ACCEPTANCE_MATRIX.md` for the current evidence map.
 | Real vector/RAG authoritative-candidate path | NOT RUN | #75 automated semantics accepted; real runtime qualification remains. |
 | Rahkia application cutover | DEFERRED | Specialist integration follows product completion. |
 | Workspace boundary | OK | Workspace remains a standalone repository/product. |
-| Release identity consistency | OPEN | Runtime reports 0.2.0 while backend/frontend package manifests remain 0.1.0. |
+| Release identity consistency | IN REL1-A | Canonical runtime/backend/frontend/npm-lock version is normalized to 0.2.0 and machine-checked on the REL1-A branch. |
 
 ## Remaining useful handoff documentation
 
