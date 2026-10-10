@@ -51,3 +51,9 @@ def test_post_install_verifier_is_stdlib_only_and_static_gate_is_available() -> 
     assert "verify_toolchain(" in script
     # Prevent accidental dependency on the application environment before it is verified.
     assert not re.search(r"^from (fastapi|sqlalchemy|pydantic)\b", script, re.MULTILINE)
+
+
+def test_alembic_uses_current_path_separator_setting() -> None:
+    config = (ROOT / "backend" / "alembic.ini").read_text(encoding="utf-8")
+    assert "path_separator = os" in config
+    assert "version_path_separator" not in config
