@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND="$ROOT/backend"
 OUT_DIR="${1:-$BACKEND}"
-PIP_VERSION="26.0.1"\nPIP_TOOLS_VERSION="7.5.3"
+PIP_VERSION="26.0.1"
+PIP_TOOLS_VERSION="7.5.3"
 
 python -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3,11) else 1)' || {
   echo "ERROR: Python 3.11 is required to compile OpenJM locks." >&2
