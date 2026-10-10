@@ -41,6 +41,7 @@ import {
   logout,
   onAuthLost,
   type AuthState,
+  type Principal,
 } from './auth'
 import ConnectorsPanel from './ConnectorsPanel'
 import OperationsPanel from './OperationsPanel'
@@ -75,6 +76,52 @@ export function canAdminister(
   if (!principal) return false
   if (principal.permissions.includes('tenant:admin')) return true
   return principal.role === 'admin' || principal.role === 'owner'
+}
+
+/**
+ * Which tenant surfaces the navigation offers, derived ONLY from the
+ * server-resolved principal context. This is presentation, not the security
+ * boundary: the FastAPI backend re-authorizes every request, and hiding an
+ * entry never substitutes for that.
+ *
+ * The platform control plane (`platform_capabilities`) is a separate axis and
+ * is intentionally absent here — it never adds an ordinary tenant entry.
+ */
+export type NavVisibility = {
+  chat: boolean
+  reports: boolean
+  knowledge: boolean
+  data: boolean
+  administration: boolean
+}
+
+const NO_NAV: NavVisibility = {
+  chat: false,
+  reports: false,
+  knowledge: false,
+  data: false,
+  administration: false,
+}
+
+/** The development workspace resolves the local owner, which holds every capability. */
+const FULL_NAV: NavVisibility = {
+  chat: true,
+  reports: true,
+  knowledge: true,
+  data: true,
+  administration: true,
+}
+
+export function navVisibilityFor(principal: Principal): NavVisibility {
+  const administer = canAdminister(principal)
+  const steward = principal.steward_scopes.length > 0
+  return {
+    chat: principal.permissions.includes('chat:use'),
+    reports: principal.permissions.includes('reports:read'),
+    knowledge: principal.permissions.includes('knowledge:write') || steward || administer,
+    data: principal.permissions.includes('data:write') || steward || administer,
+    administration: administer,
+  }
 }
 
 function formatBytes(bytes: number) {
@@ -307,11 +354,15 @@ export default function App() {
   const pendingRunIntentRef = useRef<ReportRunIntent | null>(null)
   const pendingReportId = useRef<string | null>(null)
   const [authState, setAuthState] = useState<AuthState>({ status: 'loading' })
-  // Client administration visibility. Dev mode has no principal but resolves the
-  // local owner on the server, which does hold tenant:admin.
-  const administer =
-    authState.status === 'dev' ||
-    (authState.status === 'authenticated' && canAdminister(authState.principal))
+  // Chat-first, permission-aware navigation. The dev workspace resolves the
+  // local owner server-side, so it keeps every surface; an authenticated
+  // principal gets exactly the surfaces its resolved capabilities grant.
+  const nav: NavVisibility =
+    authState.status === 'dev'
+      ? FULL_NAV
+      : authState.status === 'authenticated'
+        ? navVisibilityFor(authState.principal)
+        : NO_NAV
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -1013,48 +1064,59 @@ export default function App() {
         </button>
 
         <nav className="primary-nav">
-          <button
-            className={view === 'chat' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView('chat')}
-          >
-            <MessageSquareText size={17} />
-            Chat
-          </button>
-          <button
-            className={view === 'knowledge' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView('knowledge')}
-          >
-            <FolderOpen size={17} />
-            Knowledge
-            <span className="count-pill">{documents.length}</span>
-          </button>
-          <button
-            className={view === 'data' ? 'nav-item active' : 'nav-item'}
-            onClick={() => setView('data')}
-          >
-            <Database size={17} />
-            Data
-            <span className="count-pill">{dataSources.length}</span>
-          </button>
+          {nav.chat && (
+            <button
+              className={view === 'chat' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setView('chat')}
+            >
+              <MessageSquareText size={17} />
+              Chat
+            </button>
+          )}
+          {nav.knowledge && (
+            <button
+              className={view === 'knowledge' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setView('knowledge')}
+            >
+              <FolderOpen size={17} />
+              Knowledge
+              <span className="count-pill">{documents.length}</span>
+            </button>
+          )}
+          {nav.data && (
+            <button
+              className={view === 'data' ? 'nav-item active' : 'nav-item'}
+              onClick={() => setView('data')}
+            >
+              <Database size={17} />
+              Data
+              <span className="count-pill">{dataSources.length}</span>
+            </button>
+          )}
 
-          <button
-            className={view === 'reports' ? 'nav-item active' : 'nav-item'}
-            onClick={() => {
-              reportOpenSequence.current += 1
-              pendingReportId.current = null
-              setView('reports')
-              setActiveReport(null)
-              clearReportExecution()
-              setReportError(null)
-              loadReports()
-            }}
-          >
-            <Gauge size={17} />
-            Reports
-            <span className="count-pill">{reports.length}</span>
-          </button>
+          {nav.reports && (
+            <button
+              className={view === 'reports' ? 'nav-item active' : 'nav-item'}
+              onClick={() => {
+                reportOpenSequence.current += 1
+                pendingReportId.current = null
+                setView('reports')
+                setActiveReport(null)
+                clearReportExecution()
+                setReportError(null)
+                loadReports()
+              }}
+            >
+              <Gauge size={17} />
+              Reports
+              <span className="count-pill">{reports.length}</span>
+            </button>
+          )}
 
-          {administer && (
+          {/* The OpenJM platform control plane is a separate surface and is
+              never mixed into ordinary tenant navigation: no platform
+              capability adds an entry here. */}
+          {nav.administration && (
             <>
               <div className="nav-divider" />
               <button
