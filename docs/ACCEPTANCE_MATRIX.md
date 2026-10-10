@@ -4,7 +4,8 @@ Living acceptance matrix for the Hardening & Business Value Realization phase
 (Issue #45). It maps the global phase-acceptance statements to current
 implementation evidence and the remaining manual/runtime qualification.
 
-- **Observed at `7ca41149c7a23e8330c4dfd1f377bb4ad2feb477`** on **2026-10-10**.
+- **Current integrated `main`: `23ea48458747e616c7f988eeb73c4d04ff7b7ef2`** on **2026-10-10**.
+- **Live qualification product head: `7ca41149c7a23e8330c4dfd1f377bb4ad2feb477`**. The only intervening repository delta to current `main` is PR #85's CI-only change to `.github/workflows/ci.yml` (Ubuntu 24.04 pin + GitHub Actions v7); no application, release, runtime, lock, migration, or product files changed, so the live qualification evidence remains applicable to the current product tree.
 - Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3, REL1-A and
   REL1-B1..B4, on the accepted VS1-VS8 foundation.
 - REL1 final-candidate exact-head acceptance: full run **38085064975** on
@@ -138,7 +139,7 @@ and final integrated qualification, not another broad business-feature wave.
    Source-level classification plus authorized-object narrowing remains the v1
    contract unless an unsplittable mixed-sensitivity source creates a proven need.
 
-## Live/deployment qualification (2026-10-10, product head `7ca41149`)
+## Live/deployment qualification (2026-10-10, qualified product head `7ca41149`; current `main` `23ea4845` differs only by CI workflow modernization)
 
 | Gate | Environment | Status | Evidence |
 | --- | --- | --- | --- |
