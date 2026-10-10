@@ -1,0 +1,42 @@
+{
+  "evidence": [
+    {
+      "passage": "authorized passage for probe-doc-beta",
+      "provenance": {
+        "duplicate_count": 1,
+        "retrieval_mode": "semantic",
+        "retrieval_role": "primary",
+        "tool": "knowledge.search"
+      },
+      "score": null,
+      "source_id": "probe-doc-beta",
+      "source_type": "document",
+      "title": "beta.txt"
+    },
+    {
+      "passage": "authorized passage for probe-doc-alpha",
+      "provenance": {
+        "duplicate_count": 1,
+        "retrieval_mode": "semantic",
+        "retrieval_role": "primary",
+        "tool": "knowledge.search"
+      },
+      "score": null,
+      "source_id": "probe-doc-alpha",
+      "source_type": "document",
+      "title": "alpha.txt"
+    }
+  ],
+  "output": {
+    "deduplicated_count": 0,
+    "evidence_count": 2,
+    "evidence_limit": 7,
+    "neighbor_evidence_count": 0,
+    "primary_evidence_count": 2
+  },
+  "trace_metadata": {
+    "neighbor_evidence_count": 0,
+    "primary_evidence_count": 2,
+    "processing_location": "local"
+  }
+}

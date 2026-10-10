@@ -72,6 +72,30 @@ class Settings(BaseSettings):
     # isolated acceptance via OPENJM_REPORT_RUNS_ENABLED=true.
     report_runs_enabled: bool = False
 
+    # --- BV6-B opt-in authoritative report candidates -------------------------
+    # Versioned per-tenant retrieval policy, default OFF. When False an
+    # ``authoritative`` SavedReport (BV6-A curation) has ZERO retrieval
+    # presence and knowledge retrieval is byte-identical to the pre-BV6-B
+    # behaviour. When True, an eligible authoritative report contributes an
+    # ADDITIONAL evidence candidate, appended after the ordinary governed
+    # document evidence; it never replaces, reorders or re-scores an ordinary
+    # document result. This single setting is the tenant policy gate for a
+    # single-tenant deployment; a multi-tenant store would key the same
+    # decision on tenant id without changing the eligibility predicate.
+    report_authoritative_candidates_enabled: bool = False
+    # Policy version stamped into candidate provenance so a contribution is
+    # auditable against the policy that produced it.
+    report_authoritative_candidates_policy_version: str = "bv6b-1"
+    # Upper bound on how many authoritative reports may be offered as additive
+    # candidates for one request. Deterministic; never a ranking signal.
+    report_authoritative_candidates_max: int = 5
+    # Minimum number of shared significant terms (deterministic query-relevance
+    # gate) required before an authoritative report may contribute a candidate.
+    # Authority alone must never imply global relevance: a report whose own
+    # title/definition text shares fewer than this many significant tokens with
+    # the current query is NOT a candidate. Values < 1 fall closed to 1.
+    report_authoritative_candidates_min_overlap: int = 1
+
     # --- VS5 trusted identity -------------------------------------------------
     # 'oidc' requires a validated credential on every request and is the
     # production default. 'dev' resolves a single local principal that is

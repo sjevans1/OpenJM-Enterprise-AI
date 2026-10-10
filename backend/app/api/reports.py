@@ -38,8 +38,46 @@ settings = get_settings()
 MAX_EVIDENCE = 24
 MAX_SNAPSHOT_BYTES = 65536
 MAX_ANSWER_CHARS = 24000
-ALLOWED_EVIDENCE_TYPES = {"document", "structured_query"}
+# ``report`` is a BV6-B authoritative-report candidate reference: a bounded,
+# additive pointer to another governed SavedReport. It carries no independent
+# source identity; its revalidation defers to the pins in its provenance.
+ALLOWED_EVIDENCE_TYPES = {"document", "structured_query", "report"}
 ALLOWED_EXECUTION_CLASSES = {"knowledge", "structured", "hybrid"}
+
+
+def _report_reference_pins(item: Evidence) -> tuple[list[str], dict[str, list[str]]]:
+    """Strictly validate a BV6-B candidate reference's provenance pins.
+
+    A candidate is only ever emitted after the referenced report's pinned scope
+    passed revalidation under the requesting principal, so its provenance carries
+    those pins for a later snapshot revalidation. Fail closed on any malformed
+    shape rather than widening or silently trusting it.
+    """
+    provenance = item.provenance
+    documents = provenance.get("pinned_document_ids")
+    tables = provenance.get("pinned_source_tables")
+    if (
+        not isinstance(documents, list)
+        or len(documents) > MAX_EVIDENCE
+        or any(not isinstance(value, str) or not value for value in documents)
+        or not isinstance(tables, dict)
+        or len(tables) > MAX_EVIDENCE
+    ):
+        raise HTTPException(status_code=422, detail="Invalid report candidate provenance")
+    normalized: dict[str, list[str]] = {}
+    for source_id, pinned in tables.items():
+        if (
+            not isinstance(source_id, str)
+            or not source_id
+            or not isinstance(pinned, list)
+            or not (1 <= len(pinned) <= MAX_EVIDENCE)
+            or any(not isinstance(table, str) or not table.strip() for table in pinned)
+        ):
+            raise HTTPException(
+                status_code=422, detail="Invalid report candidate provenance"
+            )
+        normalized[source_id] = pinned
+    return documents, normalized
 
 
 def _parse_evidence(raw: str | None) -> list[Evidence]:
@@ -58,6 +96,9 @@ def _parse_evidence(raw: str | None) -> list[Evidence]:
         for item in evidence
     ):
         raise HTTPException(status_code=422, detail="Unsupported report evidence")
+    for item in evidence:
+        if item.source_type == "report":
+            _report_reference_pins(item)
     return evidence
 
 
@@ -66,6 +107,12 @@ def _source_ids(evidence: list[Evidence]) -> tuple[set[str], set[str]]:
     documents: set[str] = set()
     sources: set[str] = set()
     for item in evidence:
+        if item.source_type == "report":
+            # A BV6-B candidate reference revalidates against its declared pins.
+            pinned_documents, pinned_tables = _report_reference_pins(item)
+            documents.update(pinned_documents)
+            sources.update(pinned_tables.keys())
+            continue
         if item.source_type == "structured_query":
             sources.add(item.source_id)
             # Dependent-Hybrid SQL Evidence references the policy document used
@@ -98,6 +145,13 @@ def _structured_tables(evidence: list[Evidence]) -> dict[str, set[str]]:
     """Return bounded table provenance for every structured source."""
     by_source: dict[str, set[str]] = {}
     for item in evidence:
+        if item.source_type == "report":
+            _, pinned_tables = _report_reference_pins(item)
+            for source_id, pinned in pinned_tables.items():
+                by_source.setdefault(source_id, set()).update(
+                    table.strip().lower() for table in pinned
+                )
+            continue
         if item.source_type != "structured_query":
             continue
         tables = item.metadata.get("tables")
