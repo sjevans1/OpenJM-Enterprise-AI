@@ -5,14 +5,13 @@ document as evidence?* It is the data side of the RBAC/policy split. It is
 applied to the candidate document set **before** any vector search, before any
 evidence is built, and therefore before anything reaches a model prompt.
 
-Interpretation note (stricter reading, per Issue #45 package rule): the accepted
-data model is owner/connector scoped, so this increment applies classification as
-an *additional restriction* on that candidate set. It does not introduce tenant
-wide sharing of ``internal`` documents across owners; the last clause of
-:func:`document_is_visible` (the tenant-wide fallback) only ever admits a
-document the caller could already reach, and is included so the vocabulary is
-complete and testable. Enabling tenant-wide internal sharing is a product
-decision recorded as NOT RUN in the handoff, not silently taken here.
+Resolved v1 product decision: native ``public`` and ``internal`` sources
+with ``tenant_visible=true`` are available to active members of the same tenant,
+subject to the connector intersecting gate where applicable. Source ownership is
+a curation boundary, not the ordinary consumption boundary. ``confidential``
+and ``highly_restricted`` sources remain explicit-grant only, unknown
+classifications fail closed, and no classification may widen cross-tenant or
+provider-side connector authorization.
 """
 
 from __future__ import annotations
