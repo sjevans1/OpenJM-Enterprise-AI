@@ -68,6 +68,28 @@ def is_known_classification(value: object) -> bool:
     return isinstance(value, str) and value in SOURCE_CLASSIFICATIONS
 
 
+# Least-to-most restrictive. A bounded authority (a support delegation) carries a
+# *ceiling* in this vocabulary and may only reach sources whose rank is at or
+# below it, so a delegation can never widen the classification a caller may see.
+CLASSIFICATION_ORDER: tuple[str, ...] = (
+    SourceClassification.PUBLIC.value,
+    SourceClassification.INTERNAL.value,
+    SourceClassification.CONFIDENTIAL.value,
+    SourceClassification.HIGHLY_RESTRICTED.value,
+)
+
+
+def classification_rank(value: object) -> int:
+    """Rank a classification in :data:`CLASSIFICATION_ORDER`, failing closed.
+
+    An unknown, missing or malformed value resolves through
+    :func:`normalize_classification` to ``highly_restricted`` and therefore to
+    the highest rank, so a corrupt label is never treated as less restricted
+    than it is.
+    """
+    return CLASSIFICATION_ORDER.index(normalize_classification(value))
+
+
 def normalize_classification(value: object) -> str:
     """Coerce a stored classification to a known value, failing closed.
 

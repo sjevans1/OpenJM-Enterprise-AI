@@ -15,7 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.governance import DEFAULT_SOURCE_CLASSIFICATION
+from app.core.governance import DEFAULT_SOURCE_CLASSIFICATION, SOURCE_CLASSIFICATIONS
 from app.core.inference import ROUTE_REASONS
 from app.core.tenancy import (
     DOC_STATE_FAILED,
@@ -1314,6 +1314,15 @@ class SupportDelegation(Base):
     ``content`` scope is the only record that can support access to customer
     content, it is always granted explicitly, and it is revoked or expires
     without touching tenant ownership.
+
+    A ``content`` delegation is **bounded**: it carries an explicit
+    ``classification_ceiling`` (the least-restrictive-to-most-restrictive
+    vocabulary of :mod:`app.core.governance`), an optional
+    ``allowed_group_ids_json`` allow-list and an optional owning
+    ``department_id``. A support content read is permitted only when the target
+    document is permitted by *both* the delegation's bounded scope *and* the
+    tenant's classification/source policy: a delegation never replaces or widens
+    classification or source authorization.
     """
 
     __tablename__ = "support_delegations"
@@ -1324,6 +1333,11 @@ class SupportDelegation(Base):
         CheckConstraint("scope IN ('metadata','content')", name="ck_support_delegation_scope"),
         CheckConstraint(
             "status IN ('active','revoked')", name="ck_support_delegation_status"
+        ),
+        CheckConstraint(
+            "classification_ceiling IN "
+            "(" + ",".join(f"'{value}'" for value in SOURCE_CLASSIFICATIONS) + ")",
+            name="ck_support_delegation_classification_ceiling",
         ),
     )
 
@@ -1337,6 +1351,20 @@ class SupportDelegation(Base):
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
     granted_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Bounded content scope: the maximum classification this delegation may reach,
+    # the explicit group allow-list it is confined to, and the owning department it
+    # is confined to. Defaults are the safe minimum (tenant-neutral ``internal``,
+    # no groups, no department).
+    classification_ceiling: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=DEFAULT_SOURCE_CLASSIFICATION,
+        server_default=DEFAULT_SOURCE_CLASSIFICATION,
+    )
+    allowed_group_ids_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]", server_default="[]"
+    )
+    department_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -33,6 +33,8 @@ from app.core.identity import (
 from app.core.platform import PlatformCapability
 from app.db import get_db
 from app.services import identity as identity_service
+from app.services import support_access
+from app.services.support_access import SupportReadContext
 
 settings = get_settings()
 
@@ -165,3 +167,36 @@ async def optional_principal(
         return await get_principal(request, db=db, x_openjm_tenant=None)
     except HTTPException:
         return None
+
+
+def require_support_read(
+    scope: str = support_access.SUPPORT_CONTENT_SCOPE,
+) -> Callable[..., Awaitable[SupportReadContext]]:
+    """Guard a support-read route on an explicit, active support delegation.
+
+    The ``tenant_id`` path parameter (the *target* tenant) is injected here and
+    resolved against ``support_delegations`` for the authenticated principal. A
+    platform capability is deliberately **not** consulted: only the delegation
+    row admits the read, so platform-operator status and a metadata-scope
+    delegation both grant nothing. The decision is audited (allow or deny) and
+    committed before the route body runs.
+    """
+
+    async def _guard(
+        tenant_id: str,
+        principal: Principal = Depends(get_principal),
+        db: AsyncSession = Depends(get_db),
+    ) -> SupportReadContext:
+        try:
+            context = await support_access.resolve_support_read(
+                db, principal=principal, tenant_id=tenant_id, scope=scope
+            )
+        except AuthorizationError as exc:
+            # ``resolve_support_read`` already wrote the deny audit row.
+            await db.commit()
+            raise _to_http(exc) from exc
+        # Persist the allow audit row for the read we are about to serve.
+        await db.commit()
+        return context
+
+    return _guard
