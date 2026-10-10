@@ -39,7 +39,10 @@ scripts/install-linux.sh [--profile development|production] [--skip-frontend]
    the profile-appropriate template is copied and the operator is told to edit
    it. The production copy is a reminder to set real secrets before start.
 3. **Backend environment.** Create `backend/.venv` if absent, activate it,
-   upgrade pip, install `-e ".[dev]"` with `--prefer-binary`.
+   install the committed hash-pinned lock with hash enforcement
+   (`--require-hashes -r requirements.lock` for production,
+   `requirements-dev.lock` for development), then install the application source
+   with `--no-deps -e "."` so no unpinned transitive dependency is pulled.
 4. **Configuration preflight.** `python -m app.core.preflight` runs inside the
    venv. A non-zero exit (an unsafe production configuration) stops the install.
 5. **Database migration.** `python ../scripts/openjm_ops.py upgrade --check`
@@ -89,5 +92,6 @@ Every successful install finishes by running
 `scripts/verify-rel1a-install.py`. It checks the canonical release identity,
 Python 3.11, Node 22 when the frontend is included, the requested profile,
 the backend virtual environment and the built frontend directory. Production
-installs install runtime backend dependencies only; development installs include
-the `[dev]` extras.
+installs install the committed production lock (runtime backend dependencies
+only); development installs install the committed development lock, which
+carries the `[dev]` extras.

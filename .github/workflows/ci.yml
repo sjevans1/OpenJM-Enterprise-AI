@@ -82,6 +82,51 @@ jobs:
           fi
           echo "Real Gemma/model acceptance remains a separate controlled local gate." >> "$GITHUB_STEP_SUMMARY"
 
+  rel1_lock_drift_gate:
+    name: REL1 / lock drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Stable release gate: the committed locks are authoritative, so verify on
+    # every event CI already runs on (pull_request, push to main, dispatch).
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile hash-pinned locks from the pinned resolver toolchain
+        # Seed pip-compile with the committed locks so unchanged dependency
+        # ranges do not drift merely because a newer transitive release appears
+        # on the package index. pip-compile reuses compatible existing pins and
+        # updates them only when pyproject.toml actually requires a change.
+        run: |
+          mkdir -p "$RUNNER_TEMP/openjm-locks"
+          cp backend/requirements.lock "$RUNNER_TEMP/openjm-locks/requirements.lock"
+          cp backend/requirements-dev.lock "$RUNNER_TEMP/openjm-locks/requirements-dev.lock"
+          bash scripts/compile-python-locks.sh "$RUNNER_TEMP/openjm-locks"
+
+      - name: Fail on drift between regenerated and committed locks
+        # Byte-compares the regenerated locks against backend/requirements.lock
+        # and backend/requirements-dev.lock. Catches both a changed
+        # pyproject.toml without refreshed locks and resolver/toolchain changes
+        # that alter resolution.
+        run: bash scripts/check-python-lock-drift.sh "$RUNNER_TEMP/openjm-locks" backend
+
+      - name: Build binary-only production wheelhouse from the committed lock
+        # Proves the committed production lock can populate an offline,
+        # hash-pinned, binary-only wheelhouse for the supported Linux target.
+        run: |
+          mkdir -p "$RUNNER_TEMP/openjm-wheelhouse"
+          bash scripts/build-python-wheelhouse.sh \
+            "$RUNNER_TEMP/openjm-wheelhouse" backend/requirements.lock
+
   frontend:
     name: Frontend / Node 22
     runs-on: ubuntu-latest

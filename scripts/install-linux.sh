@@ -72,12 +72,24 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 echo "pip: $(python -m pip --version)"
+
+# Committed hash-pinned locks are the dependency authority. Production installs
+# the exact production lock (no dev extras); development installs the exact
+# development lock. Both enforce hashes so a tampered or unlisted wheel fails.
 if [[ "$PROFILE" == "production" ]]; then
-  python -m pip install --quiet --prefer-binary -e "."
+  LOCK_FILE="requirements.lock"
 else
-  python -m pip install --quiet --prefer-binary -e ".[dev]"
+  LOCK_FILE="requirements-dev.lock"
 fi
-echo "backend dependencies installed ($PROFILE profile)"
+[[ -f "$LOCK_FILE" ]] || fail "committed lock missing: backend/$LOCK_FILE"
+python -m pip install --quiet --require-hashes -r "$LOCK_FILE"
+
+# Install the application source WITHOUT re-resolving its dependencies: every
+# transitive dependency is already pinned and hashed above, and --no-deps stops
+# pip from pulling in any unpinned dependency. Kept as a separate step so hash
+# enforcement above is never weakened for editable-install convenience.
+python -m pip install --quiet --no-deps -e "."
+echo "backend dependencies installed from committed lock and app source ($PROFILE profile)"
 
 # --- 4. Configuration preflight (fail closed on a production misfit) --------
 python -m app.core.preflight || fail "configuration preflight failed; fix .env before starting"

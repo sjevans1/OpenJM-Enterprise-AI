@@ -30,8 +30,13 @@ def test_linux_installer_enforces_supported_toolchain_and_profile() -> None:
     script = (ROOT / "scripts" / "install-linux.sh").read_text()
     assert '[[ "$PROFILE" == "development" || "$PROFILE" == "production" ]]' in script
     assert '[[ "$NODE_MAJOR" -eq 22 ]]' in script
-    assert 'python -m pip install --quiet --prefer-binary -e "."' in script
-    assert 'python -m pip install --quiet --prefer-binary -e ".[dev]"' in script
+    # The committed hash-pinned locks are the dependency authority.
+    assert 'LOCK_FILE="requirements.lock"' in script
+    assert 'LOCK_FILE="requirements-dev.lock"' in script
+    assert 'python -m pip install --quiet --require-hashes -r "$LOCK_FILE"' in script
+    # The application source installs without re-resolving dependencies.
+    assert 'python -m pip install --quiet --no-deps -e "."' in script
+    assert '".[dev]"' not in script
     assert "verify-rel1a-install.py" in script
     assert "pip install --quiet --upgrade pip" not in script
 
