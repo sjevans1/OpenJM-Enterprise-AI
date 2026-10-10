@@ -24,6 +24,8 @@ openjm-rel1-<version>/
   python/
     requirements.lock         frozen production dependency set
     wheelhouse/                all production wheels/sdists required offline
+    app/                       pre-built application wheel (production install
+                               artifact: openjm_enterprise_ai_backend-<ver>-*.whl)
   npm/
     cache/                     release-local npm cache populated from package-lock
   RELEASE-MANIFEST.json        sorted file list, byte sizes and SHA-256 digests

@@ -88,6 +88,23 @@ if [[ "$PY_MODE" != "skip" ]]; then
   echo "-- python: pip ${PY_MODE} (no-index, find-links wheelhouse, require-hashes) --"
   "$VENV/bin/python" -m pip "${PIP_ARGS[@]}"
   echo "python offline ${PY_MODE}: OK"
+
+  # Production application wheel: install the PRE-BUILT wheel shipped in the
+  # bundle (no editable/hatchling build, no index, no dependency resolution). A
+  # bundle that carries a python/app dir must carry exactly one application
+  # wheel; older bundles without one are still accepted.
+  APP_WHEEL_DIR="$BUNDLE/python/app"
+  if [[ -d "$APP_WHEEL_DIR" && "$PY_MODE" == "install" ]]; then
+    mapfile -t APP_WHEELS < <(find "$APP_WHEEL_DIR" -maxdepth 1 -type f -name 'openjm_enterprise_ai_backend-*.whl' | sort)
+    [[ "${#APP_WHEELS[@]}" -eq 1 ]] || {
+      echo "ERROR: bundle must carry exactly one application wheel in python/app (found ${#APP_WHEELS[@]})" >&2
+      exit 1
+    }
+    echo "-- python: install bundled application wheel (--no-index --no-deps) --"
+    "$VENV/bin/python" -m pip install --no-index --no-deps "${APP_WHEELS[0]}"
+    "$VENV/bin/python" -c 'import app, app.version; print("application wheel import OK:", app.version.PRODUCT_VERSION)'
+    echo "python application wheel install: OK"
+  fi
 fi
 
 # --- 2. npm: registry-blocked, offline install + build from the release cache -
