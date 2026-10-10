@@ -11,7 +11,7 @@ There is no known code blocker preventing entry into REL1 productization.
 3. **Scoped live qualifications remain NOT RUN.**
    - delegated support: live OIDC/Keycloak + PostgreSQL walkthrough;
    - BV6 authoritative candidates: representative real vector/RAG runtime path.
-4. **Release version identity is inconsistent.** `backend/app/version.py` reports 0.2.0 while `backend/pyproject.toml` and `frontend/package.json` declare 0.1.0.
+4. **Release identity normalization is being closed by REL1-A.** The canonical runtime/backend/frontend/npm-lock version is machine-checked; acceptance is pending this package's final gates.
 
 ## Deferred, not blocked
 

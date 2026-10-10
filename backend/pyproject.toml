@@ -1,6 +1,6 @@
 [project]
 name = "openjm-enterprise-ai-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "OpenJM Enterprise AI control plane and orchestration API"
 requires-python = ">=3.11,<3.12"
 dependencies = [

@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover
     from app.core.config import Settings
 
-# Keep in step with backend/pyproject.toml and frontend/package.json.
+# Canonical product version. Package/build manifests are machine-checked against
+# this value by the REL1-A acceptance gate.
 PRODUCT_VERSION = "0.2.0"
-# The vertical-slice / programme that produced this build.
-RELEASE_TRAIN = "VS8"
+# The release programme that produced this build.
+RELEASE_TRAIN = "REL1"
 
 
 def build_info(settings: "Settings") -> dict:
