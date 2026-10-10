@@ -104,6 +104,32 @@ cp "$LOCK_FILE" "$BUNDLE/python/requirements.lock"
 echo "copied production lock -> python/requirements.lock"
 PATH="$SHIM_DIR:$PATH" "$WHEELHOUSE_BUILDER" "$BUNDLE/python/wheelhouse" "$LOCK_FILE"
 
+# --- 2b. pre-built application wheel (production install artifact) ----------
+# The production installer must never run an editable/isolated build on a
+# registry-blocked host: the backend build backend (hatchling) is not in the
+# runtime wheelhouse or lock. Build the wheel here (the build env has network
+# and build isolation is fine) and ship it inside the bundle. It lives under
+# python/app/, so the manifest generated last covers it automatically.
+APP_WHEEL_DIR="$BUNDLE/python/app"
+mkdir -p "$APP_WHEEL_DIR"
+echo "building application wheel -> python/app"
+"$PY311" -m pip wheel --quiet --no-deps --wheel-dir "$APP_WHEEL_DIR" "$ROOT/backend"
+
+mapfile -t APP_WHEELS < <(find "$APP_WHEEL_DIR" -maxdepth 1 -type f -name '*.whl' | sort)
+[[ "${#APP_WHEELS[@]}" -eq 1 ]] || {
+  echo "ERROR: expected exactly one application wheel in python/app, found ${#APP_WHEELS[@]}" >&2
+  exit 1
+}
+APP_WHEEL_NAME="$(basename "${APP_WHEELS[0]}")"
+case "$APP_WHEEL_NAME" in
+  "openjm_enterprise_ai_backend-${VERSION}-"*.whl) : ;;
+  *)
+    echo "ERROR: application wheel is not named openjm_enterprise_ai_backend-${VERSION}-*.whl: $APP_WHEEL_NAME" >&2
+    exit 1
+    ;;
+esac
+echo "application wheel: $APP_WHEEL_NAME"
+
 # --- 3. npm: registry-independent cache from the committed frontend lock -----
 "$NPM_CACHE_BUILDER" "$BUNDLE/npm/cache" "$ROOT/frontend"
 

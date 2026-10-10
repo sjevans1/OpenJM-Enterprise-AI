@@ -82,14 +82,31 @@ else
   LOCK_FILE="requirements-dev.lock"
 fi
 [[ -f "$LOCK_FILE" ]] || fail "committed lock missing: backend/$LOCK_FILE"
-python -m pip install --quiet --require-hashes -r "$LOCK_FILE"
 
-# Install the application source WITHOUT re-resolving its dependencies: every
-# transitive dependency is already pinned and hashed above, and --no-deps stops
-# pip from pulling in any unpinned dependency. Kept as a separate step so hash
-# enforcement above is never weakened for editable-install convenience.
-python -m pip install --quiet --no-deps -e "."
-echo "backend dependencies installed from committed lock and app source ($PROFILE profile)"
+# The release bundle carries python/ as a SIBLING of the app tree (this script
+# runs from the app root, app/): python/requirements.lock, python/wheelhouse/
+# and python/app/<application wheel>. When present, install strictly from the
+# bundled wheelhouse so the offline host never reaches a package index.
+BUNDLE_PY="$ROOT/../python"
+LOCK_EXTRA=()
+if [[ -d "$BUNDLE_PY/wheelhouse" ]]; then
+  LOCK_EXTRA+=(--no-index --find-links "$BUNDLE_PY/wheelhouse")
+fi
+python -m pip install --quiet --require-hashes -r "$LOCK_FILE" "${LOCK_EXTRA[@]}"
+
+# Application install. Production installs the pre-built application wheel that
+# ships in the bundle (python/app/openjm_enterprise_ai_backend-<version>-*.whl):
+# the backend build backend (hatchling) is deliberately absent from the runtime
+# wheelhouse, so an editable or build-isolated install cannot run on a
+# registry-blocked host. Development keeps the editable source install.
+if [[ "$PROFILE" == "production" ]]; then
+  mapfile -t APP_WHEELS < <(find "$BUNDLE_PY/app" -maxdepth 1 -type f -name 'openjm_enterprise_ai_backend-*.whl' 2>/dev/null | sort)
+  [[ "${#APP_WHEELS[@]}" -eq 1 ]] || fail "production install requires the bundled application wheel at python/app/openjm_enterprise_ai_backend-<version>-*.whl"
+  python -m pip install --quiet --no-deps "${APP_WHEELS[0]}"
+else
+  python -m pip install --quiet --no-deps -e "."
+fi
+echo "backend dependencies installed from committed lock and application ($PROFILE profile)"
 
 # --- 4. Configuration preflight (fail closed on a production misfit) --------
 python -m app.core.preflight || fail "configuration preflight failed; fix .env before starting"
