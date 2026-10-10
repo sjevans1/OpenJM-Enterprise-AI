@@ -11,6 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DataSource, Document
+from app.core.config import get_settings
 from app.services.document_lifecycle import retrievable_filter
 from app.services.document_policy import DocumentAccess, governed_tenant_documents, visible_documents
 from app.schemas import Evidence
@@ -27,6 +28,9 @@ from app.services.report_scope import (
 )
 from app.services.structured_planner import StructuredPlan, StructuredPlanner
 from app.services.report_runs import BudgetExceeded, ReportRunBudget
+
+
+settings = get_settings()
 
 
 class ToolError(RuntimeError):
@@ -382,39 +386,75 @@ class KnowledgeSearchTool:
                 raise ToolPermissionError(
                     "Knowledge retrieval returned evidence outside the authorized set"
                 )
+
+        # --- BV6-B opt-in authoritative report candidates (additive only) ----
+        # Computed AFTER the ordinary evidence and its integrity checks, then
+        # APPENDED after it: an ordinary document result is never reordered,
+        # replaced, filtered or re-scored. Gated by a default-off tenant policy
+        # flag and never used inside a scoped report run (a report_scope narrows
+        # retrieval and must stay byte-identical). See report_candidates.py for
+        # the documented conservative-additive limitation.
+        candidate_records: list[dict[str, Any]] = []
+        if (
+            context.report_scope is None
+            and settings.report_authoritative_candidates_enabled
+        ):
+            from app.core.context import current_principal_or_none
+            from app.services import report_candidates
+
+            principal = current_principal_or_none()
+            if principal is not None and principal.user_id == context.user_id:
+                candidate_evidence, contributions = (
+                    await report_candidates.eligible_candidate_evidence(
+                        context.db, principal=principal, query=query
+                    )
+                )
+                normalized = [*normalized, *candidate_evidence]
+                candidate_records = report_candidates.contribution_records(
+                    contributions
+                )
+
+        output: dict[str, Any] = {
+            "evidence_count": len(normalized),
+            "primary_evidence_count": sum(
+                item.provenance.get("retrieval_role") == "primary"
+                for item in normalized
+            ),
+            "neighbor_evidence_count": sum(
+                item.provenance.get("retrieval_role") == "neighbor"
+                for item in normalized
+            ),
+            "deduplicated_count": sum(
+                max(int(item.provenance.get("duplicate_count", 1)) - 1, 0)
+                for item in normalized
+                if item.provenance.get("retrieval_role") == "primary"
+            ),
+            "evidence_limit": (
+                knowledge_engine.settings.rag_top_k
+                + knowledge_engine.settings.rag_neighbor_max_chunks
+            ),
+        }
+        trace_metadata: dict[str, Any] = {
+            "processing_location": "local",
+            "primary_evidence_count": sum(
+                item.provenance.get("retrieval_role") == "primary"
+                for item in normalized
+            ),
+            "neighbor_evidence_count": sum(
+                item.provenance.get("retrieval_role") == "neighbor"
+                for item in normalized
+            ),
+        }
+        if candidate_records:
+            # Only present when a candidate actually contributed, so the
+            # flag-off (and flag-on-but-none-eligible) trace is unchanged.
+            output["report_candidate_count"] = len(candidate_records)
+            trace_metadata["report_candidates"] = candidate_records
+
         return ToolResult(
             evidence=normalized,
-            output={
-                "evidence_count": len(normalized),
-                "primary_evidence_count": sum(
-                    item.provenance.get("retrieval_role") == "primary"
-                    for item in normalized
-                ),
-                "neighbor_evidence_count": sum(
-                    item.provenance.get("retrieval_role") == "neighbor"
-                    for item in normalized
-                ),
-                "deduplicated_count": sum(
-                    max(int(item.provenance.get("duplicate_count", 1)) - 1, 0)
-                    for item in normalized
-                    if item.provenance.get("retrieval_role") == "primary"
-                ),
-                "evidence_limit": (
-                    knowledge_engine.settings.rag_top_k
-                    + knowledge_engine.settings.rag_neighbor_max_chunks
-                ),
-            },
-            trace_metadata={
-                "processing_location": "local",
-                "primary_evidence_count": sum(
-                    item.provenance.get("retrieval_role") == "primary"
-                    for item in normalized
-                ),
-                "neighbor_evidence_count": sum(
-                    item.provenance.get("retrieval_role") == "neighbor"
-                    for item in normalized
-                ),
-            },
+            output=output,
+            trace_metadata=trace_metadata,
         )
 
 
