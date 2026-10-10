@@ -82,6 +82,46 @@ jobs:
           fi
           echo "Real Gemma/model acceptance remains a separate controlled local gate." >> "$GITHUB_STEP_SUMMARY"
 
+  rel1_lock_candidate:
+    name: REL1 / Python lock candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'pull_request' }}
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile hash-pinned production and development locks
+        run: |
+          mkdir -p "$RUNNER_TEMP/openjm-locks"
+          scripts/compile-python-locks.sh "$RUNNER_TEMP/openjm-locks"
+
+      - name: Prove production lock can populate a wheelhouse
+        run: |
+          mkdir -p "$RUNNER_TEMP/openjm-wheelhouse"
+          python -m pip download --require-hashes --only-binary=:all: \
+            --dest "$RUNNER_TEMP/openjm-wheelhouse" \
+            -r "$RUNNER_TEMP/openjm-locks/requirements.lock"
+
+      - name: Publish resolver output for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel1-python-lock-candidate
+          path: |
+            ${{ runner.temp }}/openjm-locks/requirements.lock
+            ${{ runner.temp }}/openjm-locks/requirements-dev.lock
+          if-no-files-found: error
+          retention-days: 7
+
   frontend:
     name: Frontend / Node 22
     runs-on: ubuntu-latest
