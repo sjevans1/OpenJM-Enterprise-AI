@@ -1,0 +1,115 @@
+{
+  "realm": "openjm",
+  "enabled": true,
+  "displayName": "OpenJM Enterprise AI - QA1 acceptance",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "clients": [
+    {
+      "clientId": "openjm",
+      "name": "OpenJM Enterprise AI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "secret": "REPLACE_ME_QA_CLIENT_SECRET",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:15173/*",
+        "http://localhost:15173/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:15173",
+        "http://localhost:15173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "openjm-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "openjm",
+            "id.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "qa.employee",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "qa.employee@qa.openjm.local",
+      "firstName": "QA",
+      "lastName": "Employee",
+      "attributes": { "tenant": ["acme"] }
+    },
+    {
+      "username": "qa.steward",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "qa.steward@qa.openjm.local",
+      "firstName": "QA",
+      "lastName": "Data Steward",
+      "attributes": { "tenant": ["acme"] }
+    },
+    {
+      "username": "qa.clientadmin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "qa.clientadmin@qa.openjm.local",
+      "firstName": "QA",
+      "lastName": "Client Admin",
+      "attributes": { "tenant": ["acme"] }
+    },
+    {
+      "username": "qa.other",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "qa.other@qa.openjm.local",
+      "firstName": "QA",
+      "lastName": "Other Tenant User",
+      "attributes": { "tenant": ["globex"] }
+    },
+    {
+      "username": "qa.platform",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "qa.platform@qa.openjm.local",
+      "firstName": "QA",
+      "lastName": "Platform Operator",
+      "attributes": { "tenant": ["openjm-platform"] }
+    }
+  ]
+}

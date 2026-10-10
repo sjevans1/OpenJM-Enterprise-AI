@@ -1,0 +1,4 @@
+# Local QA secrets and build output (never committed)
+secrets/
+frontend-dist/
+*.local.env

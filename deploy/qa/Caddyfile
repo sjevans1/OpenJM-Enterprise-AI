@@ -1,0 +1,27 @@
+# OpenJM Enterprise AI - QA1 frontend host (acceptance only).
+#
+# Serves the production SPA build and proxies /api to the REL1 production
+# backend running on the host (not a container). Mirrors the production Caddy
+# boundary (API before SPA fallback) without TLS, because this is a loopback
+# acceptance environment.
+
+:80 {
+	encode gzip
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+
+	# API first: the backend on the host (host-gateway).
+	handle /api/* {
+		reverse_proxy host.docker.internal:18010
+	}
+
+	# Production SPA build with client-side routing fallback.
+	handle {
+		root * /srv/openjm/frontend
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,79 @@
+# OpenJM Enterprise AI - QA1 production-like acceptance environment (dependency services).
+#
+# This Compose file runs ONLY the external dependencies of the acceptance
+# environment: PostgreSQL (application metadata DB), Keycloak (real OIDC
+# provider) and a Caddy static host for the production frontend build.
+#
+# The OpenJM backend is deliberately NOT a Compose service here. The accepted
+# REL1 deployment semantics install the backend from the packaged application
+# wheel and the committed production lock (no editable install, no PYTHONPATH),
+# which the shipped deploy/compose/Dockerfile does not do. The backend therefore
+# runs from the REL1 production install (see deploy/qa/install-backend.sh) and
+# the frontend Caddy proxies /api to it on the host.
+#
+# Secrets are never committed. Point OPENJM_QA_SECRETS at a directory outside the
+# repository holding: db_password.txt, keycloak.env (see .env.qa.example).
+#
+#   export OPENJM_QA_SECRETS="$HOME/openjm-qa1-env/secrets"
+#   export OPENJM_QA_FRONTEND_DIST="$HOME/openjm-qa1-env/frontend-dist"
+#   docker compose -f deploy/qa/docker-compose.qa.yml up -d
+
+name: openjm-qa1
+
+services:
+  db:
+    image: postgres:16
+    container_name: openjm-qa1-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openjm
+      POSTGRES_DB: openjm
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_pw
+    secrets:
+      - db_pw
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - openjm-qa1-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openjm -d openjm"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    container_name: openjm-qa1-keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    env_file:
+      - ${OPENJM_QA_SECRETS:-./secrets}/keycloak.env
+    environment:
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:18090:8080"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+
+  frontend:
+    image: caddy:2.11.4-alpine
+    container_name: openjm-qa1-frontend
+    restart: unless-stopped
+    depends_on:
+      - keycloak
+    ports:
+      - "127.0.0.1:15173:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${OPENJM_QA_FRONTEND_DIST:-./frontend-dist}:/srv/openjm/frontend:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  openjm-qa1-pgdata:
+
+secrets:
+  db_pw:
+    file: ${OPENJM_QA_SECRETS:-./secrets}/db_password.txt
