@@ -103,7 +103,7 @@ jobs:
       - name: Compile hash-pinned production and development locks
         run: |
           mkdir -p "$RUNNER_TEMP/openjm-locks"
-          scripts/compile-python-locks.sh "$RUNNER_TEMP/openjm-locks"
+          bash scripts/compile-python-locks.sh "$RUNNER_TEMP/openjm-locks"
 
       - name: Prove production lock can populate a wheelhouse
         run: |
