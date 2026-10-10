@@ -2144,3 +2144,231 @@ class ChatArtifact(Base):
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+
+# ---------------------------------------------------------------------------
+# INF1-C: application/platform capacity telemetry and reconciliation
+#
+# Pinned, bounded-cardinality operational records built on the accepted INF1
+# contracts (MeasurementOrigin / MeasurementScope / GpuMethod) and the M1 ledger.
+#
+# * A metric is named by a *pinned definition* (key + revision + scope + value
+#   kind), never by a free string, so an operational surface is bounded by
+#   construction rather than by a cardinality guess at request time.
+# * Every sample is integer valued. Any cost/money field is an integer minor
+#   unit and no float participates in a cost, a counter or a duration. GPU time
+#   is stored as integer milliseconds under an explicit method, never as an
+#   imputed float, and an unobservable value is NULL, never a measured zero.
+# * A sample is idempotent on (definition, subject kind, subject, window), so a
+#   replay, a restore or a re-import cannot duplicate or double count a record.
+# * A counter reset is recorded explicitly next to the sample that observed it,
+#   so a decreasing cumulative value is never silently treated as consumption.
+# * Export and import are idempotent on their opaque identifiers, so a restore
+#   cannot duplicate an export or a historical usage figure.
+#
+# No content, prompt, response, content hash, per-call identifier or credential
+# is stored anywhere in this section.
+# ---------------------------------------------------------------------------
+
+METRIC_SCOPES_SQL = "('attempt','pool_window')"
+METRIC_VALUE_KINDS_SQL = "('counter','gauge','duration_ms','gpu_ms','money_minor')"
+METRIC_ORIGINS_SQL = "('gateway','runtime','collector')"
+METRIC_METHODS_SQL = "('measured','allocated','estimated','unknown')"
+METRIC_QUALITIES_SQL = "('complete','partial','unknown')"
+METRIC_SUBJECT_KINDS_SQL = "('runtime','deployment','pool','tenant')"
+
+
+class InferenceMetricDefinition(Base):
+    """A pinned metric identity. Operational telemetry names its measurements.
+
+    ``cardinality_class`` is recorded so a high-cardinality series can be
+    refused at the service boundary: only ``bounded`` definitions may be
+    registered through the operational API. ``definition_revision`` lets a
+    metric's meaning move forward without rewriting historical samples, which
+    carry the revision they were recorded under.
+    """
+
+    __tablename__ = "inference_metric_definitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "metric_key", "definition_revision", name="uq_inference_metric_key_rev"
+        ),
+        CheckConstraint(
+            "metric_scope IN " + METRIC_SCOPES_SQL, name="ck_inference_metric_scope"
+        ),
+        CheckConstraint(
+            "value_kind IN " + METRIC_VALUE_KINDS_SQL,
+            name="ck_inference_metric_value_kind",
+        ),
+        CheckConstraint(
+            "origin IN " + METRIC_ORIGINS_SQL, name="ck_inference_metric_origin"
+        ),
+        CheckConstraint(
+            "subject_kind IN " + METRIC_SUBJECT_KINDS_SQL,
+            name="ck_inference_metric_subject_kind",
+        ),
+        CheckConstraint(
+            "cardinality_class IN ('bounded','high')",
+            name="ck_inference_metric_cardinality",
+        ),
+        CheckConstraint(
+            "status IN ('active','retired')", name="ck_inference_metric_status"
+        ),
+        CheckConstraint(
+            "definition_revision >= 1", name="ck_inference_metric_revision"
+        ),
+        CheckConstraint(
+            "gpu_method IS NULL OR gpu_method IN " + METRIC_METHODS_SQL,
+            name="ck_inference_metric_gpu_method",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    metric_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    definition_revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    metric_scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    value_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    gpu_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    cardinality_class: Mapped[str] = mapped_column(
+        String(16), default="bounded", nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class InferenceMetricSample(Base):
+    """One pinned metric observation for one subject over one window.
+
+    ``value_int`` is the integer value in the definition's unit. A ``NULL``
+    value is an explicit *missing sample* (the collector or runtime could not
+    observe the series), never a measured zero. ``counter_reset`` records that
+    the cumulative counter went backwards relative to the previous sequence, so
+    a reset is surfaced instead of being read as negative consumption.
+    """
+
+    __tablename__ = "inference_metric_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "metric_definition_id",
+            "subject_kind",
+            "subject_ref",
+            "window_start",
+            "window_end",
+            name="uq_inference_metric_sample",
+        ),
+        CheckConstraint(
+            "subject_kind IN " + METRIC_SUBJECT_KINDS_SQL,
+            name="ck_inference_metric_sample_subject_kind",
+        ),
+        CheckConstraint(
+            "origin IN " + METRIC_ORIGINS_SQL, name="ck_inference_metric_sample_origin"
+        ),
+        CheckConstraint(
+            "method IN " + METRIC_METHODS_SQL, name="ck_inference_metric_sample_method"
+        ),
+        CheckConstraint(
+            "quality IN " + METRIC_QUALITIES_SQL, name="ck_inference_metric_sample_quality"
+        ),
+        CheckConstraint(
+            "value_int IS NULL OR value_int >= 0",
+            name="ck_inference_metric_sample_value",
+        ),
+        CheckConstraint("sequence >= 0", name="ck_inference_metric_sample_sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    metric_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("inference_metric_definitions.id", ondelete="CASCADE"), nullable=False
+    )
+    metric_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    metric_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    subject_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_ref: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    pool_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    deployment_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    attempt_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    value_int: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    method: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
+    quality: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    counter_reset: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PlatformTelemetryExport(Base):
+    """A recorded aggregate-only export. One row per built payload.
+
+    Idempotent on ``export_id`` and on ``(installation_id, sequence)``: a replay
+    returns the existing record rather than writing a second one, so a restore
+    or a retry cannot duplicate an export.
+    """
+
+    __tablename__ = "platform_telemetry_exports"
+    __table_args__ = (
+        UniqueConstraint("export_id", name="uq_platform_telemetry_export_id"),
+        UniqueConstraint(
+            "installation_id", "sequence", name="uq_platform_telemetry_export_sequence"
+        ),
+        CheckConstraint("sequence >= 1", name="ck_platform_telemetry_export_sequence"),
+        CheckConstraint("row_count >= 0", name="ck_platform_telemetry_export_rows"),
+        CheckConstraint(
+            "schema_version = 'aggregate_only_v1'",
+            name="ck_platform_telemetry_export_schema",
+        ),
+        CheckConstraint(
+            "status IN ('built','imported','superseded')",
+            name="ck_platform_telemetry_export_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    export_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    installation_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    commercial_tenant_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    payload_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    signing_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telemetry_policy_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    correction_of: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="built", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PlatformTelemetryImport(Base):
+    """A recorded aggregate-only import, idempotent on the source export id.
+
+    A re-import of the same ``export_id`` is a no-op, so restoring a backup that
+    contains an already-imported payload cannot duplicate it or the historical
+    usage it carries.
+    """
+
+    __tablename__ = "platform_telemetry_imports"
+    __table_args__ = (
+        UniqueConstraint("export_id", name="uq_platform_telemetry_import_id"),
+        CheckConstraint("row_count >= 0", name="ck_platform_telemetry_import_rows"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    export_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    installation_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
