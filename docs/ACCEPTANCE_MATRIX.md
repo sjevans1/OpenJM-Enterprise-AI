@@ -4,12 +4,16 @@ Living acceptance matrix for the Hardening & Business Value Realization phase
 (Issue #45). It maps the global phase-acceptance statements to current
 implementation evidence and the remaining manual/runtime qualification.
 
-- **Observed at `a047a991cc8882f3f8c0f444387ea190acb689d4`** on **2026-10-10**.
-- Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3 and the
-  accepted VS1-VS8 foundation.
-- Exact-head full CI for the final BV6-B candidate ran as **38026945641** on
-  `c7475ecc3fb1362cc1643803a3560bbea9edc3e2`: Backend / Python 3.11 and
-  Frontend / Node 22 both succeeded before merge #75.
+- **Observed at `23ea48458747e616c7f988eeb73c4d04ff7b7ef2`** on **2026-10-10** (current integrated `main`).
+- **Live qualification product head: `7ca41149c7a23e8330c4dfd1f377bb4ad2feb477`**. The only intervening repository delta to current `main` is PR #85's CI-only change to `.github/workflows/ci.yml` (Ubuntu 24.04 pin + GitHub Actions v7); no application, release, runtime, lock, migration, or product files changed, so the live qualification evidence remains applicable to the current product tree.
+- Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3, REL1-A and
+  REL1-B1..B4, on the accepted VS1-VS8 foundation.
+- REL1 final-candidate exact-head acceptance: full run **38085064975** on
+  `5fed73524c8cc8b34e750d9e800c63d22ab8f7bc` (Backend / Python 3.11, Frontend /
+  Node 22, REL1 lock drift gate, REL1 offline bundle + registry-blocked gate all
+  success), merged as #84 into `7ca41149`.
+- Earlier exact-head full CI for the final BV6-B candidate: run **38026945641** on
+  `c7475ecc3fb1362cc1643803a3560bbea9edc3e2`.
 - Scope is OpenJM Enterprise AI only. Workspace remains a separate product.
 - Rahkia production integration remains deliberately deferred until the current
   product build is complete.
@@ -105,7 +109,7 @@ Security automated capability: **6/6 PASS**.
 | Metering / entitlements (M1/M2/M3) | accepted | **PASS** |
 | Admission / capacity (INF1-A/B/C) | registry/admission/capacity telemetry accepted | **PASS** |
 | Backup / recovery (E1/E2/E3 + VS8) | accepted automated recovery evidence | **PASS** |
-| Installer / productization (REL1) | preparation/design exists, final installer/offline/release lifecycle not yet accepted | **NOT RUN** |
+| Installer / productization (REL1) | REL1-A + REL1-B1..B4 accepted (reproducible install, committed hash-pinned locks, lock drift gate, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged-wheel production install); full PostgreSQL production-profile acceptance executed 2026-10-10 | **PASS** (automated + PostgreSQL production profile); clean dev host, Windows/WSL2 runtime, live browser persona journey NOT RUN |
 | Rahkia qualification | intentionally not integrated during current product build | **DEFERRED** |
 
 ## Remaining completion gates
@@ -113,10 +117,14 @@ Security automated capability: **6/6 PASS**.
 The feature gap list is now short. The remaining work is primarily productization
 and final integrated qualification, not another broad business-feature wave.
 
-1. **REL1 productization remains open.** The product still needs the agreed
-   reproducible install/package, supported Windows/Linux delivery path,
-   offline/air-gapped bundle where applicable, release manifest/integrity,
-   upgrade/rollback lifecycle and zero-tribal-knowledge handoff acceptance.
+1. **REL1 productization is now accepted.** REL1-A and REL1-B1..B4 delivered the
+   reproducible install, committed hash-pinned locks with a drift gate, the
+   offline bundle with registry-blocked acceptance, the deterministic
+   manifest/archive, and the packaged-wheel production install. The full
+   PostgreSQL production-profile acceptance was executed 2026-10-10 (see
+   "Live/deployment qualification" below). What remains for REL1 is live
+   environment qualification that requires hosts not available in this
+   environment.
 2. **Final manual/browser journey is NOT RUN at the current phase state.**
    Repeat the end-user, data-steward, client-admin and OpenJM-operator golden
    journeys against the final packaged candidate.
@@ -130,6 +138,24 @@ and final integrated qualification, not another broad business-feature wave.
 5. **Per-object/table classification remains deliberately deferred for v1.**
    Source-level classification plus authorized-object narrowing remains the v1
    contract unless an unsplittable mixed-sensitivity source creates a proven need.
+
+## Live/deployment qualification (2026-10-10, qualified product head `7ca41149`; current `main` `23ea4845` differs only by CI workflow modernization)
+
+| Gate | Environment | Status | Evidence |
+| --- | --- | --- | --- |
+| Full PostgreSQL production-profile install/migrate/ready | real PostgreSQL (pgserver, non-root), packaged wheel, committed production lock, Python 3.11 | **PASS** | `install-linux.sh --profile production` from the release bundle: `INSTALLER_RC=0`; migrations on `PostgresqlImpl` to head `0021_support_content_scope`; `REL1-A VERIFY OK: version=0.2.0 profile=production`; `/api/ready` 200 `{"ready":true,"status":"ready"}`; `/api/health` 200; `alembic_version=0021_support_content_scope` in PostgreSQL; no SQLite metadata DB; no dev extras; no PYTHONPATH |
+| Frontend production build (registry-blocked) | Node 22, release npm cache | **PASS** | `npm ci` offline (138 packages) + `npm run build`; `dist/index.html` emitted |
+| Deterministic release archive | real 3.1 GB payload | **PASS** | two builds byte-identical: `00fa8adbd6409b5fa840d4196989fd6c9e14469f159ea157df8da67af27718ba`, 3243220300 bytes; manifest `f3c9926c79c4b7c57929a62c1f57b66cad8d070b26578b71fc425a0d47739236` |
+| Final browser/persona journey (end user, data steward, client admin, OpenJM operator) | none | **NOT RUN** | no live OIDC/Keycloak provider and no seeded personas in this environment; production disables dev-auth by design |
+| Live delegated-support / OIDC walkthrough | none | **NOT RUN** | no real Keycloak/OIDC environment available |
+| Live authoritative-candidate / vector-RAG journey (BV6-B) | none | **NOT RUN** | no live vector/RAG environment (model gateway on the approved test path not provisioned here) |
+| Clean Linux development host install | none | **NOT RUN** | no separate clean host |
+| Real Windows/WSL2 runtime install | none | **NOT RUN** | no real Windows host; machine-testable contract PASS only |
+| Rahkia production cutover | n/a | **DEFERRED** | deliberate product decision |
+
+These live gates are NOT RUN, not PASS. The PostgreSQL production profile and the
+frontend production build are the two most important remaining integrated gates
+and both passed.
 
 ## How this matrix is maintained
 
