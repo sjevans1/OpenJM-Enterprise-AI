@@ -17,7 +17,7 @@ export OPENJM_QA_SECRETS
 export OPENJM_DB_PASSWORD="$(cat "$OPENJM_QA_SECRETS/db_password.txt")"
 export OPENJM_OIDC_CLIENT_SECRET="$(cat "$OPENJM_QA_SECRETS/openjm_client_secret.txt")"
 export OPENJM_CREDENTIAL_ENCRYPTION_KEY="$(cat "$OPENJM_QA_SECRETS/credential_key.txt")"
-export OPENJM_MODEL_API_KEY="$(cat "$OPENJM_QA_SECRETS/model_api_key.txt")"
+export OPENJM_MODEL_API_KEY="$(cat "$OPENJM_QA_SECRETS/opencode_go_api_key.txt")"
 export OPENJM_OPS_TOKEN="$(cat "$OPENJM_QA_SECRETS/ops_token.txt")"
 
 # --- profile and release identity ------------------------------------------
@@ -48,13 +48,20 @@ export OPENJM_BACKUP_DIR="$OPENJM_QA_ENV_ROOT/runtime/backups"
 export OPENJM_ARTIFACT_DIR="$OPENJM_QA_ENV_ROOT/runtime/artifacts"
 export OPENJM_CREDENTIAL_KEY_FILE="$OPENJM_QA_ENV_ROOT/runtime/credentials.key"
 
-# --- model serving (approved local OpenAI-compatible endpoint) -------------
+# --- model serving (approved QA inference path: OpenCode Go GLM 5.3 Flash) --
+# OpenJM's gateway sends only Content-Type and Authorization; OpenCode Go also
+# requires a client User-Agent and a stable `x-opencode-session` header. A local
+# OpenAI-compatible shim (tools/opencode_go_shim.py) adds those headers so the
+# accepted model-provider abstraction is unchanged. The provider credential is a
+# runtime secret and never reaches the browser.
 export OPENJM_MODEL_PROVIDER_MODE=local
-export OPENJM_MODEL_BASE_URL="http://127.0.0.1:18080/v1"
-export OPENJM_MODEL_NAME="gemma-4-12b-local"
+export OPENJM_MODEL_BASE_URL="http://127.0.0.1:18082/v1"
+export OPENJM_MODEL_NAME="glm-5.3-flash"
 export OPENJM_MODEL_TIMEOUT_SECONDS=300
 export OPENJM_MODEL_PROVIDER_FALLBACK=none
 export OPENJM_MODEL_ALLOW_INSECURE_HTTP=true
+# Hosted OpenAI-compatible provider: do not send llama.cpp-specific retry extras.
+export OPENJM_MODEL_RETRY_REQUEST_EXTRAS="{}"
 
 # --- HTTP boundary / security ----------------------------------------------
 export OPENJM_CORS_ORIGINS="http://127.0.0.1:15173,http://localhost:15173"
