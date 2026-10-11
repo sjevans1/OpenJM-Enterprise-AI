@@ -74,6 +74,11 @@ export OPENJM_METRICS_ENABLED=true
 
 # --- knowledge / structured / scheduler ------------------------------------
 export OPENJM_KNOWLEDGE_ENABLED=true
+# BV6-B authoritative Saved Report candidates: an accepted OPT-IN, additive path.
+# QA3 exercises it, so the acceptance environment enables it explicitly.
+export OPENJM_REPORT_AUTHORITATIVE_CANDIDATES_ENABLED=true
+export OPENJM_REPORT_AUTHORITATIVE_CANDIDATES_MAX=5
+export OPENJM_REPORT_AUTHORITATIVE_CANDIDATES_MIN_OVERLAP=1
 export OPENJM_EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
 export OPENJM_VECTOR_COLLECTION=openjm_default
 export OPENJM_STRUCTURED_MAX_ROWS=200
