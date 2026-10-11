@@ -39,6 +39,26 @@ TENANT_A_SLUG, TENANT_A_NAME = "acme", "Acme Corporation"
 TENANT_B_SLUG, TENANT_B_NAME = "globex", "Globex Industries"
 TENANT_P_SLUG, TENANT_P_NAME = "openjm-platform", "OpenJM Platform Operations"
 QA_DEMO_DSN = "postgresql://openjm:{pw}@127.0.0.1:15432/qa_demo"
+QA_OPS_DSN = "postgresql://openjm:{pw}@127.0.0.1:15432/qa_ops_demo"
+SQL_DIR = Path(__file__).resolve().parents[2] / "deploy" / "qa" / "sql"
+
+
+def ensure_demo_database(database: str, sql_file: str) -> None:
+    """Create a synthetic fixture database and apply its schema/data."""
+    import psycopg
+
+    pw = lib.read_secret("db_password.txt")
+    with psycopg.connect(f"postgresql://openjm:{pw}@127.0.0.1:15432/postgres",
+                         autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (database,))
+            if cur.fetchone() is None:
+                cur.execute(f'CREATE DATABASE "{database}"')
+                print(f"[seed] created fixture database {database}")
+    with psycopg.connect(f"postgresql://openjm:{pw}@127.0.0.1:15432/{database}") as conn:
+        conn.execute((SQL_DIR / sql_file).read_text())
+        conn.commit()
+    print(f"[seed] applied {sql_file} to {database}")
 
 
 def ok(response: httpx.Response, *codes: int, ctx: str = "") -> httpx.Response:
@@ -363,8 +383,12 @@ def phase_c(subs: dict[str, str]) -> dict:
         }
     print("[seed] knowledge fixtures ready:", ", ".join(sorted(ledger["documents"])))
 
-    # --- structured data source --------------------------------------------
+    # --- structured data sources -------------------------------------------
+    # Two governed sources: a restricted HR one (negative authorization tests)
+    # and an internal tenant-visible one (so an ordinary member has an
+    # authorized structured source). Both are synthetic.
     dsn = QA_DEMO_DSN.format(pw=lib.read_secret("db_password.txt"))
+    ensure_demo_database("qa_demo", "qa_demo.sql")
     source = ensure_source(steward, "QA Demo Warehouse", dsn)
     ok(steward.post(f"/api/data/sources/{source['id']}/test"), 200, ctx="test source")
     ok(steward.post(f"/api/data/sources/{source['id']}/refresh"), 200, ctx="refresh source")
@@ -377,7 +401,23 @@ def phase_c(subs: dict[str, str]) -> dict:
         "id": source["id"], "name": source["name"], "engine": source["engine"],
         "classification": "highly_restricted",
     }
-    print("[seed] structured source ready:", source["id"])
+    print("[seed] restricted structured source ready:", source["id"])
+
+    ensure_demo_database("qa_ops_demo", "qa_ops.sql")
+    ops = ensure_source(steward, "QA Operations Warehouse",
+                        QA_OPS_DSN.format(pw=lib.read_secret("db_password.txt")))
+    ok(steward.post(f"/api/data/sources/{ops['id']}/test"), 200, ctx="test ops source")
+    ok(steward.post(f"/api/data/sources/{ops['id']}/refresh"), 200, ctx="refresh ops source")
+    # A department-less source is outside a department steward's scope (fail
+    # closed), so the tenant admin applies the tenant-wide internal policy.
+    ok(admin.patch(f"/api/data/sources/{ops['id']}/policy",
+                   {"classification": "internal", "tenant_visible": True}),
+       200, ctx="set ops source policy")
+    ledger["data_sources"]["qa_ops"] = {
+        "id": ops["id"], "name": ops["name"], "engine": ops["engine"],
+        "classification": "internal", "tenant_visible": True,
+    }
+    print("[seed] tenant-visible structured source ready:", ops["id"])
 
     ledger["principals"]["qa.platform"] = {
         "subject": subs["qa.platform"],
