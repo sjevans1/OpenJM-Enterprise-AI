@@ -90,8 +90,8 @@ jobs:
     name: REL1 / lock drift gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # Stable release gate: the committed locks are authoritative, so verify on
-    # every event CI already runs on (pull_request, push to main, dispatch).
+    # Stable package/release gate: the committed locks are authoritative, so
+    # verify before candidate freeze (STANDARD/FULL) and on post-merge main.
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
