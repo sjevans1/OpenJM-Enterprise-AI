@@ -27,6 +27,7 @@ paths share one validation and one idempotency rule.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -38,6 +39,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.identity import Permission, Principal
 from app.models import ChatArtifact, Conversation, Message
 from app.schemas import ChatArtifactOut
+
+logger = logging.getLogger("openjm.artifacts")
 from app.services.artifacts import (
     ArtifactError,
     content_sha256,
@@ -357,6 +360,15 @@ async def maybe_create_artifact(
     try:
         cleaned, directive = parse_artifact_directive(text)
     except ArtifactDirectiveError:
+        # A refusal used to leave no server-side trace at all, so a live failure
+        # could not be diagnosed from evidence. Record the bounded category only:
+        # never the directive body, the content, or any model text.
+        logger.warning(
+            "chat artifact directive rejected: category=malformed_directive "
+            "conversation_id=%s message_id=%s",
+            conversation_id,
+            message_id,
+        )
         return ArtifactOutcome(
             text=text,
             failure="malformed_directive",
@@ -377,6 +389,12 @@ async def maybe_create_artifact(
             evidence=evidence,
         )
     except ArtifactError as exc:
+        logger.warning(
+            "chat artifact refused: category=%s conversation_id=%s message_id=%s",
+            failure_category(exc),
+            conversation_id,
+            message_id,
+        )
         return ArtifactOutcome(
             text=cleaned,
             failure=failure_category(exc),

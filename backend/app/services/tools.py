@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import DataSource, Document
 from app.core.config import get_settings
 from app.services.document_lifecycle import retrievable_filter
-from app.services.document_policy import DocumentAccess, governed_tenant_documents, visible_documents
+from app.services.document_policy import (
+    DocumentAccess,
+    access_from_principal,
+    data_source_is_visible,
+    governed_tenant_documents,
+    visible_documents,
+)
 from app.schemas import Evidence
 from app.services.execution_trace import (
     complete_execution_trace,
@@ -575,14 +581,29 @@ class StructuredQueryTool:
             ):
                 raise ToolPermissionError("Report does not permit this policy document")
 
-        result = await context.db.execute(
-            select(DataSource).where(
-                DataSource.id == source_id,
-                DataSource.user_id == context.user_id,
-            )
+        # Governed source resolution. The accepted policy makes a native
+        # `public`/`internal` source with tenant_visible=True consumable by any
+        # active tenant member, and keeps `confidential`/`highly_restricted`
+        # explicit-grant only. Ownership is a management boundary, not the read
+        # boundary, so it is no longer the consumption predicate. When no
+        # validated principal is ambient (direct internal calls, tests) the
+        # previous ownership fallback is preserved unchanged.
+        from app.core.context import current_principal_or_none
+
+        principal = current_principal_or_none()
+        access = (
+            access_from_principal(principal)
+            if principal is not None and principal.user_id == context.user_id
+            else None
         )
+        statement = select(DataSource).where(DataSource.id == source_id)
+        if access is not None:
+            statement = statement.where(DataSource.tenant_id == access.tenant_id)
+        else:
+            statement = statement.where(DataSource.user_id == context.user_id)
+        result = await context.db.execute(statement)
         source = result.scalars().first()
-        if source is None:
+        if source is None or not data_source_is_visible(access, source):
             raise ToolPermissionError("Data source is unavailable or unauthorized")
         if scoped_tables is not None and not source_scope_still_authorized(
             source, scoped_tables

@@ -401,11 +401,18 @@ class StructuredPlanner:
         scope: ReportSourceScope | None = None,
         budget: ReportRunBudget | None = None,
         usage_context: object = None,
+        sources: list[DataSource] | None = None,
     ) -> StructuredPlanningResult:
-        sources = (
-            await self._sources(db, user_id)
-            if scope is None else await self._sources(db, user_id, scope)
-        )
+        if sources is None:
+            # Fallback for callers that have not resolved the governed candidate
+            # set. The request paths resolve it through the orchestrator's
+            # governed helper so that accepted tenant-wide visibility
+            # (document_policy.data_source_is_visible) decides eligibility, not
+            # source ownership.
+            sources = (
+                await self._sources(db, user_id)
+                if scope is None else await self._sources(db, user_id, scope)
+            )
         if not self.is_candidate(message, sources, scope):
             return StructuredPlanningResult(candidate=False)
         if not sources:
