@@ -30,7 +30,7 @@ the automation.
 
 ## 2. Results summary
 
-86 checks executed: **81 PASS, 4 FAIL, 1 NOT RUN, 0 BLOCKED**.
+87 checks executed: **81 PASS, 5 FAIL, 1 NOT RUN, 0 BLOCKED**.
 
 | Area | Checks | Result |
 | --- | --- | --- |
@@ -52,7 +52,10 @@ and no platform controls). Authorized Knowledge retrieval PASS with citation
 title never appears. Restricted structured data fails closed with an explicit
 "safely not answered" message and no schema/value leak. Reports: the ordinary
 member cannot create a Saved Report (denied by the role model, `reports:write` is
-editor+), which is the correct fail-closed outcome.
+editor+), which is the correct fail-closed outcome. Artifact: asking Chat in
+natural language for a downloadable HTML summary produced no artifact with the
+local model, so that route is recorded FAIL (see finding 4); the artifact
+create/download/authorization path itself is proven separately in QA2-F.
 
 **Data steward (`qa.steward`).** Login PASS; navigation exposes Knowledge + Data
 but not Administration and no platform control plane. Discovered documents are
@@ -153,6 +156,19 @@ authorization boundary is correct.
 Correction: gate the affordance on `reports:write`, matching the existing
 permission-driven navigation, with a RED->GREEN regression for both a viewer and a
 principal holding the capability.
+
+### Finding 4 (FAIL, open): natural-language artifact creation did not fire
+
+`QA2-A-17`. Asking Chat "Create a downloadable HTML summary of the employee
+handbook" returned `artifacts=0`; `QA2-A-18/19/20` (download MIME/filename,
+cross-tenant denial, not-a-report) therefore did not run. Artifact creation from
+Chat depends on the model emitting the artifact directive, so with the local
+model this route did not reproduce. It is recorded as FAIL rather than passed: the
+artifact capability is proven independently (creation through the accepted
+artifacts API, download 200 with the correct filename, cross-tenant 404 in
+QA2-F-02/F-11/F-17), but the natural-language route is not demonstrated. Whether
+this is a product prompt/route issue or a local model limitation is an open
+question, not a confirmed defect.
 
 ### Not run
 
