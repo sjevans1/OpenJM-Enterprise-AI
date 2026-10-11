@@ -4,8 +4,8 @@ Living acceptance matrix for the Hardening & Business Value Realization phase
 (Issue #45). It maps the global phase-acceptance statements to current
 implementation evidence and the remaining manual/runtime qualification.
 
-- **Observed at `23ea48458747e616c7f988eeb73c4d04ff7b7ef2`** on **2026-10-10** (current integrated `main`).
-- **Live qualification product head: `7ca41149c7a23e8330c4dfd1f377bb4ad2feb477`**. The only intervening repository delta to current `main` is PR #85's CI-only change to `.github/workflows/ci.yml` (Ubuntu 24.04 pin + GitHub Actions v7); no application, release, runtime, lock, migration, or product files changed, so the live qualification evidence remains applicable to the current product tree.
+- **Observed at `4479d82ba773affab926d81bffbc1a9d272fdbef`** on **2026-10-11** (current integrated `main`; QA1 and QA2 accepted and merged).
+- **Live qualification product head: `4479d82ba773affab926d81bffbc1a9d272fdbef`**. QA1 (production-like acceptance environment) and QA2 (persona and delegated-support/security journeys) were executed live and merged. QA3 (authoritative/vector-RAG qualification) was executed live against this tree: see `docs/qa/QA3_ACCEPTANCE.md`.
 - Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3, REL1-A and
   REL1-B1..B4, on the accepted VS1-VS8 foundation.
 - REL1 final-candidate exact-head acceptance: full run **38085064975** on
@@ -35,10 +35,10 @@ A PASS never upgrades a separately identified live/manual gate to PASS.
 | --- | --- | --- | --- | --- |
 | EU-1 | can primarily use Chat | BV4 chat-first permission-aware navigation; ordinary viewer navigation tests | final browser journey | **PASS** |
 | EU-2 | sees only authorized evidence | BV1 policy enforcement before Knowledge/Data/Hybrid/model context; tenant/group/classification negatives | final browser journey | **PASS** |
-| EU-3 | can create real downloadable artifacts | BV5-A/B/C: persisted authorized artifacts, controlled HTML/PDF/DOCX rendering, natural Chat artifact creation; #61/#65/#70 accepted | live browser/model journey still not run | **PASS** |
+| EU-3 | can create real downloadable artifacts | BV5-A/B/C: persisted authorized artifacts, controlled HTML/PDF/DOCX rendering, natural Chat artifact creation; #61/#65/#70 accepted | live artifact journey and refusal diagnostics exercised at QA2 | **PASS** |
 | EU-4 | does not need to understand control-plane machinery | BV3-C + BV4 separate platform machinery from ordinary tenant navigation | final browser journey | **PASS** |
 
-End-user automated capability: **4/4 PASS**. Final browser journey remains NOT RUN.
+End-user automated capability: **4/4 PASS**, and the final live browser persona journey is **PASS** (QA2, 2026-10-11).
 
 ## Persona: Data steward
 
@@ -48,7 +48,7 @@ End-user automated capability: **4/4 PASS**. Final browser journey remains NOT R
 | DS-2 | can classify/tag sources | BV1-B/C source policy, groups/departments/classification and audit | final browser journey | **PASS** |
 | DS-3 | can create/name governed reports | BV2 naming + governed Saved Reports | final browser journey | **PASS** |
 | DS-4 | source/report access follows group/classification policy | report open/rerun/export source revalidation | final browser journey | **PASS** |
-| DS-5 | can curate governed reports without making every save authoritative | BV6-A curation states `none|under_review|approved|authoritative`; separate `featured`; two-person authoritative rule; source revalidation | browser workflow not run | **PASS** |
+| DS-5 | can curate governed reports without making every save authoritative | BV6-A curation states `none|under_review|approved|authoritative`; separate `featured`; two-person authoritative rule; source revalidation | browser workflow PASS (QA2); live curation lifecycle PASS (QA3) | **PASS** |
 
 Data-steward automated capability: **5/5 PASS**.
 
@@ -66,9 +66,9 @@ Client-admin automated capability: **3/3 PASS**.
 
 | ID | Acceptance statement (#45) | Current evidence | Remaining qualification | Status |
 | --- | --- | --- | --- | --- |
-| OA-1 | can onboard/manage tenants and platform machinery | BV3-A/C platform control plane | production-like walkthrough | **PASS** |
-| OA-2 | support initial setup through explicit audited authority | #72 delegated support-content read path consumes active delegation; delegation, tenant, classification and source authorization fail closed before content exposure | live OIDC/PostgreSQL support walkthrough not run | **PASS** |
-| OA-3 | does not receive implicit blanket customer-content access | metadata/content delegation separation; platform operator alone has no customer-content authority | production-like walkthrough | **PASS** |
+| OA-1 | can onboard/manage tenants and platform machinery | BV3-A/C platform control plane | production-like walkthrough PASS (QA1/QA2) | **PASS** |
+| OA-2 | support initial setup through explicit audited authority | #72 delegated support-content read path consumes active delegation; delegation, tenant, classification and source authorization fail closed before content exposure | live OIDC/PostgreSQL support walkthrough PASS (QA2) | **PASS** |
+| OA-3 | does not receive implicit blanket customer-content access | metadata/content delegation separation; platform operator alone has no customer-content authority | production-like walkthrough PASS (QA1/QA2); platform-operator curation negative PASS (QA3) | **PASS** |
 
 OpenJM-operator automated capability: **3/3 PASS**.
 
@@ -78,7 +78,7 @@ OpenJM-operator automated capability: **3/3 PASS**.
 | --- | --- | --- | --- | --- |
 | SEC-1 | negative tenant/group/classification tests | BV1 and subsequent security suites | none for automated criterion | **PASS** |
 | SEC-2 | unauthorized evidence never enters model context | policy filtering occurs before retrieval/model context; BV1/BV6 negative tests | live representative journey | **PASS** |
-| SEC-3 | report/artifact downloads enforce current authorization | report revalidation plus BV5 owner/tenant download authorization | live browser journey | **PASS** |
+| SEC-3 | report/artifact downloads enforce current authorization | report revalidation plus BV5 owner/tenant download authorization | live browser journey PASS (QA2); cross-tenant artifact denial PASS (QA2) | **PASS** |
 | SEC-4 | no secret leakage | VS8 config/diagnostic/backup secret handling tests | deployment qualification | **PASS** |
 | SEC-5 | no production dev-auth fallback | production preflight rejects dev auth/unsafe fallback | production deployment qualification | **PASS** |
 | SEC-6 | audit coverage for privileged mutations | platform, steward, source-policy, curation and delegated-support audit tests | operational audit walkthrough | **PASS** |
@@ -92,7 +92,7 @@ Security automated capability: **6/6 PASS**.
 | REG-1 | accepted VS1-VS8 behavior remains green | full exact-head OpenJM CI run **38026945641** on final #75 candidate lineage: Backend / Python 3.11 + Frontend / Node 22 success | **PASS** |
 | REG-2 | frontend tests/typecheck/build green | Frontend / Node 22 success in run **38026945641** | **PASS** |
 | REG-3 | exact-head CI acceptance before merge | #75 exact-head full run **38026945641** on `c7475ecc...`, followed by frozen-head merge | **PASS** |
-| REG-4 | manual browser journey repeated at end of phase | not yet executed at final phase state | **NOT RUN** |
+| REG-4 | manual browser journey repeated at end of phase | live Chrome/Keycloak persona journeys executed at QA2 and re-exercised through the authoritative candidate path at QA3 | **PASS** |
 
 ## Feature close-out
 
@@ -100,16 +100,16 @@ Security automated capability: **6/6 PASS**.
 | --- | --- | --- |
 | Chat-first UX (BV4) | accepted | **PASS** |
 | Source authorization (BV1-A/B/C) | accepted | **PASS** |
-| Chat artifact end-to-end flow (BV5-A/B/C) | accepted through #61/#65/#70 | **PASS** automated; live browser/model path NOT RUN |
+| Chat artifact end-to-end flow (BV5-A/B/C) | accepted through #61/#65/#70 | **PASS** automated; live browser/model path PASS (QA2) |
 | Governed reports | accepted report lifecycle/revalidation | **PASS** |
 | Governed report curation (BV6-A/B) | #71 curation + #75 bounded authoritative candidates | **PASS** |
 | Client-admin management (BV3-B) | accepted | **PASS** |
 | Platform-admin boundaries (BV3-A/C) | accepted | **PASS** |
-| Delegated support | #72 consuming read path accepted | **PASS** automated; live OIDC/PostgreSQL walkthrough NOT RUN |
+| Delegated support | #72 consuming read path accepted | **PASS** automated; live OIDC/PostgreSQL walkthrough PASS (QA2) |
 | Metering / entitlements (M1/M2/M3) | accepted | **PASS** |
 | Admission / capacity (INF1-A/B/C) | registry/admission/capacity telemetry accepted | **PASS** |
 | Backup / recovery (E1/E2/E3 + VS8) | accepted automated recovery evidence | **PASS** |
-| Installer / productization (REL1) | REL1-A + REL1-B1..B4 accepted (reproducible install, committed hash-pinned locks, lock drift gate, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged-wheel production install); full PostgreSQL production-profile acceptance executed 2026-10-10 | **PASS** (automated + PostgreSQL production profile); clean dev host, Windows/WSL2 runtime, live browser persona journey NOT RUN |
+| Installer / productization (REL1) | REL1-A + REL1-B1..B4 accepted (reproducible install, committed hash-pinned locks, lock drift gate, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged-wheel production install); full PostgreSQL production-profile acceptance executed 2026-10-10 | **PASS** (automated + PostgreSQL production profile + live browser persona journey at QA2); clean dev host and Windows/WSL2 runtime remain compatibility coverage |
 | Rahkia qualification | intentionally not integrated during current product build | **DEFERRED** |
 
 ## Remaining completion gates
@@ -117,19 +117,21 @@ Security automated capability: **6/6 PASS**.
 The feature gap list is now short. The remaining work is primarily productization
 and final integrated qualification, not another broad business-feature wave.
 
-1. **REL1 productization is now accepted.** REL1-A and REL1-B1..B4 delivered the
+1. **REL1 productization is accepted.** REL1-A and REL1-B1..B4 delivered the
    reproducible install, committed hash-pinned locks with a drift gate, the
    offline bundle with registry-blocked acceptance, the deterministic
    manifest/archive, and the packaged-wheel production install. The full
-   PostgreSQL production-profile acceptance was executed 2026-10-10 (see
-   "Live/deployment qualification" below). What remains for REL1 is live
-   environment qualification that requires hosts not available in this
-   environment.
-2. **Final manual/browser journey is NOT RUN at the current phase state.**
-   Repeat the end-user, data-steward, client-admin and OpenJM-operator golden
-   journeys against the final packaged candidate.
-3. **Live environment qualifications remain scoped honestly.** #72 did not run
-   live OIDC/Keycloak or a live PostgreSQL support walkthrough; #75 did not run a
+   PostgreSQL production-profile acceptance was executed 2026-10-10, and a
+   production-like acceptance environment (PostgreSQL production profile, live
+   Keycloak OIDC, seeded tenants and personas, governed Knowledge/Data fixtures,
+   live vector/RAG, approved model path) was qualified at QA1, QA2 and QA3 (see
+   "Live/deployment qualification" below).
+2. **Final manual/browser journey is PASS.** The end-user, data-steward,
+   client-admin and OpenJM-operator golden journeys were executed live through
+   real Keycloak OIDC at QA2, and the authoritative candidate path was
+   re-exercised live at QA3.
+3. **Live environment qualifications are now executed.** QA2 ran live
+   OIDC/Keycloak and a live PostgreSQL delegated-support walkthrough; QA3 ran a
    real vector-engine/RAG path for authoritative candidates.
 4. **Rahkia cutover is DEFERRED by design.** Do not connect the application to
    Rahkia during the remaining product build. The specialist integration phase
@@ -146,16 +148,17 @@ and final integrated qualification, not another broad business-feature wave.
 | Full PostgreSQL production-profile install/migrate/ready | real PostgreSQL (pgserver, non-root), packaged wheel, committed production lock, Python 3.11 | **PASS** | `install-linux.sh --profile production` from the release bundle: `INSTALLER_RC=0`; migrations on `PostgresqlImpl` to head `0021_support_content_scope`; `REL1-A VERIFY OK: version=0.2.0 profile=production`; `/api/ready` 200 `{"ready":true,"status":"ready"}`; `/api/health` 200; `alembic_version=0021_support_content_scope` in PostgreSQL; no SQLite metadata DB; no dev extras; no PYTHONPATH |
 | Frontend production build (registry-blocked) | Node 22, release npm cache | **PASS** | `npm ci` offline (138 packages) + `npm run build`; `dist/index.html` emitted |
 | Deterministic release archive | real 3.1 GB payload | **PASS** | two builds byte-identical: `00fa8adbd6409b5fa840d4196989fd6c9e14469f159ea157df8da67af27718ba`, 3243220300 bytes; manifest `f3c9926c79c4b7c57929a62c1f57b66cad8d070b26578b71fc425a0d47739236` |
-| Final browser/persona journey (end user, data steward, client admin, OpenJM operator) | none | **NOT RUN** | no live OIDC/Keycloak provider and no seeded personas in this environment; production disables dev-auth by design |
-| Live delegated-support / OIDC walkthrough | none | **NOT RUN** | no real Keycloak/OIDC environment available |
-| Live authoritative-candidate / vector-RAG journey (BV6-B) | none | **NOT RUN** | no live vector/RAG environment (model gateway on the approved test path not provisioned here) |
-| Clean Linux development host install | none | **NOT RUN** | no separate clean host |
-| Real Windows/WSL2 runtime install | none | **NOT RUN** | no real Windows host; machine-testable contract PASS only |
+| Final browser/persona journey (end user, data steward, client admin, OpenJM operator) | live QA env: PostgreSQL production profile, Keycloak 26.7.4 OIDC, seeded personas | **PASS** | QA2 (2026-10-11) live Chrome journeys for all four personas through real OIDC authorization-code + PKCE |
+| Live delegated-support / OIDC walkthrough | live Keycloak 26.7.4 + PostgreSQL 16 | **PASS** | QA2 delegated-support grant, consumption, ceiling, audit, revocation and expiry exercised live; residual delegation revoked at handoff |
+| Live authoritative-candidate / vector-RAG journey (BV6-B) | DB-GPT knowledge engine + Chroma, `glm-5.3-flash` | **PASS** | QA3 (2026-10-11) 50 PASS: ordinary retrieval, curation lifecycle, two-person rule, additive candidate, non-authoritative negatives, relevance gate, revocation/regrant, unauthorized and cross-tenant negatives, authorization-before-context, withdrawal. See `docs/qa/QA3_ACCEPTANCE.md` |
+| Clean Linux development host install | none | **NOT RUN** | no separate clean host; compatibility coverage, not an Issue #45 deployment gate |
+| Real Windows/WSL2 runtime install | none | **DEFERRED** | no real Windows host; non-blocking compatibility qualification, machine-testable contract PASS only. Full Windows support is not claimed |
 | Rahkia production cutover | n/a | **DEFERRED** | deliberate product decision |
 
-These live gates are NOT RUN, not PASS. The PostgreSQL production profile and the
-frontend production build are the two most important remaining integrated gates
-and both passed.
+The PostgreSQL production profile, the frontend production build, the live OIDC
+persona/delegated-support journeys and the live vector/RAG authoritative-candidate
+journey all pass. The remaining NOT RUN/DEFERRED items are compatibility coverage
+on hosts not available here, not Issue #45 deployment gates.
 
 ## How this matrix is maintained
 
