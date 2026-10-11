@@ -65,13 +65,22 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _as_utc(value: datetime | None) -> datetime | None:
-    """Normalise a stored datetime (SQLite returns naive UTC values)."""
+def as_utc(value: datetime | None) -> datetime | None:
+    """Normalise a stored datetime (SQLite returns naive UTC values).
+
+    PostgreSQL ``DateTime(timezone=True)`` columns come back timezone-aware while
+    SQLite comes back naive, so any comparison against a computed "now" must run
+    both sides through this helper or it raises ``TypeError`` on one dialect.
+    """
     if value is None:
         return None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+# Backwards-compatible alias for the callers already in this module.
+_as_utc = as_utc
 
 
 async def _audit(

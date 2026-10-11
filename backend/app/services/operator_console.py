@@ -24,12 +24,13 @@ credential.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditRecord, ExecutionTrace, ModelUsageEvent, SupportDelegation, Tenant
+from app.services.access_governance import as_utc
 
 # Server-side bounds. The audit trail is the largest table an operator can scan,
 # so the page size is capped independently of what a caller requests.
@@ -302,6 +303,23 @@ async def audit_summary(db: AsyncSession) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def delegation_is_effective(
+    status: str | None, expires_at: datetime | None, *, moment: datetime
+) -> bool:
+    """Whether a delegation is effective at *moment*, timezone-safely.
+
+    Stored expiry values arrive timezone-aware from PostgreSQL and naive from
+    SQLite, so both sides are normalised to UTC before comparison. Comparing an
+    aware expiry against a naive "now" raises ``TypeError`` on PostgreSQL, which
+    would turn the security and overview routes into a 500 on production.
+    """
+    if status != "active":
+        return False
+    expires = as_utc(expires_at)
+    reference = as_utc(moment) or moment
+    return expires is None or expires > reference
+
+
 async def security_summary(db: AsyncSession, *, now: datetime | None = None) -> dict:
     """Operators, support delegations and recent privileged activity.
 
@@ -311,7 +329,7 @@ async def security_summary(db: AsyncSession, *, now: datetime | None = None) -> 
     """
     from app.services import access_governance
 
-    moment = now or datetime.now(tz=None)
+    moment = as_utc(now) if now is not None else datetime.now(timezone.utc)
     operators = await access_governance.list_platform_operators(db)
     operator_rows = [
         {
@@ -334,12 +352,10 @@ async def security_summary(db: AsyncSession, *, now: datetime | None = None) -> 
     expiring = 0
     for row in delegations:
         expires_at = getattr(row, "expires_at", None)
-        is_active = row.status == "active" and (
-            expires_at is None or expires_at > moment
-        )
+        is_active = delegation_is_effective(row.status, expires_at, moment=moment)
         if is_active and row.scope == "content":
             active_content += 1
-        if is_active and expires_at is not None and (expires_at - moment).days <= 7:
+        if is_active and expires_at is not None and (as_utc(expires_at) - moment).days <= 7:
             expiring += 1
         delegation_rows.append(
             {

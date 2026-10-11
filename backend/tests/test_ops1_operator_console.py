@@ -16,11 +16,20 @@ Covers the reviewed boundaries for the operator plane:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from app.core.platform import PlatformCapability
 from app.core.tenancy import LEGACY_PRINCIPAL_ID
 from app.main import app
-from app.models import AuditRecord, ExecutionTrace
+from app.models import (
+    AuditRecord,
+    ExecutionTrace,
+    PrincipalAccount,
+    SupportDelegation,
+    Tenant,
+)
 from app.services import access_governance as governance
+from app.services.operator_console import delegation_is_effective
 
 OPS1_ROUTES = (
     "/api/platform/operations/overview",
@@ -259,3 +268,70 @@ async def test_content_support_capability_adds_no_console_content(client, file_d
         response = await client.get(path)
         assert response.status_code == 200
         _assert_no_forbidden(response.text, path)
+
+
+# ---------------------------------------------------------------------------
+# Timezone safety (PostgreSQL returns aware datetimes, SQLite naive)
+# ---------------------------------------------------------------------------
+
+
+def test_delegation_effectiveness_compares_timezone_aware_expiries():
+    """An aware expiry must be compared against an aware moment.
+
+    The original naive-``now`` comparison raised
+    ``TypeError: can't compare offset-naive and offset-aware datetimes`` against
+    a PostgreSQL ``timestamptz`` expiry, which turns ``/api/platform/security``
+    and ``/api/platform/operations/overview`` into a 500 exactly when an active,
+    time-bounded delegation exists. SQLite never caught it because it returns
+    naive datetimes.
+    """
+    moment = datetime.now(timezone.utc)
+
+    # Timezone-aware expiry, as PostgreSQL returns it.
+    assert delegation_is_effective("active", moment + timedelta(days=3), moment=moment) is True
+    assert delegation_is_effective("active", moment - timedelta(days=1), moment=moment) is False
+
+    # Naive expiry, as SQLite returns it.
+    naive = (moment + timedelta(days=3)).replace(tzinfo=None)
+    assert delegation_is_effective("active", naive, moment=moment) is True
+
+    # A caller passing a naive "now" must not break the comparison either: the
+    # production path computes an aware moment, but the rule is total.
+    naive_moment = moment.replace(tzinfo=None)
+    assert delegation_is_effective("active", moment + timedelta(days=3), moment=naive_moment) is True
+    assert delegation_is_effective("active", moment - timedelta(days=1), moment=naive_moment) is False
+
+    # Open-ended, and never effective unless active.
+    assert delegation_is_effective("active", None, moment=moment) is True
+    assert delegation_is_effective("revoked", moment + timedelta(days=3), moment=moment) is False
+
+
+async def test_security_route_survives_an_active_time_bounded_delegation(client, file_db):
+    """The route must answer 200 with an ACTIVE delegation that carries an expiry."""
+    await _grant_local_operator(file_db, PlatformCapability.METADATA_READ)
+    async with file_db() as db:
+        db.add(Tenant(id="tnt-ops1", slug="ops1-support", name="OPS1 Support Tenant"))
+        db.add(
+            PrincipalAccount(
+                id="prn-support", subject="qa|ops1-support", display_name="OPS1 Support"
+            )
+        )
+        await db.flush()
+        db.add(
+            SupportDelegation(
+                tenant_id="tnt-ops1",
+                principal_id="prn-support",
+                scope="content",
+                status="active",
+                classification_ceiling="internal",
+                expires_at=datetime.now(timezone.utc) + timedelta(days=2),
+            )
+        )
+        await db.commit()
+
+    response = await client.get("/api/platform/security")
+    assert response.status_code == 200, response.text
+    rows = [d for d in response.json()["support_delegations"] if d["scope"] == "content"]
+    assert rows, "the seeded delegation should be listed"
+    assert rows[0]["effective"] is True
+    assert response.json()["active_content_delegations"] >= 1
