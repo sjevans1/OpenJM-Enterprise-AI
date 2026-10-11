@@ -175,7 +175,8 @@ No role semantics, authorization predicate, lock, migration or CI change.
 
 The environment is left in a reusable state for QA3: backend `/api/ready` and
 `/api/health` green, frontend reachable, Keycloak healthy. The QA content-support
-capability and all effective support delegations were revoked; the only remaining
-delegation row is expired and inert. Intentionally retained QA mutations:
-department `qa2-temp`, group `qa2-temp-group`, a suspended probe tenant, the QA2
-probe documents, and the tenant-visible structured source.
+capability is revoked and every QA support delegation is revoked (the last one was
+revoked explicitly at handoff, after its expiry had already made it inert).
+Intentionally retained QA mutations: department `qa2-temp`, group
+`qa2-temp-group`, a suspended probe tenant, the QA2 probe documents, and the
+tenant-visible structured source.
