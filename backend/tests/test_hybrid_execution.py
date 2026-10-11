@@ -398,8 +398,12 @@ async def test_hybrid_decomposition_preserves_qualifiers(session, monkeypatch):
     )
 
     assert plan.execution_class == "hybrid"
-    # The Structured planner received the original message verbatim.
+    # The Structured planner receives the BOUNDED structured sub-question, not the
+    # whole compound request (QA2 Finding 5: unrelated Knowledge wording made the
+    # planner produce no plan). The structured leg keeps its own qualifiers
+    # verbatim, so "ANNUAL" still reaches the planner.
     plan_calls = [msg for kind, msg in captured_messages if kind == "plan"]
-    assert plan_calls[0] == original
+    assert plan_calls[0] == "what is the total ANNUAL revenue for Blue Mountain Cafe?"
+    assert "ANNUAL" in plan_calls[0]
     # "annual revenue" qualifier was preserved in the SQL (not rewritten to current revenue).
     assert "annual_revenue" in plan.system_prompt

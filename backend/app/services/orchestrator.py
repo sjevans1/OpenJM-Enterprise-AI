@@ -715,22 +715,26 @@ class OpenJMOrchestrator:
                 knowledge_error = "Knowledge retrieval failed."
 
         # --- Structured execution ---
-        # Section 17: Structured planning receives the original user request
-        # verbatim, not a paraphrased sub-question. The decomposition above
-        # identified which portion is structured; the planner sees the full
-        # original wording to preserve qualifiers (annual vs current, etc.).
+        # The planner receives the BOUNDED structured sub-question the existing
+        # decomposition already identified, not the whole compound request.
+        # Feeding it the original wording forced it to interpret unrelated
+        # Knowledge phrasing, so it produced no plan and the turn degraded to
+        # Knowledge-only. The original request still reaches the trace and the
+        # final synthesis; only the planner's input is narrowed, and the
+        # decomposition preserves each part's original wording so qualifiers
+        # inside the structured leg survive.
         structured_evidence: list[Evidence] = []
         structured_error: str | None = None
         structured_query = " and ".join(decomposition.structured_queries)
         structured_plan = await self._execute_structured_plan(
-            message,
+            structured_query,
             db,
             user_id,
             conversation_id,
             requested_mode,
             request_id,
             "hybrid",
-            **({"scope": scope} if scope is not None else {}),
+            **( {"scope": scope} if scope is not None else {} ),
             budget=budget,
         )
         if structured_plan.evidence:

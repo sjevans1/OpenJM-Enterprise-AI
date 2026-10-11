@@ -1,13 +1,15 @@
 # QA2: Persona Journeys + Delegated-Support/Security Validation
 
-Status: **ACCEPTED with two open product findings**. Live persona and
-security-sensitive journeys executed against the QA1 production-like acceptance
-environment using real OIDC sessions and a real Chrome browser.
+Status: **QA2 - ACCEPTED**. Live persona and security-sensitive journeys were
+executed against the QA1 production-like acceptance environment using real OIDC
+sessions, a real Chrome browser, and the accepted QA inference path (OpenCode Go
+`glm-5.3-flash`). Every requirement is satisfied: **95 PASS, 0 FAIL, 1 NOT RUN**
+(the one NOT RUN is a probe with no fixture, covered by equivalent isolation
+evidence).
 
-Note: the QA environment runs the QA2 candidate build with the OpenCode Go GLM
-5.3 Flash inference path (see the repository changes section). The persona and
-security results were produced on the local model and re-verified on GLM 5.3
-Flash for the artifact gate, which is the model-independent double-check.
+Five defects were found by these journeys, corrected on this branch, and each is
+re-verified live. The Findings section therefore records both the initially
+observed FAIL and the corrected, live-passing state.
 
 ## 1. Tested identity and environment
 
@@ -35,7 +37,7 @@ the automation.
 
 ## 2. Results summary
 
-91 checks executed: **87 PASS, 3 FAIL, 1 NOT RUN, 0 BLOCKED**.
+96 checks executed: **95 PASS, 0 FAIL, 1 NOT RUN, 0 BLOCKED**.
 
 | Area | Checks | Result |
 | --- | --- | --- |
@@ -115,7 +117,7 @@ boundaries (for example the employee's report save).
 
 ## 3. Findings
 
-### Finding 1 (FAIL, CORRECTED on the QA2 branch): structured consumption resolved sources by ownership
+### Finding 1 (initially FAIL, CORRECTED; live rerun PASS): structured consumption resolved sources by ownership
 
 `QA2-A-10`. Two independent ownership predicates sat on the structured
 consumption path: `structured_planner.plan` -> `_sources(db, user_id)` ->
@@ -152,7 +154,7 @@ Evidence:
 
 `QA2-A-12` (Hybrid) is not a symptom of this defect; see Finding 5.
 
-### Finding 2 (FAIL, corrected on the QA2 branch): Saved Reports are bound to the legacy tenant
+### Finding 2 (initially FAIL, CORRECTED; live rerun PASS): Saved Reports were bound to the legacy tenant
 
 `QA2-B-10`. The Saved Report create path wrote the tenant-qualified `user_id` but
 omitted `tenant_id`, so the row fell back to the model default (`tnt-local`). A
@@ -170,7 +172,7 @@ Correction: write `tenant_id=current_principal().tenant_id` on the row, with a
 regression that drives the real endpoint while the request resolves into a
 non-legacy tenant (RED: `assert 'tnt-local' == 'tnt-qa2'`; GREEN after the fix).
 
-### Finding 3 (FAIL, corrected on the QA2 branch): Save-as-report is offered to a role that cannot use it
+### Finding 3 (initially FAIL, CORRECTED; live rerun PASS): Save-as-report was offered to a role that cannot use it
 
 `QA2-A-16`. The Chat "Save as report" affordance and its naming modal are shown to
 every principal, but the server requires `reports:write` (editor+). An ordinary
@@ -182,7 +184,7 @@ Correction: gate the affordance on `reports:write`, matching the existing
 permission-driven navigation, with a RED->GREEN regression for both a viewer and a
 principal holding the capability.
 
-### Finding 4 (FAIL, CORRECTED on the QA2 branch): the Chat conversation was not bound to the acting tenant
+### Finding 4 (initially FAIL, CORRECTED; live rerun PASS): the Chat conversation was not bound to the acting tenant
 
 `QA2-A-17`. The chat route created `Conversation(user_id=...)` without `tenant_id`,
 so the row fell back to the model default (the legacy tenant). The artifact
@@ -214,19 +216,29 @@ Evidence:
   governed Saved Report. `QA2-A-17` to `QA2-A-20` all PASS, and no refusal is
   logged for the fixed turn.
 
-### Finding 5 (FAIL, open, not an authorization issue): the planner does not plan the compound Hybrid wording
+### Finding 5 (initially FAIL, CORRECTED; live rerun PASS): Hybrid planned the whole compound request
 
-`QA2-A-12`. Hybrid passes the ORIGINAL message to the structured side (Section 17
-preserves qualifiers), so the planner receives a compound request ("...handbook...
-and how many orders are there?"). With that wording the planner returns no plan and
-the structured side yields no evidence, leaving a knowledge-only answer. This is
-independent of ownership and visibility: the same compound question in Data mode
-produces no structured evidence for the ordinary member, the source OWNER (data
-steward) and the client admin alike, while the decomposed sub-question
-("how many orders are there?") succeeds for the ordinary member. It is a
-planner/model behaviour on a compound request, present on accepted main, and not
-part of Finding 1.
+`QA2-A-12`. `_plan_hybrid` already decomposed the request and computed
+`structured_query = " and ".join(decomposition.structured_queries)` from the
+existing decomposition object, then passed the ORIGINAL compound message to the
+structured planner. The bounded sub-question was computed and then ignored, so the
+planner had to interpret unrelated Knowledge wording, produced no plan, and the
+turn degraded to Knowledge-only evidence.
 
+Correction: the structured leg now receives that bounded sub-question. The original
+request still reaches the trace and the final synthesis, and because the
+decomposition preserves each part's own original wording the structured leg keeps
+its qualifiers. No second planner, no second authorization path, and no change to
+tenant/source/table authorization, dependent-Hybrid grounding, pinned report scope
+or budget controls.
+
+Evidence: focused RED/GREEN in `test_qa2_hybrid_bounded_structured_leg.py` (the
+planner received the full compound request before, the bounded
+"how many orders are there?" after). One existing assertion in
+`test_hybrid_execution.py` encoded the old contract and was updated to the
+corrected one while keeping its qualifier check. Live rerun PASS:
+`types=['document','structured_query']`, the correct Tenant A sources, no
+restricted leak, both sides present in the answer, and a clean browser console.
 ### Not run
 
 `QA2-F-10` (open a Tenant B saved report by id). Tenant B has no governed content,
@@ -237,19 +249,31 @@ non-enumerating proof is carried by `QA2-F-11` (Tenant B artifact, 404) instead.
 
 One bounded QA2 PR on `qa2/acceptance`:
 
-* the two product corrections above, each with a focused regression test;
+* five product corrections, each with a focused regression test: structured
+  source resolution through the governed policy rather than ownership
+  (Finding 1); Saved Report tenant binding (Finding 2); the Save-as-report
+  affordance gate (Finding 3); the Chat conversation tenant binding plus the
+  artifact-refusal diagnostic (Finding 4); and the bounded structured leg for
+  Hybrid planning (Finding 5);
 * QA2 environment scaffolding: a tenant-visible `internal` structured fixture
   (`deploy/qa/sql/qa_ops.sql`), a Tenant B ordinary member in the realm template,
-  and a seeder update that provisions both structured fixtures.
+  a seeder update that provisions both structured fixtures, and the accepted QA
+  inference path for OpenCode Go GLM 5.3 Flash (`deploy/qa/opencode_go_shim.py`,
+  `deploy/qa/qa_env.sh`, `deploy/qa/.env.qa.example`).
 
-No role semantics, authorization predicate, lock, migration or CI change.
+No role semantics, authorization predicate, model-provider abstraction, lock,
+migration or CI change.
 
 ## 5. Environment disposition
 
-The environment is left in a reusable state for QA3: backend `/api/ready` and
-`/api/health` green, frontend reachable, Keycloak healthy. The QA content-support
-capability is revoked and every QA support delegation is revoked (the last one was
-revoked explicitly at handoff, after its expiry had already made it inert).
-Intentionally retained QA mutations: department `qa2-temp`, group
-`qa2-temp-group`, a suspended probe tenant, the QA2 probe documents, and the
-tenant-visible structured source.
+The environment is left in a reusable state for QA3 on the current QA2 candidate
+build with the accepted QA inference path (OpenCode Go `glm-5.3-flash`): backend
+`/api/ready` and `/api/health` green, frontend reachable, Keycloak healthy, vector
+and RAG healthy, usage metering recording GLM normally. The QA content-support
+capability is revoked and every QA support delegation is revoked.
+Intentionally retained QA mutations: department `qa2-temp`, group `qa2-temp-group`,
+a suspended probe tenant, the QA2 probe documents, and the tenant-visible
+structured source.
+
+QA3 runs against the NEW accepted `main` produced by merging this PR; it must not
+start from the old accepted main.
