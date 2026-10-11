@@ -103,6 +103,15 @@
       "attributes": { "tenant": ["globex"] }
     },
     {
+      "username": "qa.otherm",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "qa.otherm@qa.openjm.local",
+      "firstName": "QA",
+      "lastName": "Other Tenant Member",
+      "attributes": { "tenant": ["globex"] }
+    },
+    {
       "username": "qa.platform",
       "enabled": true,
       "emailVerified": true,

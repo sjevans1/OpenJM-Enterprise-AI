@@ -363,6 +363,15 @@ export default function App() {
       : authState.status === 'authenticated'
         ? navVisibilityFor(authState.principal)
         : NO_NAV
+  // Saving a snapshot as a governed report is a write capability (the server
+  // requires `reports:write`). Offering the affordance to a principal that does
+  // not hold it produces a modal whose save always fails closed with 403, so it
+  // is only presented where it can actually be used. The development workspace
+  // resolves the local owner server-side and keeps every surface.
+  const canSaveReports =
+    authState.status === 'dev' ||
+    (authState.status === 'authenticated' &&
+      authState.principal.permissions.includes('reports:write'))
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -1289,7 +1298,7 @@ export default function App() {
                             ))}
                           </div>
                         )}
-                        {message.role === 'assistant' && (message.evidence?.length || 0) > 0 && (
+                        {message.role === 'assistant' && (message.evidence?.length || 0) > 0 && canSaveReports && (
                           <div className="snapshot-actions">
                             <button
                               type="button"

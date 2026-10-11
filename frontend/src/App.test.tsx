@@ -919,3 +919,74 @@ test('platform control-plane capabilities grant no ordinary tenant navigation', 
   const nav = document.querySelector('.primary-nav') as HTMLElement
   expect(nav.textContent || '').not.toMatch(/platform|control plane/i)
 })
+
+// ---------------------------------------------------------------------------
+// Saving a snapshot as a governed report is a write capability.
+//
+// The server requires `reports:write` to create a Saved Report. Before this
+// guard the affordance was offered to every principal, so a plain viewer could
+// open the naming modal and every save failed closed with
+// 403 "lacks required permission 'reports:write'". The affordance is now shown
+// only where it can succeed; the backend still re-authorizes the POST.
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_ANSWER = {
+  conversation_id: 'conversation-a',
+  message_id: 'message-a',
+  answer: 'Grounded answer.',
+  execution_class: 'knowledge',
+  mode: 'knowledge',
+  evidence: [
+    {
+      source_type: 'document',
+      source_id: 'document-a',
+      title: 'Employee Handbook',
+      passage: 'Probation is three months.',
+      metadata: {},
+    },
+  ],
+  artifacts: [],
+}
+
+function stubChatWithEvidence(principal: Record<string, unknown>) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method || 'GET'
+      if (url === '/api/auth/config') return jsonResponse(OIDC_AUTH_CONFIG)
+      if (url === '/api/auth/me') return jsonResponse(principal)
+      if (url === '/api/chat' && method === 'POST') return jsonResponse(EVIDENCE_ANSWER)
+      return jsonResponse([])
+    }),
+  )
+}
+
+async function askOneGroundedQuestion() {
+  const composer = await screen.findByPlaceholderText('Ask OpenJM about your work...')
+  fireEvent.change(composer, {
+    target: { value: 'What does the handbook say about probation?' },
+  })
+  fireEvent.keyDown(composer, { key: 'Enter', shiftKey: false })
+  await screen.findByText('Grounded answer.')
+}
+
+test('a viewer without reports:write is not offered Save as report', async () => {
+  storeAuthenticatedSession()
+  stubChatWithEvidence(principalContext({ permissions: ['chat:use', 'reports:read'] }))
+  render(<App />)
+
+  await askOneGroundedQuestion()
+  expect(screen.queryByRole('button', { name: /save as report/i })).toBeNull()
+})
+
+test('a principal holding reports:write is offered Save as report', async () => {
+  storeAuthenticatedSession()
+  stubChatWithEvidence(
+    principalContext({ permissions: ['chat:use', 'reports:read', 'reports:write'] }),
+  )
+  render(<App />)
+
+  await askOneGroundedQuestion()
+  expect(await screen.findByRole('button', { name: /save as report/i })).toBeTruthy()
+})

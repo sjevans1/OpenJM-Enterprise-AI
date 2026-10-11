@@ -358,6 +358,10 @@ async def create_report(
 
     document_ids, data_source_ids = _source_ids(evidence)
     report = SavedReport(
+        # The acting tenant is written explicitly. Relying on the model default
+        # bound the row to the legacy tenant, which hid it from every
+        # tenant-scoped read (for example the BV6 curation surface).
+        tenant_id=current_principal().tenant_id,
         user_id=current_principal().user_id,
         conversation_id=message.conversation_id,
         message_id=message.id,
