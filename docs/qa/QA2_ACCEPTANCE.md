@@ -4,6 +4,11 @@ Status: **ACCEPTED with two open product findings**. Live persona and
 security-sensitive journeys executed against the QA1 production-like acceptance
 environment using real OIDC sessions and a real Chrome browser.
 
+Note: the QA environment runs the QA2 candidate build with the OpenCode Go GLM
+5.3 Flash inference path (see the repository changes section). The persona and
+security results were produced on the local model and re-verified on GLM 5.3
+Flash for the artifact gate, which is the model-independent double-check.
+
 ## 1. Tested identity and environment
 
 | Field | Value |
@@ -16,7 +21,7 @@ environment using real OIDC sessions and a real Chrome browser.
 | OIDC | Keycloak 26.7.4, realm `openjm`, authorization code + PKCE `S256` |
 | Frontend | production build served by Caddy at `http://127.0.0.1:15173` |
 | Browser | real Chrome 154 headless over CDP (Windows), driven from WSL |
-| Model gateway | local OpenAI-compatible (`local`, fallback `none`) |
+| Model gateway | OpenCode Go `glm-5.3-flash` via the local OpenAI-compatible shim (`local`, fallback `none`) |
 | Vector/RAG | DB-GPT + Chroma, `all-MiniLM-L6-v2` |
 
 The running product tree is identical to `main`; PR #87 (QA1 scaffolding) is the
