@@ -1,9 +1,14 @@
 # OPS1 Acceptance Record: OpenJM Operations Control Center
 
-- **Tested Git SHA:** `ecb7b69969a189a80aece6302836a4cd8d723a4f` (`main`; QA1, QA2 and QA3 accepted and merged).
+- **Baseline:** `main@ecb7b69969a189a80aece6302836a4cd8d723a4f` (QA1, QA2 and QA3 accepted and merged).
+- **Implementation under test:** branch `ops1/control-center`, head
+  `4c1f5c13f36701138d80509ab04b904cd7867d55`, which is the tree the live evidence is
+  bound to (`artifacts/evidence.json` -> `build.git_sha`). The OPS1 code does not
+  exist on the baseline, so the baseline is the integration point and the branch head
+  is the tested artifact. Both are stated so neither can be mistaken for the other.
 - **Date:** 2026-10-11.
 - **Package:** OPS1 (the final substantive product package before the commercial-readiness and closure review).
-- **Outcome:** **OPS1 ACCEPTED. 27 live checks: 27 PASS, 0 FAIL.**
+- **Outcome:** **OPS1 ACCEPTED. 27 live checks: 27 PASS, 0 FAIL** (18 API/security/leakage + 6 browser + 3 drill-down).
 - **Rahkia:** DEFERRED. OPS1 claims no Rahkia capability.
 - **Issue #79:** untouched. Host qualification remains a separate stream.
 - **Issues #45 and #79:** left open.
@@ -11,6 +16,37 @@
 OPS1 delivers the owner/operator experience for Plane 1 (the OpenJM platform
 operator) without touching the other two planes. It builds on the accepted
 control plane rather than replacing any part of it.
+
+## Supervisor review and one bounded correction
+
+A fresh GLM 5.3 Flash supervisor pass reviewed the branch against this contract
+(capability gating, token boundary, audit allow-list, trace projection, page caps,
+readiness reuse, dialect behaviour) and found one real latent defect.
+
+**Finding (blocking, now fixed).** `security_summary` compared a stored
+`expires_at` against `datetime.now(tz=None)`. Those columns are
+`DateTime(timezone=True)`, so PostgreSQL returns timezone-aware values while
+SQLite returns naive ones. Aware-versus-naive comparison raises `TypeError`, which
+would have turned `/api/platform/security` and `/api/platform/operations/overview`
+into a 500 exactly when an ACTIVE, time-bounded support delegation existed. Neither
+the SQLite tests nor the live environment could catch it, because the live
+environment had only a revoked delegation (the `status == "active"` check
+short-circuits before the comparison).
+
+**Correction.** `access_governance._as_utc` is promoted to a public `as_utc` (the
+old name is kept as an alias) and both sides are normalised in a new
+`delegation_is_effective` rule, which `security_summary` now uses with an aware
+moment. Two regression tests were added: a dialect-independent rule test and an
+endpoint test that seeds an active, expiry-bearing delegation. Both are RED
+without the normalisation (`TypeError` at the comparison) and GREEN with it.
+Behaviour is unchanged for active open-ended and non-active delegations.
+
+Two further review notes were accepted as non-blocking and are recorded rather
+than fixed: the audit metadata allow-list deliberately drops governance keys such
+as `classification_ceiling` and curation `prior_state`, so the console is less
+detailed than the raw trail for those events (safe by construction; a later
+package can widen the allow-list), and the usage page cap (200) differs from the
+audit/trace cap (100), which is cosmetic.
 
 ## Work packages
 
@@ -101,6 +137,7 @@ profile, Keycloak 26.7.4 OIDC, DB-GPT + Chroma vector/RAG, OpenCode Go
 | Security | 3 | PASS |
 | Diagnostics | 3 | PASS |
 | Leakage | 1 | PASS |
+| Correlation drill-down and audited denies | 3 | PASS |
 | Browser journey | 6 | PASS |
 
 Key results:
