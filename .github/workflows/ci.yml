@@ -10,12 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: "Backend test tier to run on the selected Git ref"
+        description: "CI-3L tier to run on the selected Git ref"
         required: true
         type: choice
-        default: full
+        default: fast
         options:
           - fast
+          - standard
           - full
 
 permissions:
@@ -66,8 +67,8 @@ jobs:
         if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'fast') }}
         run: python -m pytest -q --tb=short --maxfail=3 --ignore=tests/test_upload_source_name_integration.py
 
-      - name: Full backend regression (main or explicitly dispatched)
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'full') }}
+      - name: Full backend regression (STANDARD/FULL)
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
         # The upload/source integration test runs a real isolated server and may
         # need a public embedding-model download. It never uses local Gemma.
         run: python -m pytest -q --tb=short --maxfail=3
@@ -76,13 +77,16 @@ jobs:
         if: success()
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] || { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.suite }}" = "fast" ]; }; then
-            echo "Backend: fast deterministic tests (real embedding integration deferred)." >> "$GITHUB_STEP_SUMMARY"
+            echo "Backend: FAST deterministic tests (real embedding integration deferred)." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Backend: full repository pytest suite, including isolated embedding integration." >> "$GITHUB_STEP_SUMMARY"
+            echo "Backend: STANDARD/FULL repository pytest suite, including isolated embedding integration." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "Real Gemma/model acceptance remains a separate controlled local gate." >> "$GITHUB_STEP_SUMMARY"
+          echo "FULL additionally requires the REL1 offline-bundle gate; real Gemma/model acceptance remains a separate controlled local gate." >> "$GITHUB_STEP_SUMMARY"
 
+  # CI-3L STANDARD: dependency/lock reproducibility is required before
+  # candidate freeze, but not on every small pull-request iteration.
   rel1_lock_drift_gate:
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
     name: REL1 / lock drift gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -127,7 +131,10 @@ jobs:
           bash scripts/build-python-wheelhouse.sh \
             "$RUNNER_TEMP/openjm-wheelhouse" backend/requirements.lock
 
+  # CI-3L FULL: release/offline packaging is expensive acceptance evidence
+  # and runs only for an explicitly frozen FULL candidate.
   rel1_offline_bundle_gate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'full' }}
     name: REL1 / offline bundle + registry-blocked acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 30
