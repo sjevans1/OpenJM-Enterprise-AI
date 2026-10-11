@@ -288,13 +288,30 @@ class OpenJMOrchestrator:
         failure.
         """
         try:
+            governed_sources = await self._structured_sources(
+                db, user_id, scope=scope, access=_request_access_for(user_id)
+            )
+        except ReportScopeError:
+            # A pinned source is no longer authorized: fail closed rather than
+            # fall back to any other source.
+            return ExecutionPlan(
+                execution_class="structured",
+                system_prompt="",
+                direct_answer=(
+                    "A pinned data source for this report is no longer "
+                    "authorized. No database query was executed."
+                ),
+                requested_mode=requested_mode,
+            )
+        try:
             decision: StructuredPlanningResult = await structured_planner.plan(
                 message,
                 db,
                 user_id,
-                **({"scope": scope} if scope is not None else {}),
+                **( {"scope": scope} if scope is not None else {} ),
                 budget=budget,
                 usage_context=_usage_context_for(user_id, request_id, "structured"),
+                sources=governed_sources,
             )
         except StructuredPlannerError as exc:
             await _persist_pending_usage(db, exc)
@@ -1020,13 +1037,29 @@ class OpenJMOrchestrator:
             f"{f' {grounded_param.unit}' if grounded_param.unit else ''}"
         )
         try:
+            governed_sources = await self._structured_sources(
+                db, user_id, scope=scope, access=_request_access_for(user_id)
+            )
+        except ReportScopeError:
+            return ExecutionPlan(
+                execution_class="hybrid",
+                system_prompt="",
+                direct_answer=(
+                    "A pinned data source for this report is no longer "
+                    "authorized. No database query was executed."
+                ),
+                evidence=knowledge_evidence,
+                requested_mode="hybrid",
+            )
+        try:
             decision: StructuredPlanningResult = await structured_planner.plan(
                 enhanced_message,
                 db,
                 user_id,
-                **({"scope": scope} if scope is not None else {}),
+                **( {"scope": scope} if scope is not None else {} ),
                 budget=budget,
                 usage_context=_usage_context_for(user_id, request_id, "structured"),
+                sources=governed_sources,
             )
         except StructuredPlannerError as exc:
             await _persist_pending_usage(db, exc)
