@@ -30,7 +30,7 @@ the automation.
 
 ## 2. Results summary
 
-88 checks executed: **83 PASS, 4 FAIL, 1 NOT RUN, 0 BLOCKED**.
+91 checks executed: **87 PASS, 3 FAIL, 1 NOT RUN, 0 BLOCKED**.
 
 | Area | Checks | Result |
 | --- | --- | --- |
@@ -52,10 +52,10 @@ and no platform controls). Authorized Knowledge retrieval PASS with citation
 title never appears. Restricted structured data fails closed with an explicit
 "safely not answered" message and no schema/value leak. Reports: the ordinary
 member cannot create a Saved Report (denied by the role model, `reports:write` is
-editor+), which is the correct fail-closed outcome. Artifact: asking Chat in
-natural language for a downloadable HTML summary produced no artifact with the
-local model, so that route is recorded FAIL (see finding 4); the artifact
-create/download/authorization path itself is proven separately in QA2-F.
+editor+), which is the correct fail-closed outcome. Artifact: a Chat turn creates
+a real downloadable artifact, downloadable with the correct filename and MIME
+type, refused to another tenant, and not presented as a governed Saved Report
+(see finding 4).
 
 **Data steward (`qa.steward`).** Login PASS; navigation exposes Knowledge + Data
 but not Administration and no platform control plane. Discovered documents are
@@ -177,18 +177,37 @@ Correction: gate the affordance on `reports:write`, matching the existing
 permission-driven navigation, with a RED->GREEN regression for both a viewer and a
 principal holding the capability.
 
-### Finding 4 (FAIL, open): natural-language artifact creation did not fire
+### Finding 4 (FAIL, CORRECTED on the QA2 branch): the Chat conversation was not bound to the acting tenant
 
-`QA2-A-17`. Asking Chat "Create a downloadable HTML summary of the employee
-handbook" returned `artifacts=0`; `QA2-A-18/19/20` (download MIME/filename,
-cross-tenant denial, not-a-report) therefore did not run. Artifact creation from
-Chat depends on the model emitting the artifact directive, so with the local
-model this route did not reproduce. It is recorded as FAIL rather than passed: the
-artifact capability is proven independently (creation through the accepted
-artifacts API, download 200 with the correct filename, cross-tenant 404 in
-QA2-F-02/F-11/F-17), but the natural-language route is not demonstrated. Whether
-this is a product prompt/route issue or a local model limitation is an open
-question, not a confirmed defect.
+`QA2-A-17`. The chat route created `Conversation(user_id=...)` without `tenant_id`,
+so the row fell back to the model default (the legacy tenant). The artifact
+linkage check is tenant-scoped, so it then found no conversation and refused every
+Chat artifact for any principal acting outside the legacy tenant. This is the same
+defect family as Finding 2, and invisible offline for the same reason: test
+requests resolve the development principal, which lives in the legacy tenant where
+the default coincides with the correct value.
+
+Diagnosis was itself blocked first: a refusal produced only a generic user note
+with no server-side record. The bounded, log-safe category (with linkage ids,
+never content or model text) is now recorded, which identified
+`category=artifact_error`, a bare `ArtifactError` because three journey subclasses
+do not override `code`.
+
+Correction: write `tenant_id=current_principal().tenant_id` when the chat route
+creates the conversation, and record the artifact refusal category.
+
+Evidence:
+
+* Focused RED: `test_qa2_chat_artifact_tenant.py` fails with
+  `assert 'tnt-local' == 'tnt-qa2-chat-art'`, and the new log records the refusal.
+* Focused GREEN: that test plus the two diagnostic tests pass; the related
+  regression set is 98 passed.
+* Live (real OIDC, real Chrome, real model, wheel rebuilt from the branch head):
+  the Chat turn creates the artifact (`QA2 Acceptance Checklist`,
+  `qa2-acceptance-checklist.html`, `text/html`), downloads 200 with a correct
+  `Content-Disposition`, another tenant gets 404, and it is not presented as a
+  governed Saved Report. `QA2-A-17` to `QA2-A-20` all PASS, and no refusal is
+  logged for the fixed turn.
 
 ### Finding 5 (FAIL, open, not an authorization issue): the planner does not plan the compound Hybrid wording
 

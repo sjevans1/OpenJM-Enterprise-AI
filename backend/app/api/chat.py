@@ -140,7 +140,13 @@ async def chat(
             if item.role in {"user", "assistant"}
         ]
     else:
-        conversation = Conversation(user_id=current_principal().user_id)
+        conversation = Conversation(
+            # The acting tenant is written explicitly. Relying on the model
+            # default bound the row to the legacy tenant, which broke the
+            # tenant-scoped artifact linkage check for every other tenant.
+            tenant_id=current_principal().tenant_id,
+            user_id=current_principal().user_id,
+        )
         db.add(conversation)
         await db.flush()
         history = []
