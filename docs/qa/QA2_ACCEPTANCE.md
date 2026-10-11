@@ -30,7 +30,7 @@ the automation.
 
 ## 2. Results summary
 
-87 checks executed: **81 PASS, 5 FAIL, 1 NOT RUN, 0 BLOCKED**.
+88 checks executed: **83 PASS, 4 FAIL, 1 NOT RUN, 0 BLOCKED**.
 
 | Area | Checks | Result |
 | --- | --- | --- |
@@ -110,22 +110,42 @@ boundaries (for example the employee's report save).
 
 ## 3. Findings
 
-### Finding 1 (FAIL, needs a product decision): Data/Hybrid structured evidence is unreachable for a non-owner
+### Finding 1 (FAIL, CORRECTED on the QA2 branch): structured consumption resolved sources by ownership
 
-`QA2-A-10`, `QA2-A-12`. Data mode and the Hybrid structured side resolve candidate
-sources through `structured_planner.plan` -> `_sources(db, user_id)` with no tenant
-scope, which falls back to `DataSource.user_id == user_id` (ownership). An
-ordinary tenant member owns no source (creating one needs `data:write`, editor+),
-so the request fails closed with "the authorized schema does not support a safe
-answer" even though an `internal`, `tenant_visible`, connected source exists for
-the tenant. The orchestrator's own `_structured_sources` helper documents
-tenant-wide internal availability as the "resolved product decision" and the
-Hybrid decomposition uses it, so the execution path is inconsistent with it.
+`QA2-A-10`. Two independent ownership predicates sat on the structured
+consumption path: `structured_planner.plan` -> `_sources(db, user_id)` ->
+`DataSource.user_id == user_id`, and `StructuredQueryTool.execute` ->
+`DataSource.id == source_id AND DataSource.user_id == context.user_id`. An
+ordinary tenant member could not consume a native `internal` source with
+`tenant_visible=true` they are authorized for, while a source owner could reach a
+`highly_restricted` source with no grant. Ownership is a curation and management
+boundary, not the ordinary consumption boundary.
 
-Not corrected here: making an internal source reachable tenant-wide **widens data
-authorization**, which needs an explicit product decision (and would change
-accepted source-authority semantics). The capability itself works for a source
-owner and is proven in QA2-B.
+Correction: the orchestrator resolves candidates through the pre-existing governed
+helper (`_structured_sources` -> tenant boundary plus `visible_data_sources`) and
+supplies them to `plan(sources=...)`; the tool looks the source up by id inside the
+caller's tenant and gates on `data_source_is_visible`. Where no validated principal
+is ambient the previous ownership fallback is preserved verbatim. One policy
+implementation, reused; pinned report scope, classification ceiling, connector
+authorization and authorized-object checks unchanged.
+
+Evidence:
+
+* Focused RED: with both gates reverted, 6/6 planner-seam tests fail (`sources`
+  never supplied).
+* Focused GREEN: `backend/tests/test_qa2_structured_source_visibility.py`, 10/10
+  (planner seam and tool seam): internal source for a non-owner, restricted denied,
+  explicit group grant admitted, cross-tenant never a candidate, ownership does not
+  bypass policy, and the hybrid structured side.
+* Live rerun (real OIDC, real Chrome, real model, wheel rebuilt from the branch head
+  `110d0ff`): `QA2-A-10` **PASS** (`types=['structured_query']`, evidence from the
+  internal operations source), restricted Data negative **PASS**, cross-tenant
+  structured negative **PASS** (403).
+* No boundary widened beyond the accepted policy: internal/public with
+  `tenant_visible` become consumable by any active member (the documented v1 rule),
+  and ownership no longer admits a restricted source.
+
+`QA2-A-12` (Hybrid) is not a symptom of this defect; see Finding 5.
 
 ### Finding 2 (FAIL, corrected on the QA2 branch): Saved Reports are bound to the legacy tenant
 
@@ -169,6 +189,19 @@ artifacts API, download 200 with the correct filename, cross-tenant 404 in
 QA2-F-02/F-11/F-17), but the natural-language route is not demonstrated. Whether
 this is a product prompt/route issue or a local model limitation is an open
 question, not a confirmed defect.
+
+### Finding 5 (FAIL, open, not an authorization issue): the planner does not plan the compound Hybrid wording
+
+`QA2-A-12`. Hybrid passes the ORIGINAL message to the structured side (Section 17
+preserves qualifiers), so the planner receives a compound request ("...handbook...
+and how many orders are there?"). With that wording the planner returns no plan and
+the structured side yields no evidence, leaving a knowledge-only answer. This is
+independent of ownership and visibility: the same compound question in Data mode
+produces no structured evidence for the ordinary member, the source OWNER (data
+steward) and the client admin alike, while the decomposed sub-question
+("how many orders are there?") succeeds for the ordinary member. It is a
+planner/model behaviour on a compound request, present on accepted main, and not
+part of Finding 1.
 
 ### Not run
 
