@@ -803,7 +803,7 @@ def main() -> int:
         rec(15, "Request evidence", False, "GET", f"{OJM_BASE}/api/connectors/{connector_id}/resources", "EXC", {"error": str(exc)})
 
     # ------------------------------------------------------------------
-    # 16. OpenJM refuses; resource quarantined; exact reason code
+    # 16. OpenJM refuses; exact reason code; shared content NOT mutated
     # ------------------------------------------------------------------
     try:
         res = oj_get(f"/api/connectors/{connector_id}/resources")
@@ -818,15 +818,21 @@ def main() -> int:
             res = oj_get(f"/api/connectors/{connector_id}/resources")
             page_res = find_resource(res.json().get("resources", []), TOKENS["page_a_id"]) or {}
         reason = (gate_step or {}).get("failure_category")
+        # A per-principal revocation is evidence about this reader only. It must
+        # be refused with the exact reason code, and it must NOT quarantine the
+        # shared resource: quarantine is an explicit lifecycle operation reserved
+        # for content-scoped conditions. The previous assertion here required
+        # "quarantined", which encoded the cross-user availability defect where
+        # one principal's refusal removed the document for every other principal.
         ok = (
             gate_step is not None
             and gate_step.get("status") == "failed"
             and reason == "access_revoked"
-            and page_res.get("lifecycle_state") == "quarantined"
+            and page_res.get("lifecycle_state") == "active"
         )
         rec(
             16,
-            "OpenJM refuses revoked Workspace evidence; resource quarantined",
+            "OpenJM refuses revoked Workspace evidence; shared content not mutated",
             ok,
             "GET",
             f"{OJM_BASE}/api/connectors/{connector_id}/resources + connector.fetch",
@@ -1016,8 +1022,12 @@ def main() -> int:
             gate_step is not None
             and gate_step.get("status") == "failed"
             and reason == "connector_disabled"
-            and page_b_after.get("lifecycle_state") == "quarantined"
+            and page_b_after.get("lifecycle_state") == "active"
         )
+        # Disabling is the authorization switch (see set_enabled): cached
+        # evidence is refused and the content stays cached but unserved.
+        # Withdrawing the content of an instance is what disconnect performs,
+        # through the explicit quarantine_instance_resources lifecycle operation.
         rec(
             24,
             "Cached connector evidence unavailable after disable",
