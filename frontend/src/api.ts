@@ -420,7 +420,208 @@ async function downloadExport(url: string, fallbackName: string): Promise<void> 
   URL.revokeObjectURL(objectUrl)
 }
 
+export type PlatformComponentStatus = {
+  status: string
+  [key: string]: unknown
+}
+
+export type PlatformOverview = {
+  release: Record<string, unknown>
+  auth_mode: string
+  profile: string
+  ready: boolean
+  components: Record<string, PlatformComponentStatus>
+  model: {
+    provider_mode: string
+    model_name: string
+    fallback_policy: string
+    configured: boolean
+    health?: string | null
+  }
+  fleet: {
+    tenants: number
+    suspended: number
+    operators: number
+    active_content_delegations: number
+  }
+  alerts: PlatformAlert[]
+}
+
+export type PlatformAlert = {
+  severity: string
+  code: string
+  component: string
+  detail: string
+}
+
+export type PlatformDeployment = {
+  release_id?: string | null
+  release_train?: string | null
+  version?: string | null
+  profile: string
+  migration_revision?: string | null
+  migration_head?: string | null
+  migration_drift: boolean
+  migration_status?: string | null
+  model_name: string
+}
+
+export type PlatformReleaseView = {
+  release: Record<string, unknown>
+  deployments: PlatformDeployment[]
+  deployment_count: number
+}
+
+export type PlatformFleetTenant = {
+  id: string
+  slug: string
+  name: string
+  status: string
+  created_at: string
+  usage: {
+    requests?: number
+    input_tokens?: number
+    output_tokens?: number
+    total_tokens?: number
+  }
+}
+
+export type PlatformFleet = {
+  tenants: PlatformFleetTenant[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
+export type PlatformTenantUsage = {
+  tenant_id?: string
+  generated_at?: string
+  usage?: Record<string, number>
+  coverage?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type PlatformAuditEvent = {
+  id: string
+  created_at: string
+  tenant_id: string
+  principal_id?: string | null
+  role?: string | null
+  action: string
+  family: string
+  decision: string
+  resource_type?: string | null
+  resource_id?: string | null
+  auth_method?: string | null
+  reason?: string | null
+  metadata: Record<string, string>
+}
+
+export type PlatformAuditPage = {
+  events: PlatformAuditEvent[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
+export type PlatformAuditSummary = {
+  total: number
+  denied: number
+  by_family: Record<string, number>
+  recent: PlatformAuditEvent[]
+}
+
+export type PlatformSecurity = {
+  operators: {
+    principal_id: string
+    capability: string
+    status: string
+    created_at: string
+    expires_at?: string | null
+  }[]
+  operator_count: number
+  support_delegations: {
+    tenant_id: string
+    principal_id: string
+    scope: string
+    status: string
+    created_at: string
+    expires_at?: string | null
+    effective: boolean
+  }[]
+  active_content_delegations: number
+  expiring_delegations: number
+  recent_privileged_actions: PlatformAuditEvent[]
+  denied_categories: { action: string; count: number }[]
+  suspended_tenants: number
+}
+
+export type PlatformTrace = {
+  id: string
+  created_at: string
+  request_id: string
+  tenant_id: string
+  tool_name: string
+  operation_class: string
+  risk_level: string
+  status: string
+  duration_ms?: number | null
+  error_class?: string | null
+  model_name?: string | null
+  policy_decision?: string | null
+  validation_decision?: string | null
+  route?: string | null
+  requested_mode?: string | null
+}
+
+export type PlatformDiagnostics = {
+  components: Record<string, PlatformComponentStatus>
+  ready: boolean
+  traces: PlatformTrace[]
+  traces_total: number
+  limit: number
+  offset: number
+  failure_categories: { tool_name: string; error_class: string; count: number }[]
+  operational_logs: {
+    persistence: string
+    format: string
+    location: string
+    aggregated_into_metadata_db: boolean
+    external_aggregation: string
+    guidance: string
+  }
+}
+
+function query(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') search.set(key, String(value))
+  }
+  const rendered = search.toString()
+  return rendered ? `?${rendered}` : ''
+}
+
 export const api = {
+  platformOverview: () => request<PlatformOverview>('/api/platform/operations/overview'),
+  platformHealth: () =>
+    request<{ ready: boolean; profile: string; components: Record<string, PlatformComponentStatus> }>(
+      '/api/platform/operations/health',
+    ),
+  platformReleases: () => request<PlatformReleaseView>('/api/platform/operations/releases'),
+  platformFleet: (offset = 0, limit = 50) =>
+    request<PlatformFleet>(`/api/platform/operations/tenants${query({ offset, limit })}`),
+  platformUsage: (offset = 0, limit = 50) =>
+    request<{ tenants: PlatformTenantUsage[] }>(
+      `/api/platform/operations/usage${query({ offset, limit })}`,
+    ),
+  platformAudit: (filters: Record<string, string | number | undefined> = {}) =>
+    request<PlatformAuditPage>(`/api/platform/audit${query(filters)}`),
+  platformAuditSummary: () => request<PlatformAuditSummary>('/api/platform/audit/summary'),
+  platformSecurity: () => request<PlatformSecurity>('/api/platform/security'),
+  platformDiagnostics: (filters: Record<string, string | number | undefined> = {}) =>
+    request<PlatformDiagnostics>(`/api/platform/diagnostics${query(filters)}`),
   reports: () => request<SavedReportSummary[]>('/api/reports'),
   report: (id: string) => request<SavedReportDetail>(`/api/reports/${encodeURIComponent(id)}`),
   reportRerunPreview: (id: string) => request<ReportRerunPreview>(`/api/reports/${encodeURIComponent(id)}/rerun-preview`),

@@ -4,8 +4,8 @@ Living acceptance matrix for the Hardening & Business Value Realization phase
 (Issue #45). It maps the global phase-acceptance statements to current
 implementation evidence and the remaining manual/runtime qualification.
 
-- **Observed at `4479d82ba773affab926d81bffbc1a9d272fdbef`** on **2026-10-11** (current integrated `main`; QA1 and QA2 accepted and merged).
-- **Live qualification product head: `4479d82ba773affab926d81bffbc1a9d272fdbef`**. QA1 (production-like acceptance environment) and QA2 (persona and delegated-support/security journeys) were executed live and merged. QA3 (authoritative/vector-RAG qualification) was executed live against this tree: see `docs/qa/QA3_ACCEPTANCE.md`.
+- **Observed at `ecb7b69969a189a80aece6302836a4cd8d723a4f`** on **2026-10-11** (current integrated `main`; QA1, QA2 and QA3 accepted and merged).
+- **Live qualification product heads:** `4479d82ba773affab926d81bffbc1a9d272fdbef` for QA3 (authoritative/vector-RAG qualification, see `docs/qa/QA3_ACCEPTANCE.md`) and `ecb7b69969a189a80aece6302836a4cd8d723a4f` for OPS1 (OpenJM Operations Control Center, see `docs/qa/OPS1_ACCEPTANCE.md`).
 - Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3, REL1-A and
   REL1-B1..B4, on the accepted VS1-VS8 foundation.
 - REL1 final-candidate exact-head acceptance: full run **38085064975** on
@@ -105,6 +105,7 @@ Security automated capability: **6/6 PASS**.
 | Governed report curation (BV6-A/B) | #71 curation + #75 bounded authoritative candidates | **PASS** |
 | Client-admin management (BV3-B) | accepted | **PASS** |
 | Platform-admin boundaries (BV3-A/C) | accepted | **PASS** |
+| OpenJM Operations Control Center (OPS1) | operator plane on the accepted control plane: fleet/health, usage, audit explorer, security, diagnostics, releases; `platform:*` capability gated; browser never carries the monitoring token | **PASS** live (27 checks; see `docs/qa/OPS1_ACCEPTANCE.md`) |
 | Delegated support | #72 consuming read path accepted | **PASS** automated; live OIDC/PostgreSQL walkthrough PASS (QA2) |
 | Metering / entitlements (M1/M2/M3) | accepted | **PASS** |
 | Admission / capacity (INF1-A/B/C) | registry/admission/capacity telemetry accepted | **PASS** |
