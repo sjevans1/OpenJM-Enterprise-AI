@@ -108,6 +108,7 @@ export type StoredSession = {
   tenantId: string
   role: string
   permissions: string[]
+  platformCapabilities: string[]
 }
 
 export class AuthError extends Error {
@@ -183,6 +184,7 @@ function writeSession(payload: SessionPayload): StoredSession {
     tenantId: payload.tenant_id,
     role: payload.role,
     permissions: payload.permissions ?? [],
+    platformCapabilities: payload.platform_capabilities ?? [],
   }
   storage()?.setItem(SESSION_KEY, JSON.stringify(session))
   return session
@@ -195,6 +197,7 @@ type SessionPayload = {
   tenant_id: string
   role: string
   permissions: string[]
+  platform_capabilities?: string[]
 }
 
 // ---------------------------------------------------------------------------

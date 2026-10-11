@@ -37,7 +37,7 @@ async def test_ready_detail_reports_components_without_secrets(client, monkeypat
     async def _stub_provider():
         return {"status": "ok", "mode": "local", "model": "stub"}
 
-    monkeypatch.setattr("app.api.system._model_provider_component", _stub_provider)
+    monkeypatch.setattr("app.services.readiness.model_provider_component", _stub_provider)
     response = await client.get("/api/ready/detail")
     assert response.status_code == 200
     body = response.json()

@@ -11,6 +11,7 @@ import {
   LogOut,
   MessageSquareText,
   Plus,
+  Radar,
   Send,
   Settings,
   ShieldCheck,
@@ -45,12 +46,21 @@ import {
 } from './auth'
 import ConnectorsPanel from './ConnectorsPanel'
 import OperationsPanel from './OperationsPanel'
+import OperatorConsole from './OperatorConsole'
 import AdminPanel from './AdminPanel'
 import ArtifactCard from './ArtifactCard'
 
 const CALLBACK_PATH = '/auth/callback'
 
-type View = 'chat' | 'knowledge' | 'data' | 'reports' | 'connectors' | 'operations' | 'admin'
+type View =
+  | 'chat'
+  | 'knowledge'
+  | 'data'
+  | 'reports'
+  | 'connectors'
+  | 'operations'
+  | 'platform'
+  | 'admin'
 
 type ReportRunIntent = {
   reportId: string
@@ -79,6 +89,35 @@ export function canAdminister(
 }
 
 /**
+ * The OpenJM Control Center is a platform-operator surface and is offered only
+ * when the server resolved an explicit, *known* platform capability. It is
+ * never inferred from a tenant role, an email, a domain or a display name, and
+ * an unrecognised `platform:*`-looking string does not open it either: the
+ * navigation keys on the same closed capability vocabulary the backend
+ * enforces. A tenant owner/admin without a platform grant resolves to an empty
+ * list and sees no operator navigation; the backend refuses every operator
+ * route regardless.
+ */
+export const PLATFORM_NAVIGATION_CAPABILITIES = [
+  'platform:metadata:read',
+  'platform:tenants:admin',
+  'platform:operators:admin',
+  'platform:operations:admin',
+  'platform:inference:admin',
+  'platform:content:support',
+] as const
+
+export function canOperatePlatform(
+  principal: { platform_capabilities?: string[] } | null,
+): boolean {
+  if (!principal) return false
+  const held = principal.platform_capabilities ?? []
+  return held.some((capability) =>
+    (PLATFORM_NAVIGATION_CAPABILITIES as readonly string[]).includes(capability),
+  )
+}
+
+/**
  * Which tenant surfaces the navigation offers, derived ONLY from the
  * server-resolved principal context. This is presentation, not the security
  * boundary: the FastAPI backend re-authorizes every request, and hiding an
@@ -93,6 +132,12 @@ export type NavVisibility = {
   knowledge: boolean
   data: boolean
   administration: boolean
+  /**
+   * The platform control plane (`platform_capabilities`) is a separate axis
+   * from every tenant entry above. It is resolved only from an explicit
+   * platform capability and is never inferred from a tenant role.
+   */
+  platform: boolean
 }
 
 const NO_NAV: NavVisibility = {
@@ -101,6 +146,7 @@ const NO_NAV: NavVisibility = {
   knowledge: false,
   data: false,
   administration: false,
+  platform: false,
 }
 
 /** The development workspace resolves the local owner, which holds every capability. */
@@ -110,6 +156,9 @@ const FULL_NAV: NavVisibility = {
   knowledge: true,
   data: true,
   administration: true,
+  // Deliberately false: platform authority is never inferred from the
+  // environment. A development principal still needs a real platform grant.
+  platform: false,
 }
 
 export function navVisibilityFor(principal: Principal): NavVisibility {
@@ -121,6 +170,7 @@ export function navVisibilityFor(principal: Principal): NavVisibility {
     knowledge: principal.permissions.includes('knowledge:write') || steward || administer,
     data: principal.permissions.includes('data:write') || steward || administer,
     administration: administer,
+    platform: canOperatePlatform(principal),
   }
 }
 
@@ -1137,6 +1187,19 @@ export default function App() {
               </button>
             </>
           )}
+
+          {nav.platform && (
+            <>
+              <div className="nav-divider" />
+              <button
+                className={view === 'platform' ? 'nav-item active' : 'nav-item'}
+                onClick={() => setView('platform')}
+              >
+                <Radar size={17} />
+                OpenJM Control Center
+              </button>
+            </>
+          )}
         </nav>
 
         <div className="conversation-section">
@@ -1747,6 +1810,8 @@ export default function App() {
           </>
         ) : view === 'connectors' ? (
           <ConnectorsPanel />
+        ) : view === 'platform' ? (
+          <OperatorConsole />
         ) : view === 'operations' ? (
           <OperationsPanel />
         ) : view === 'admin' ? (

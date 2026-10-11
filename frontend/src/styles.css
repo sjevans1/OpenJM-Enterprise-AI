@@ -1048,3 +1048,21 @@ button.manage-item:disabled { opacity: .6; cursor: default; }
 .artifact-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .artifact-actions button { display: inline-flex; align-items: center; gap: 6px; }
 .artifact-error { color: #b42318; font-size: 13px; }
+
+/* ---------------------------------------------------------------------------
+   OPS1 OpenJM Control Center (platform operator plane).
+   Summary-first operator surface. Reuses the existing visual system; the
+   status-dot variants below are the only new primitives.
+   --------------------------------------------------------------------------- */
+.ops-surface { display: flex; flex-direction: column; gap: 18px; }
+.ops-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 12px 0 4px; }
+.ops-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.ops-card-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.ops-card-value { font-size: 20px; font-weight: 600; color: var(--ink); margin: 6px 0 4px; }
+.ops-status { display: inline-flex; align-items: center; gap: 6px; text-transform: capitalize; }
+.status-dot.status-ok { background: #25c38d; box-shadow: 0 0 0 4px rgba(37,195,141,.1); }
+.status-dot.status-warning { background: var(--warning, #e0a106); box-shadow: 0 0 0 4px rgba(224,161,6,.12); }
+.status-dot.status-error { background: var(--danger, #d64545); box-shadow: 0 0 0 4px rgba(214,69,69,.12); }
+.status-dot.status-disabled { background: var(--muted, #58737d); box-shadow: 0 0 0 4px rgba(88,115,125,.12); }
+.ops-filters { display: flex; gap: 12px; flex-wrap: wrap; }
+.ops-filters label { display: flex; flex-direction: column; gap: 4px; }
