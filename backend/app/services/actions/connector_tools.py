@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import current_principal
@@ -50,6 +50,26 @@ from app.services.connectors.service import (
     resolve_operation,
     spec_for,
 )
+
+
+# CA2-C: bounds for connector search.
+#
+# The match predicate is applied in the DATABASE before any candidate window, and the window now
+# bounds MATCHES rather than bounding the table. Before this change the search read an arbitrary
+# 200-row window of the tenant's resources and only then tested each row's title and external id in
+# Python, so a resource that matched but sat beyond position 200 was permanently invisible.
+MATCH_SCAN_LIMIT = 500
+MAX_MATCHES = 25
+
+
+def _like_pattern(value: str) -> str:
+    """A LIKE pattern for a LITERAL substring, with wildcards in the input escaped.
+
+    Without escaping, a caller's query containing % or _ would act as a wildcard and could widen the
+    match beyond what was asked for.
+    """
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _refuse(category: str, detail: str = "") -> dict:
@@ -130,17 +150,35 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
     statement = select(ExternalResource).where(
         ExternalResource.tenant_id == principal.tenant_id,
         ExternalResource.lifecycle_state == EXTERNAL_STATE_ACTIVE,
+        # Matching, not permission. This is the SAME substring test the loop below performs, moved
+        # into SQL so the window bounds matches instead of bounding the table. Body content is
+        # deliberately not matched here: connector search matches provider metadata, and pushing a
+        # body predicate into this query would hard-filter resources whose relevance is only in
+        # their content, which is the Knowledge path's job.
+        or_(
+            func.lower(ExternalResource.title).like(_like_pattern(query), escape="\\"),
+            func.lower(ExternalResource.external_id).like(_like_pattern(query), escape="\\"),
+        ),
     )
     connector_id = arguments.get("connector_id")
     if connector_id:
         statement = statement.where(ExternalResource.connector_instance_id == str(connector_id))
-    result = await db.execute(statement.limit(200))
-    candidates = list(result.scalars().all())
+    # Deterministic order, so a bounded scan is reproducible rather than depending on row order.
+    statement = statement.order_by(
+        ExternalResource.connector_instance_id,
+        ExternalResource.resource_namespace,
+        ExternalResource.external_id,
+    )
+    result = await db.execute(statement.limit(MATCH_SCAN_LIMIT + 1))
+    scanned = list(result.scalars().all())
+    scan_truncated = len(scanned) > MATCH_SCAN_LIMIT
+    candidates = scanned[:MATCH_SCAN_LIMIT]
 
     matches = []
     denied = 0
     for resource in candidates:
         title = (resource.title or "").lower()
+        # Retained as the authoritative matcher: the SQL predicate only narrows the candidate set.
         if query not in title and query not in (resource.external_id or "").lower():
             continue
         outcome = await authorize_resource(
@@ -164,15 +202,31 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
                 "provenance": sync_engine.provenance_for(resource),
             }
         )
-        if len(matches) >= 25:
+        if len(matches) >= MAX_MATCHES:
             break
+
+    # Truthful completeness. False when the scan hit its bound, or when the match list was capped
+    # while at least one further matching resource existed to examine. A caller is therefore never
+    # told that an incomplete search was exhaustive, and is never told that a complete search of an
+    # empty result means no resource matches when matching resources simply were not reached.
+    scan_capped = scan_truncated
+    matches_capped = len(matches) >= MAX_MATCHES
+    matches_complete = not scan_capped and not matches_capped
+    note = "Only resources whose current user authorization was proven are returned."
+    if not matches_complete:
+        note += (
+            " More matching resources exist than are listed here; narrow the query, or use"
+            " connector.fetch for a specific resource."
+        )
 
     return {
         "ok": True,
         "query": query,
         "matches": matches,
         "denied_count": denied,
-        "note": "Only resources whose current user authorization was proven are returned.",
+        "matches_complete": matches_complete,
+        "match_scan_limit": MATCH_SCAN_LIMIT,
+        "note": note,
     }
 
 
