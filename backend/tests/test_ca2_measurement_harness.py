@@ -194,6 +194,11 @@ async def collect(
         "latency_p95_ms": round(ordered[p95_index], 2),
         "latency_max_ms": round(ordered[-1], 2),
         "sample_count": len(latencies),
+        # Per-request figures, not totals across samples, so the two paths compare on the work of
+        # ONE request. The aggregate totals above are retained for transparency.
+        "provider_calls_per_request": checks,
+        "sql_statements_per_request": round(statements / max(1, len(latencies)), 2),
+        "database_ms_per_request": round(db_seconds * 1000 / max(1, len(latencies)), 2),
         "reachable_ids": reachable,
     }
 
@@ -443,6 +448,85 @@ async def test_the_declared_maximum_cap_is_enforced_and_cannot_be_bypassed(
 # =============================================== request-level provider accounting
 
 
+async def measure_once(
+    maker,
+    provider_,
+    *,
+    candidate: bool,
+    mode,
+    check_cap: int | None = None,
+    page_budget: int = 32,
+    query: str = "policy",
+) -> dict:
+    """One request on one path, timed, with per-request SQL and provider accounting.
+
+    Used for interleaved sampling: alternating the two paths round by round removes the systematic
+    drift that measuring one path fully before the other would introduce.
+    """
+    from sqlalchemy import event
+
+    mode(rc.MODE_CANDIDATE if candidate else rc.MODE_LEGACY)
+    access = access_for()
+    cap = rc.DEFAULT_REQUEST_CHECK_CAP if check_cap is None else check_cap
+    statements = 0
+    db_seconds = 0.0
+    reachable = 0
+
+    async with maker() as db:
+        engine = db.bind.sync_engine
+
+        def _before(conn, cursor, statement, parameters, context, executemany):
+            conn.info.setdefault("ca2_t0", []).append(time.perf_counter())
+
+        def _after(conn, cursor, statement, parameters, context, executemany):
+            started = conn.info["ca2_t0"].pop()
+            nonlocal statements, db_seconds
+            statements += 1
+            db_seconds += time.perf_counter() - started
+
+        event.listen(engine, "before_cursor_execute", _before)
+        event.listen(engine, "after_cursor_execute", _after)
+        try:
+            provider_.check_calls.clear()
+            with request_context():
+                started = time.perf_counter()
+                if candidate:
+                    result = await rc.governed_candidates(
+                        db, access, query=query, check_cap=cap, page_budget=page_budget
+                    )
+                    reachable = len(result.documents)
+                else:
+                    legacy = await rc.governed_candidates(db, access, query=query)
+                    reachable = len(legacy.documents)
+                wall_ms = (time.perf_counter() - started) * 1000
+            provider_calls = len(provider_.check_calls)
+        finally:
+            event.remove(engine, "before_cursor_execute", _before)
+            event.remove(engine, "after_cursor_execute", _after)
+
+    return {
+        "wall_ms": wall_ms,
+        "sql_statements": statements,
+        "database_ms": db_seconds * 1000,
+        "provider_calls": provider_calls,
+        "reachable": reachable,
+    }
+
+
+def _stats(samples: list[float]) -> dict:
+    ordered = sorted(samples)
+    def pct(value: float) -> float:
+        return ordered[max(0, min(len(ordered) - 1, int(round(value * (len(ordered) - 1)))))]
+    return {
+        "n": len(ordered),
+        "min_ms": round(ordered[0], 2),
+        "p50_ms": round(statistics.median(ordered), 2),
+        "p95_ms": round(pct(0.95), 2),
+        "max_ms": round(ordered[-1], 2),
+        "stdev_ms": round(statistics.stdev(ordered), 2) if len(ordered) > 1 else 0.0,
+    }
+
+
 async def test_one_exploratory_traversal_per_full_knowledge_request(
     file_db, connector, provider, knowledge, mode, monkeypatch
 ):
@@ -511,30 +595,52 @@ async def test_latency_on_comparable_work_against_the_1_25x_threshold(
     comparing different amounts of work rather than overhead. That case is measured separately
     and deliberately not asserted against the threshold.
     """
-    runs = 5
+    runs = 15
     await prepare(file_db, provider, 100, name="m-lat")
-    legacy = await collect(file_db, provider, n=100, candidate=False, mode=mode, samples=runs)
-    cand = await collect(file_db, provider, n=100, candidate=True, mode=mode, samples=runs)
-    ratio_p50 = cand["latency_p50_ms"] / max(legacy["latency_p50_ms"], 0.01)
-    ratio_p95 = cand["latency_p95_ms"] / max(legacy["latency_p95_ms"], 0.01)
+
+    # Warm up BOTH paths once, excluded from the samples, so engine and connection warmup cannot
+    # land in the first sample of one path only.
+    await measure_once(file_db, provider, candidate=False, mode=mode)
+    await measure_once(file_db, provider, candidate=True, mode=mode)
+
+    legacy_rows: list[dict] = []
+    candidate_rows: list[dict] = []
+    # Interleaved: the two paths alternate round by round, so systematic drift in the fixture or
+    # the host cannot favour one side.
+    for index in range(runs):
+        order = (False, True) if index % 2 == 0 else (True, False)
+        for is_candidate in order:
+            row = await measure_once(file_db, provider, candidate=is_candidate, mode=mode)
+            (candidate_rows if is_candidate else legacy_rows).append(row)
+
+    legacy_stats = _stats([row["wall_ms"] for row in legacy_rows])
+    candidate_stats = _stats([row["wall_ms"] for row in candidate_rows])
+    ratio_p50 = candidate_stats["p50_ms"] / max(legacy_stats["p50_ms"], 0.01)
+    ratio_p95 = candidate_stats["p95_ms"] / max(legacy_stats["p95_ms"], 0.01)
     report(
         {
             "scenario": "latency, comparable work (100 resources, both examine 100)",
-            "samples_each": runs,
-            "legacy_p50_ms": legacy["latency_p50_ms"],
-            "legacy_p95_ms": legacy["latency_p95_ms"],
-            "candidate_p50_ms": cand["latency_p50_ms"],
-            "candidate_p95_ms": cand["latency_p95_ms"],
+            "environment": ENVIRONMENT,
+            "design": "warmup excluded, interleaved alternating order, per-request accounting",
+            "legacy": legacy_stats,
+            "candidate": candidate_stats,
             "ratio_p50": round(ratio_p50, 3),
             "ratio_p95": round(ratio_p95, 3),
             "threshold": 1.25,
-            "legacy_sql_statements": legacy["sql_statements"],
-            "candidate_sql_statements": cand["sql_statements"],
-            "legacy_provider_calls": legacy["provider_authorization_calls"],
-            "candidate_provider_calls": cand["provider_authorization_calls"],
+            "legacy_sql_per_request": legacy_rows[0]["sql_statements"],
+            "candidate_sql_per_request": candidate_rows[0]["sql_statements"],
+            "legacy_db_ms_per_request": round(legacy_rows[0]["database_ms"], 2),
+            "candidate_db_ms_per_request": round(candidate_rows[0]["database_ms"], 2),
+            "legacy_provider_calls_per_request": legacy_rows[0]["provider_calls"],
+            "candidate_provider_calls_per_request": candidate_rows[0]["provider_calls"],
+            "statistical_caveat": (
+                "in-process sqlite and a stubbed vector engine; decision-grade for comparing the "
+                "two paths on identical work, not a production latency figure"
+            ),
         }
     )
-    assert cand["authorized_documents_reachable"] == legacy["authorized_documents_reachable"] == 100
+    assert all(row["reachable"] == 100 for row in legacy_rows)
+    assert all(row["reachable"] == 100 for row in candidate_rows)
     assert ratio_p95 <= 1.25, (
         f"candidate p95 {ratio_p95:.2f}x legacy p95 on comparable fixture work, "
         "above the agreed 1.25x threshold"
