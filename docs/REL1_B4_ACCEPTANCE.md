@@ -451,3 +451,57 @@ Boundary: this establishes **PRODUCTION COMPOSE RELEASE PATH TOOLING: PASS**. It
 does **not** change any #79 host row. The clean Linux production/PostgreSQL host
 remains **NOT RUN**, and the production-installed browser/persona journey remains
 **NOT RUN**.
+
+
+### PRODUCTION COMPOSE DATABASE SECRET: file-backed delivery replaced (2026-10-12)
+
+Failure (reproduced while smoke-testing the previous correction). The Compose
+database password was a file-backed secret:
+`secrets: openjm_db_password: { file: ./secrets/openjm_db_password.txt }`. Compose
+bind-mounts `file:` secrets, so the host file's owner and mode travel into the
+container unchanged, and the secret is **not** remapped to a service `uid`/`gid`/
+`mode`. The backend runs unprivileged as `openjm` (**uid 999, gid 999**) while the
+operator creates the file as their own account (**uid 1000**); a restrictive
+`0600` host file is therefore unreadable and the entrypoint failed with
+`cat: /run/secrets/openjm_db_password: Permission denied` before the preflight
+ever ran. The only escapes were running the backend as root or loosening the
+secret to `0644` on disk, both rejected for production.
+
+The PostgreSQL container was measured too rather than assumed: its server process
+runs as **uid 999, gid 999** (`postgres`). The coincidence that both images use
+999 is not relied upon anywhere in the fix.
+
+Correction (branch `rel1-compose-secret-hardening`, from
+`main@e46c9e078008d597c3649e288d389ec2cd5cbda9`). The top-level Compose secret is
+now **environment-sourced**:
+
+```
+secrets:
+  openjm_db_password:
+    environment: OPENJM_DB_PASSWORD_SECRET
+```
+
+Compose consumes `OPENJM_DB_PASSWORD_SECRET` from the process environment it was
+started with and materialises `/run/secrets/openjm_db_password` itself, so no
+operator-owned file with a mismatched uid/mode exists at all. The backend keeps the
+accepted file contract (`OPENJM_DB_PASSWORD_FILE=/run/secrets/openjm_db_password`)
+and `entrypoint.sh` still assembles the DSN from it, unchanged. The backend was
+**not** changed: it stays unprivileged. The source variable belongs to the Compose
+invocation only; it is not added to any service `environment:` and not to the
+backend `env_file:` template, and it is not a file, so no `0644` on-disk secret is
+ever required. `file:` was rejected precisely because uid/gid/mode remapping is not
+honoured for that source type.
+
+| Step | Evidence |
+| --- | --- |
+| RED | New contract test `test_production_compose_db_secret_delivery_is_secure` (parses the Compose YAML) failed on the baseline at `assert "file" not in secret` with `assert 'file' not in {'file': './secrets/openjm_db_password.txt'}` |
+| GREEN | Focused test passes; `backend/tests/test_rel1a_reproducible_deployment.py` passes 8/8 |
+| Restrictive smoke (positive) | `OPENJM_DB_PASSWORD_SECRET` generated with `openssl rand -hex 24` into the Compose process environment only, never printed and never written to a file; `deploy/compose/secrets` did **not** exist. `docker compose -f deploy/compose/docker-compose.prod.yml up -d db backend` → `UP_RC=0`; `db` (`postgres:16`, PostgreSQL 16.15) healthy in 5s and `pg_isready` accepting connections; backend reachable in 9s running as **`openjm` uid 999 gid 999**; `/run/secrets/openjm_db_password` present, owner `root:root`, mode `444`, readable by that unprivileged user, contents never read or printed; entrypoint assembled `OPENJM_DATABASE_URL` from the file |
+| Env leak check | Backend process environment inspected by **key name only**: `OPENJM_DB_PASSWORD_SECRET` count **0** (the secret source is not leaked into the application). `OPENJM_DATABASE_URL` and `OPENJM_DB_PASSWORD_FILE` are present as the accepted runtime contract. `OPENJM_DB_PASSWORD` is present only as the template's stock `REPLACE_ME` placeholder from `env_file` and is **not** authoritative: the entrypoint overrides `OPENJM_DATABASE_URL` from the mounted secret, so the real password is never duplicated into the application environment |
+| Single source | 21 alembic upgrade steps ran and reached head; PostgreSQL `alembic_version` = `0021_support_content_scope` == repository head; `/api/health` → **200** `{"status":"ok",...,"model":"openjm-private-8b","profile":"production"}`; `/api/ready` → **200** `{"ready":true,"status":"ready"}`. Authentication succeeded through the shared secret mechanism, proving db and backend use the same value without either value being printed |
+| Negative case | With `OPENJM_DB_PASSWORD_SECRET` unset, Compose refuses before anything runs: `environment variable "OPENJM_DB_PASSWORD_SECRET" required by secret "compose_openjm_db_password" is not set`; backend health `HTTP 000`; it did **not** fall back to the `.env` placeholder. Fail-closed confirmed |
+| Cleanup | `docker compose down -v` (both cases); the developer `.env` restored; the temporary override file removed; `OPENJM_DB_PASSWORD_SECRET` unset from the shell; 0 leftover containers, 0 volumes, and no `deploy/compose/secrets` directory in the working tree. No secret value was printed at any point |
+
+Boundary: this is production Compose **tooling** qualification. It does **not**
+mark the clean Linux production/PostgreSQL host PASS, and the production-installed
+browser/persona journey remains NOT RUN.
