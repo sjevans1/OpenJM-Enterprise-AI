@@ -1,0 +1,558 @@
+"""CA2 comparative measurement harness: accepted legacy path versus CA2 candidate mode.
+
+MANDATORY WORK PACKAGE. Both paths are measured on **the same fixture instance**, so the
+comparison is like for like: identical resources, tenant, principal, connector behaviour and
+execution conditions.
+
+WHAT THIS IS, AND WHAT IT IS NOT
+--------------------------------
+Everything here is **mocked and in-process**. The vector engine is stubbed exactly as the rest of
+this suite stubs it, and there is no live DB-GPT, Chroma, Postgres or Keycloak. These are
+therefore *fixture* timings and count measurements. They are valid for comparing the two paths on
+identical work, and they are **not** production p95 measurements. Every record carries an
+`environment` block so no reader can mistake which kind of number they are looking at.
+
+Cost is reported as the provider authorization call count, which is the cost driver. Unit pricing
+for the provider is not available to this harness, so no currency estimate is fabricated.
+
+Run with `-s` to see the JSON records:
+
+    python -m pytest tests/test_ca2_measurement_harness.py -q -s
+"""
+
+from __future__ import annotations
+
+import json
+import statistics
+import time
+
+import pytest
+from sqlalchemy import select
+
+from test_vs7_connector_security import (  # noqa: F401
+    PRINCIPAL_A,
+    TENANT_A,
+    TENANT_B,
+    _instance,
+    _make_instance,
+    _mapping,
+    _run_initial,
+    _seed,
+    connector,
+    knowledge,
+    provider,
+)
+from test_ca2b_candidate_integration import (  # noqa: F401
+    BODY_MARKER,
+    access_for,
+    body_records,
+    document_id_for,
+    legacy_candidate_ids,
+    request_context,
+    stub_retrieve,
+    tool_context,
+)
+
+from app.core.config import get_settings
+from app.models import Document
+from app.services import retrieval_candidates as rc
+from app.services.connectors.candidate_authorization import CursorError, StrictScopeError
+from app.services.tools import KnowledgeSearchTool
+
+ENVIRONMENT = {
+    "kind": "mocked, in-process fixture",
+    "live_stack": False,
+    "vector_engine": "stubbed (no DB-GPT, no Chroma)",
+    "database": "sqlite in-process via the shared file_db fixture",
+    "timing_validity": "relative comparison between paths; NOT a production latency figure",
+    "cost_basis": "provider authorization call count; unit pricing unavailable, none fabricated",
+}
+
+
+@pytest.fixture
+def mode(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "retrieval_candidate_mode", rc.MODE_LEGACY)
+    return lambda value: monkeypatch.setattr(settings, "retrieval_candidate_mode", value)
+
+
+async def prepare(maker, provider_, n: int, *, name: str, native: int = 0) -> str:
+    """Seed ONE fixture instance used by both paths. Optionally add native documents.
+
+    Native documents have no ``ExternalResource`` row, so they are governed by local policy alone
+    and exercise the mixed native/connector handling.
+    """
+    await _seed(maker)
+    instance_id = await _make_instance(maker, TENANT_A, name=name)
+    for i in range(n):
+        ext = f"m{i:03d}"
+        provider_.put(ext, text=f"policy document {i}", revision="1")
+        provider_.access[("u1", ext)] = True
+    async with maker() as db:
+        instance = await _instance(db, instance_id)
+        await _run_initial(db, instance, limit=n + 50)
+        await _mapping(db, instance_id, PRINCIPAL_A, "u1")
+        for i in range(native):
+            db.add(
+                Document(
+                    tenant_id=TENANT_A,
+                    user_id=PRINCIPAL_A,
+                    original_name=f"native-{i}.txt",
+                    stored_path=f"/tmp/native-{i}.txt",
+                    size_bytes=16,
+                    status="ready",
+                    indexed=True,
+                    lifecycle_state="ready",
+                    classification="internal",
+                    tenant_visible=True,
+                )
+            )
+        await db.commit()
+    return instance_id
+
+
+async def collect(
+    maker,
+    provider_,
+    *,
+    n: int,
+    candidate: bool,
+    mode,
+    check_cap: int = 4096,
+    page_budget: int = 32,
+    samples: int = 1,
+    query: str = "policy",
+) -> dict:
+    """Measure one path. ``n`` is the connector resource count for reporting only."""
+    from sqlalchemy import event
+
+    mode(rc.MODE_CANDIDATE if candidate else rc.MODE_LEGACY)
+    access = access_for()
+
+    latencies: list[float] = []
+    statements = 0
+    db_seconds = 0.0
+    reachable: set[str] = set()
+    checks = 0
+    coverage = "unknown"
+    reason = ""
+    cursor_seen = False
+
+    async with maker() as db:
+        engine = db.bind.sync_engine
+
+        def _before(conn, cursor, statement, parameters, context, executemany):
+            conn.info.setdefault("ca2_t0", []).append(time.perf_counter())
+
+        def _after(conn, cursor, statement, parameters, context, executemany):
+            started = conn.info["ca2_t0"].pop()
+            nonlocal statements, db_seconds
+            statements += 1
+            db_seconds += time.perf_counter() - started
+
+        event.listen(engine, "before_cursor_execute", _before)
+        event.listen(engine, "after_cursor_execute", _after)
+        try:
+            if candidate:
+                for _ in range(max(1, samples)):
+                    started = time.perf_counter()
+                    result = await rc.governed_candidates(
+                        db, access, query=query, check_cap=check_cap, page_budget=page_budget
+                    )
+                    latencies.append((time.perf_counter() - started) * 1000)
+                    checks = result.provider_checks
+                    reachable = {document.id for document in result.documents}
+                    coverage = result.coverage.value if result.coverage else "unknown"
+                    reason = result.reason
+                    cursor_seen = result.cursor is not None
+            else:
+                with request_context():
+                    for _ in range(max(1, samples)):
+                        started = time.perf_counter()
+                        result = await rc.governed_candidates(db, access, query=query)
+                        latencies.append((time.perf_counter() - started) * 1000)
+                        reachable = {document.id for document in result.documents}
+        finally:
+            event.remove(engine, "before_cursor_execute", _before)
+            event.remove(engine, "after_cursor_execute", _after)
+
+    ordered = sorted(latencies)
+    p95_index = max(0, min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1)))))
+    return {
+        "environment": ENVIRONMENT,
+        "path": "candidate" if candidate else "legacy",
+        "connector_resources": n,
+        "authorized_documents_reachable": len(reachable),
+        "provider_authorization_calls": checks,
+        "sql_statements": statements,
+        "database_ms": round(db_seconds * 1000, 2),
+        "coverage": coverage,
+        "coverage_reason": reason,
+        "more_work_remains": cursor_seen,
+        "latency_ms": [round(value, 2) for value in latencies],
+        "latency_p50_ms": round(statistics.median(latencies), 2),
+        "latency_p95_ms": round(ordered[p95_index], 2),
+        "latency_max_ms": round(ordered[-1], 2),
+        "sample_count": len(latencies),
+        "reachable_ids": reachable,
+    }
+
+
+def report(payload: dict) -> None:
+    print("\n=== CA2 MEASUREMENT ===")
+    print(json.dumps({k: v for k, v in payload.items() if not isinstance(v, set)}, indent=2, sort_keys=True, default=str))
+    print("=== END ===\n")
+
+
+# =============================================== scenario matrix, same fixture both paths
+
+SIZES = [(40, 40), (80, 80), (100, 100), (150, 100), (400, 100)]
+
+
+@pytest.mark.parametrize("n,legacy_expected", SIZES)
+async def test_scenario_reachability_legacy_versus_candidate(
+    file_db, connector, provider, knowledge, mode, n, legacy_expected
+):
+    """Reachability, provider calls and SQL work at each agreed corpus size."""
+    await prepare(file_db, provider, n, name=f"m{n}")
+    legacy = await collect(file_db, provider, n=n, candidate=False, mode=mode)
+    cand = await collect(file_db, provider, n=n, candidate=True, mode=mode)
+    report(
+        {
+            "scenario": f"reachability at {n} connector resources",
+            "legacy": {k: v for k, v in legacy.items() if k != "reachable_ids"},
+            "candidate": {k: v for k, v in cand.items() if k != "reachable_ids"},
+            "recovered": len(cand["reachable_ids"] - legacy["reachable_ids"]),
+            "regressed": len(legacy["reachable_ids"] - cand["reachable_ids"]),
+        }
+    )
+    assert legacy["authorized_documents_reachable"] == legacy_expected, (
+        f"legacy reached {legacy['authorized_documents_reachable']}, expected {legacy_expected}"
+    )
+    assert cand["authorized_documents_reachable"] == n, (
+        f"candidate reached {cand['authorized_documents_reachable']} of {n}"
+    )
+    assert cand["authorized_documents_reachable"] >= legacy["authorized_documents_reachable"]
+    assert not (legacy["reachable_ids"] - cand["reachable_ids"]), "candidate must not lose a doc"
+    assert legacy["authorized_documents_reachable"] - len(cand["reachable_ids"]) <= 0
+
+
+async def test_scenario_mixed_native_and_connector_corpus(
+    file_db, connector, provider, knowledge, mode
+):
+    """Native documents have no provider resource and must survive both paths unchanged."""
+    await prepare(file_db, provider, 150, name="m-mixed", native=5)
+    legacy = await collect(file_db, provider, n=150, candidate=False, mode=mode)
+    cand = await collect(file_db, provider, n=150, candidate=True, mode=mode)
+    report(
+        {
+            "scenario": "mixed native (5) and connector (150) corpus",
+            "legacy_reachable": legacy["authorized_documents_reachable"],
+            "candidate_reachable": cand["authorized_documents_reachable"],
+            "native_lost_by_candidate": len(legacy["reachable_ids"] - cand["reachable_ids"]),
+        }
+    )
+    # 150 connector resources plus 5 native documents.
+    assert legacy["authorized_documents_reachable"] == 105
+    assert cand["authorized_documents_reachable"] == 155
+    assert not (legacy["reachable_ids"] - cand["reachable_ids"])
+
+
+async def test_scenario_pinned_75_sources_report_parity(
+    file_db, connector, provider, knowledge, mode
+):
+    await prepare(file_db, provider, 75, name="m-pinned")
+    mode(rc.MODE_CANDIDATE)
+    access = access_for()
+    instance_id = await _first_instance(file_db)
+    assert instance_id is not None
+    document_ids = [await document_id_for(file_db, instance_id, f"m{i:03d}") for i in range(75)]
+    async with file_db() as db:
+        pinned = await rc.strict_pinned_documents(db, access, document_ids=document_ids)
+    report(
+        {
+            "scenario": "pinned 75 sources",
+            "requested": len(document_ids),
+            "authorized": len(pinned),
+            "strict_scope_satisfied": True,
+        }
+    )
+    assert len(pinned) == 75
+
+
+async def _first_instance(maker) -> str | None:
+    from app.models import ConnectorInstance
+
+    async with maker() as db:
+        row = (
+            await db.execute(select(ConnectorInstance).where(ConnectorInstance.tenant_id == TENANT_A))
+        ).scalars().first()
+    return row.id if row else None
+
+
+# =============================================== recovered evidence and continuation
+
+
+async def test_scenario_body_only_relevant_source_beyond_the_window(
+    file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """A source whose relevance exists only in its body, past the legacy 100 window."""
+    total = 150
+    beyond_index = total - 1
+    mode(rc.MODE_CANDIDATE)
+    instance_id = await _prepare_with_marker(file_db, provider, total, beyond_index)
+    beyond = await document_id_for(file_db, instance_id, f"m{beyond_index:03d}")
+    seen = stub_retrieve(monkeypatch, body_records(knowledge))
+    access = access_for()
+
+    mode(rc.MODE_LEGACY)
+    with request_context():
+        legacy_ids = await legacy_candidate_ids(file_db, query=BODY_MARKER)
+    assert len(legacy_ids) == 100
+    assert beyond not in legacy_ids
+
+    mode(rc.MODE_CANDIDATE)
+    async with file_db() as db:
+        result = await KnowledgeSearchTool().execute(
+            tool_context(db, access), {"query": BODY_MARKER}
+        )
+    report(
+        {
+            "scenario": "body-only relevance beyond index 100",
+            "legacy_reached": len(legacy_ids),
+            "candidate_reached": total,
+            "beyond_index": beyond_index,
+            "engine_received_beyond_source": beyond in seen,
+            "evidence_cites_beyond_source": beyond in {item.source_id for item in result.evidence},
+            "false_absence": len(result.evidence) == 0,
+        }
+    )
+    assert beyond in seen
+    assert beyond in {item.source_id for item in result.evidence}
+
+
+async def _prepare_with_marker(maker, provider_, n: int, marker_index: int) -> str:
+    await _seed(maker)
+    instance_id = await _make_instance(maker, TENANT_A, name="m-marker")
+    for i in range(n):
+        body = f"policy document {i}" + (f" {BODY_MARKER}" if i == marker_index else "")
+        provider_.put(f"m{i:03d}", text=body, revision="1")
+        provider_.access[("u1", f"m{i:03d}")] = True
+    async with maker() as db:
+        instance = await _instance(db, instance_id)
+        await _run_initial(db, instance, limit=n + 50)
+        await _mapping(db, instance_id, PRINCIPAL_A, "u1")
+        await db.commit()
+    return instance_id
+
+
+async def test_scenario_beyond_256_continuation(file_db, connector, provider, knowledge, mode):
+    total = 300
+    await prepare(file_db, provider, total, name="m-256")
+    mode(rc.MODE_CANDIDATE)
+    access = access_for()
+    instance_id = await _first_instance(file_db)
+    beyond = await document_id_for(file_db, instance_id, f"m{total - 1:03d}")
+    seen: set[str] = set()
+    cursor = None
+    pages = 0
+    checks = 0
+    for _ in range(40):
+        async with file_db() as db:
+            page = await rc.governed_candidates(
+                db, access, query="", check_cap=64, page_budget=32, cursor=cursor
+            )
+        seen |= {document.id for document in page.documents}
+        checks += page.provider_checks
+        cursor = page.cursor
+        pages += 1
+        if cursor is None:
+            break
+    report(
+        {
+            "scenario": "continuation beyond position 256",
+            "pages": pages,
+            "provider_authorization_calls": checks,
+            "reached": len(seen),
+            "beyond_source_reached": beyond in seen,
+        }
+    )
+    assert beyond in seen
+    assert len(seen) == total
+
+
+# =============================================== latency against the agreed threshold
+
+
+async def test_latency_on_comparable_work_against_the_1_25x_threshold(
+    file_db, connector, provider, knowledge, mode
+):
+    """The gate, on COMPARABLE work: 100 resources, both paths examining 100.
+
+    At 150 resources the candidate performs the 50 authorization checks legacy omits, so it is
+    comparing different amounts of work rather than overhead. That case is measured separately
+    and deliberately not asserted against the threshold.
+    """
+    runs = 5
+    await prepare(file_db, provider, 100, name="m-lat")
+    legacy = await collect(file_db, provider, n=100, candidate=False, mode=mode, samples=runs)
+    cand = await collect(file_db, provider, n=100, candidate=True, mode=mode, samples=runs)
+    ratio_p50 = cand["latency_p50_ms"] / max(legacy["latency_p50_ms"], 0.01)
+    ratio_p95 = cand["latency_p95_ms"] / max(legacy["latency_p95_ms"], 0.01)
+    report(
+        {
+            "scenario": "latency, comparable work (100 resources, both examine 100)",
+            "samples_each": runs,
+            "legacy_p50_ms": legacy["latency_p50_ms"],
+            "legacy_p95_ms": legacy["latency_p95_ms"],
+            "candidate_p50_ms": cand["latency_p50_ms"],
+            "candidate_p95_ms": cand["latency_p95_ms"],
+            "ratio_p50": round(ratio_p50, 3),
+            "ratio_p95": round(ratio_p95, 3),
+            "threshold": 1.25,
+            "legacy_sql_statements": legacy["sql_statements"],
+            "candidate_sql_statements": cand["sql_statements"],
+            "legacy_provider_calls": legacy["provider_authorization_calls"],
+            "candidate_provider_calls": cand["provider_authorization_calls"],
+        }
+    )
+    assert cand["authorized_documents_reachable"] == legacy["authorized_documents_reachable"] == 100
+    assert ratio_p95 <= 1.25, (
+        f"candidate p95 {ratio_p95:.2f}x legacy p95 on comparable fixture work, "
+        "above the agreed 1.25x threshold"
+    )
+
+
+async def test_latency_at_150_where_the_candidate_does_the_extra_work(
+    file_db, connector, provider, knowledge, mode
+):
+    """Reported, not asserted: here the candidate performs work legacy omits entirely."""
+    await prepare(file_db, provider, 150, name="m-lat-150")
+    legacy = await collect(file_db, provider, n=150, candidate=False, mode=mode)
+    cand = await collect(file_db, provider, n=150, candidate=True, mode=mode)
+    report(
+        {
+            "scenario": "latency at 150 resources, different amounts of authorization work",
+            "legacy_reachable": legacy["authorized_documents_reachable"],
+            "candidate_reachable": cand["authorized_documents_reachable"],
+            "legacy_p50_ms": legacy["latency_p50_ms"],
+            "candidate_p50_ms": cand["latency_p50_ms"],
+            "delta_ms": round(cand["latency_p50_ms"] - legacy["latency_p50_ms"], 2),
+            "legacy_provider_calls": legacy["provider_authorization_calls"],
+            "candidate_provider_calls": cand["provider_authorization_calls"],
+            "note": "the candidate examines 50 resources legacy never examines; this is not overhead",
+        }
+    )
+    assert legacy["authorized_documents_reachable"] == 100
+    assert cand["authorized_documents_reachable"] == 150
+
+
+# =============================================== adversarial security
+
+
+async def test_tenant_isolation_is_preserved(file_db, connector, provider, knowledge, mode):
+    await prepare(file_db, provider, 12, name="m-iso")
+    mode(rc.MODE_CANDIDATE)
+    async with file_db() as db:
+        result = await rc.governed_candidates(db, access_for(tenant_id=TENANT_B), query="policy")
+    assert result.documents == []
+    assert result.provider_checks == 0
+
+
+async def test_revocation_is_honoured_at_consumption(file_db, connector, provider, knowledge, mode):
+    await prepare(file_db, provider, 20, name="m-revoked")
+    mode(rc.MODE_CANDIDATE)
+    access = access_for()
+    instance_id = await _first_instance(file_db)
+    document_ids = [await document_id_for(file_db, instance_id, f"m{i:03d}") for i in range(20)]
+    async with file_db() as db:
+        assert len(await rc.strict_pinned_documents(db, access, document_ids=document_ids)) == 20
+    provider.access[("u1", "m011")] = False
+    async with file_db() as db:
+        with pytest.raises(StrictScopeError):
+            await rc.strict_pinned_documents(db, access, document_ids=document_ids)
+
+
+async def test_provider_outage_is_reported_not_silently_omitted(
+    file_db, connector, provider, knowledge, mode
+):
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    await prepare(file_db, provider, 30, name="m-outage")
+    mode(rc.MODE_CANDIDATE)
+    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+    async with file_db() as db:
+        result = await rc.governed_candidates(db, access_for(), query="policy")
+    report(
+        {
+            "scenario": "provider outage",
+            "coverage": result.coverage.value if result.coverage else None,
+            "reason": result.reason,
+            "documents_returned": len(result.documents),
+            "notice": result.notice_for_user(),
+        }
+    )
+    assert result.is_partial is True
+    assert result.reason == "authorization_unavailable"
+    assert result.notice_for_user() is not None
+    # No false absence claim is possible from this shape.
+    assert len(result.documents) == 0 and result.is_partial is True
+
+
+async def test_malformed_tampered_and_cross_principal_cursors_are_refused(
+    file_db, connector, provider, knowledge, mode
+):
+    await prepare(file_db, provider, 80, name="m-cursor")
+    mode(rc.MODE_CANDIDATE)
+    access = access_for()
+    async with file_db() as db:
+        first = await rc.governed_candidates(db, access, query="", check_cap=32, page_budget=16)
+    assert first.cursor is not None
+
+    async with file_db() as db:
+        with pytest.raises(CursorError):
+            await rc.governed_candidates(db, access, query="", cursor=first.cursor[:-6] + "AAAAAA")
+    async with file_db() as db:
+        with pytest.raises(CursorError):
+            await rc.governed_candidates(
+                db, access_for(principal_id="sec-pc"), query="", cursor=first.cursor
+            )
+    async with file_db() as db:
+        with pytest.raises(CursorError):
+            await rc.governed_candidates(
+                db, access, query="a different question", cursor=first.cursor
+            )
+
+
+# =============================================== rollback
+
+
+async def test_rollback_to_legacy_restores_previous_behaviour(
+    file_db, connector, provider, knowledge, mode
+):
+    """Rollback is tested, not documented: the flag restores legacy behaviour exactly."""
+    await prepare(file_db, provider, 150, name="m-rollback")
+    access = access_for()
+
+    mode(rc.MODE_CANDIDATE)
+    async with file_db() as db:
+        candidate_set = await rc.governed_candidates(db, access, query="policy")
+    assert len(candidate_set.documents) == 150
+    assert candidate_set.coverage.value == "complete"
+
+    mode(rc.MODE_LEGACY)
+    with request_context():
+        async with file_db() as db:
+            legacy_set = await rc.governed_candidates(db, access, query="policy")
+        async with file_db() as db:
+            from app.services.document_policy import governed_tenant_documents
+
+            expected = await governed_tenant_documents(db, access)
+
+    assert len(expected) == 100, "rollback restores the legacy 100 resource window"
+    assert [document.id for document in legacy_set.documents] == [
+        document.id for document in expected
+    ]
+    assert legacy_set.coverage is None
+    assert legacy_set.notice is None
+    assert legacy_set.provider_checks == 0
