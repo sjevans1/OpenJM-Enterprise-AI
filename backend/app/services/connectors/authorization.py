@@ -398,7 +398,12 @@ async def require_current_authorization(
         external_id=external_id,
     )
     if resource is None:
-        return AuthorizationOutcome.deny("resource_unknown")
+        # Unknown, missing or foreign resource. This is a denial about the
+        # requested resource, not about the principal and not about the
+        # connector: it must return a structured refusal rather than raise, and
+        # it must not mutate anything (there is nothing to mutate). The scope is
+        # CONTENT, consistent with resource_deleted and resource_instance_mismatch.
+        return AuthorizationOutcome.deny("resource_unknown", DenialScope.CONTENT)
     return await authorize_resource(
         db,
         tenant_id=tenant_id,

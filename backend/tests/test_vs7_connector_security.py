@@ -1199,6 +1199,53 @@ async def test_content_scoped_quarantine_still_withdraws_the_document(
     assert resource.quarantine_reason == "content_integrity_failed"
 
 
+async def test_unknown_and_foreign_resources_deny_structurally_without_raising(
+    file_db, connector, provider, knowledge
+):
+    """Regression: the missing-resource path must deny, not raise.
+
+    ``AuthorizationOutcome.deny`` requires a DenialScope. The missing-resource
+    branch of ``require_current_authorization`` called it with a reason only, so
+    asking for an unknown or foreign resource raised TypeError on a path that is
+    reachable from connector tool execution. A refusal must be structured.
+
+    The same reason is returned for an absent id and for a real id requested
+    under a foreign tenant, so the refusal does not enumerate which resources
+    exist elsewhere.
+    """
+    instance_id = await _authorized_setup(file_db, provider, name="unknown-conn")
+    provider.access[("u1", "r1")] = True
+
+    async with file_db() as db:
+        # An external id that does not exist in this tenant at all.
+        absent = await authorization_service.require_current_authorization(
+            db,
+            tenant_id=TENANT_A,
+            connector_instance_id=instance_id,
+            external_id="does-not-exist",
+            principal_id=PRINCIPAL_A,
+        )
+        # A real external id, requested under a foreign tenant.
+        foreign = await authorization_service.require_current_authorization(
+            db,
+            tenant_id=TENANT_B,
+            connector_instance_id=instance_id,
+            external_id="r1",
+            principal_id=PRINCIPAL_A,
+        )
+
+    for outcome in (absent, foreign):
+        assert outcome.allowed is False
+        assert outcome.reason == "resource_unknown"
+        assert outcome.scope is authorization_service.DenialScope.CONTENT
+        assert outcome.detail == ""
+
+    # The foreign request must not have exposed or mutated the real resource.
+    async with file_db() as db:
+        resource = await _resource(db, instance_id, "r1")
+        assert resource.lifecycle_state == "active"
+
+
 # ---------------------------------------------------------------------------
 # ISOLATION
 # ---------------------------------------------------------------------------
@@ -1306,7 +1353,7 @@ async def test_reconciliation_restores_a_quarantined_resource(
 
         resource = await _resource(db, instance_id, "rs-1")
         await ingest_service.quarantine_resource(
-            db, resource=resource, reason="access_revoked"
+            db, resource=resource, reason="content_integrity_failed"
         )
         await db.commit()
         assert (await _resource(db, instance_id, "rs-1")).lifecycle_state == "quarantined"
@@ -1344,7 +1391,7 @@ async def test_quarantine_is_cleared_only_by_a_sweep_that_sees_the_resource(
 
         resource = await _resource(db, instance_id, "rs-1")
         await ingest_service.quarantine_resource(
-            db, resource=resource, reason="access_revoked"
+            db, resource=resource, reason="content_integrity_failed"
         )
         await db.commit()
 
