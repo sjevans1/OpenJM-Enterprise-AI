@@ -196,6 +196,26 @@ class OpenJMOrchestrator:
         user_id: str,
         scope: ReportSourceScope | None = None,
         access: DocumentAccess | None = None,
+    ) -> list[Document]:
+        """The ready documents for this request. Contract UNCHANGED.
+
+        CA2-B needs the candidate set and its coverage beside the documents, so that work moved to
+        :meth:`_ready_documents_with_context` and this method keeps returning exactly what it always
+        returned. Changing THIS signature instead was a silent regression: existing callers and
+        tests unpack a list, and two of them failed in CI with "'list' object has no attribute
+        'id'" because they were handed a tuple.
+        """
+        documents, _candidate_set = await self._ready_documents_with_context(
+            db, user_id, scope=scope, access=access
+        )
+        return documents
+
+    async def _ready_documents_with_context(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        scope: ReportSourceScope | None = None,
+        access: DocumentAccess | None = None,
     ) -> tuple[list[Document], "Any | None"]:
         # Governed, tenant-wide retrieval (resolved product decision): a native
         # public/internal source with tenant_visible is available to every active
@@ -485,7 +505,7 @@ class OpenJMOrchestrator:
         direct_answer (no vector search). Otherwise runs the governed
         knowledge.search tool.
         """
-        documents, candidate_set = await self._ready_documents(
+        documents, candidate_set = await self._ready_documents_with_context(
             db, user_id, scope=scope, access=access
         )
         lowered = message.lower().strip()
