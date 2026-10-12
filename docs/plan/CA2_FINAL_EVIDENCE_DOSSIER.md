@@ -7,8 +7,8 @@ Repository: `sjevans1/OpenJM-Enterprise-AI`
 | Package | PR | Branch | Head | Base | State |
 | --- | --- | --- | --- | --- | --- |
 | CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `3ce6ccc` | `main@709ce47` | draft, experimentally accepted |
-| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `6d30b6b` | PR #94 branch | draft, conditionally accepted |
-| CA2-C search | #100 | `feat/ca2c-search-completeness` | `5d8f7fa` | `main@709ce47` | draft, Unicode correction applied |
+| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `048ad1b` | PR #94 branch | draft, conditionally accepted |
+| CA2-C search | #100 | `feat/ca2c-search-completeness` | `fc9a65e` | `main@709ce47` | draft, conditionally accepted |
 
 Baseline when CA2 began: `main@8d6b7d8`. Current `main`: `709ce47`.
 
@@ -368,18 +368,20 @@ that the reset is what prevents that, and its docstring says so.
 | Head | Run | Result |
 | --- | --- | --- |
 | CA2-A `3ce6ccc` (current) | `38230734152` | **success** |
-| CA2-B `6d30b6b` (current) | `38232317447` | **success** |
-| CA2-C `5d8f7fa` (current) | `38231163795` | **success** |
-| CA2-A `8557487` | `38220473733` | success |
+| CA2-B `048ad1b` (current) | `38235921216` | **success** |
+| CA2-C `fc9a65e` (current) | `38235360668` | **success** |
+| CA2-B `28cbf62` (previous tip) | `38233304499` | success, concluded |
+| CA2-B `6d30b6b` | `38232317447` | success |
 | CA2-B `707c50c` | `38227735920` | success |
-| CA2-C `1125427` | `38225959902` | success |
+| CA2-C `5d8f7fa` | `38231163795` | success |
+| CA2-A `8557487` | `38220473733` | success |
 
 All three current heads passed the full workflow, including the Backend/Python 3.11 job and the
-Frontend/Node 22 job that covers the new coverage-notice rendering.
+Frontend/Node 22 job that covers the coverage-notice rendering and the replay test. The previous
+CA2-B tip `28cbf62`, reported as still running in the last review, has since concluded successfully.
 
-The commit carrying this dossier is itself docs-only and is the CA2-B branch tip; its CI repeats the
-same passing jobs over an identical code tree plus markdown, because the heads above are validated
-with the code they actually contain.
+The commit carrying this dossier is docs-only and is the CA2-B branch tip; its own run repeats the
+same jobs over an identical code tree plus markdown.
 
 Earlier, `978a2b1` failed and `63f5f1e` repaired it (regression 2 below).
 
@@ -439,10 +441,11 @@ notice.
 
 Every engineering gate is met with evidence: both silent-omission defects fixed and measured, the
 live gate closed with real retrieval and citations, the CA2-C Unicode defect repaired by removing the
-unsound predicate rather than widening it, coverage truthful and now **visible in the UI**, the notice
-lifecycle covered by HTTP regressions one of which is falsified, the p95 gate passing on comparable
-work, rollback tested, and the stack reconciled onto current main so the reviewed diff is the CA2
-delta rather than unrelated deployment work.
+unsound predicate rather than widening it, coverage truthful, **visible in the UI**, and now
+**surviving a conversation reload** without a migration, the notice lifecycle covered by HTTP
+regressions one of which is falsified, the p95 gate passing on comparable work, rollback tested, and
+the stack reconciled onto current main so the reviewed diff is the CA2 delta rather than unrelated
+deployment work.
 
 Three things a reviewer should weigh, all stated plainly rather than buried:
 
