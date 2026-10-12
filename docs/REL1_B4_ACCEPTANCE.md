@@ -108,7 +108,7 @@ environment; the bundle must be built with the pinned resolver toolchain.
 | 4 | Trusted-digest verification | **PASS** | `release-integrity.py verify <bundle> --expected-manifest-sha256 fb97c0bf...` -> `verified release payload: 916 files` |
 | 5 | Tamper-negative (bounded, practical) | **PASS** | on a disposable hardlink copy, mutating one payload (`app/README.md`) was refused (`ERROR: size mismatch`); the canonical bundle re-verified clean at 916 files |
 | 6 | Deterministic release archive | **PARTIAL** | the current artifact was archived once (`ff707eb5...`, `3243305430` bytes). A byte-identical second build was not re-run; the deterministic property is a property of `build-rel1-archive.sh` and the previous two-build equality belongs to the `44ceb0c7` artifact. |
-| 7 | Windows/WSL2 **runtime** install | **NOT RUN** | supported path executed from Windows PowerShell (see below) but the clean runtime could not complete the install |
+| 7 | Windows/WSL2 **runtime** install | **PASS** (2026-10-12) | Real supported chain executed on the disposable distro `openjm-rel1b4`: Windows PowerShell 5.1.26100.9444 on Windows 11 Pro build 26200 -> hardened `scripts/install-wsl2.ps1` (WSL 2.6.3.0, kernel 6.6.87.2, Ubuntu 24.04.5, root uid 0) -> `bash scripts/install-linux.sh --profile development`. Operator prereqs provisioned before the run: Python 3.11.9 built from the GPG-verified python.org source (`e7de3240...`, prefix `/opt/openjm/python-3.11`, `/usr/local/bin/python3.11`) and Node v22.14.0 from the official archive (checksum `69b09dba...`). RepoPath `C:\rel1b4\OpenJM-Enterprise-AI` -> `/mnt/c/rel1b4/OpenJM-Enterprise-AI` at `c3937c88`. Bootstrap exit 0; frontend built (vite, 137 npm packages, `dist/` emitted); `REL1-A VERIFY OK: version=0.2.0 profile=development frontend=present`; migration current == head `0021_support_content_scope`; backend started from the new venv on port 18160; `/api/health` 200; `/api/ready` 200 `{"ready":true,"status":"ready"}` |
 | 8 | Windows/WSL2 **contract** (scripts) | **PASS** | `backend/tests/test_rel1b_windows_contract.py`, unchanged and green on this SHA in CI |
 | 9 | Migration to head | **PASS** (CI, current SHA) | full backend suite green on `7e859f28` (run 38186244075); host-level migration NOT RUN |
 | 10 | `/api/ready` / `/api/health` | **PASS** (CI/prior host) | prior accepted host evidence plus CI; not re-run on a clean host |
@@ -301,3 +301,30 @@ production**.
 Clean Linux **development** installer on a separate host; the full PostgreSQL
 **production** profile; real Windows/WSL2 runtime; browser/persona journey. These
 require environments not available here and are not claimed.
+
+
+### Windows/WSL2 runtime qualification evidence (2026-10-12)
+
+| Field | Value |
+| --- | --- |
+| Baseline SHA | `c3937c88150c595d7a9a907688179880a4a096dc` |
+| Windows | Windows 11 Pro, build 26200 (10.0.26200) |
+| PowerShell | 5.1.26100.9444 |
+| WSL | 2.6.3.0, kernel 6.6.87.2-microsoft-standard-WSL2 |
+| Distro | `openjm-rel1b4`, Ubuntu 24.04.5 LTS, root / uid 0 (the user's `Ubuntu` and `Ubuntu-24.04` were untouched) |
+| Python | 3.11.9, built from source into `/opt/openjm/python-3.11`, exposed as `/usr/local/bin/python3.11`; system `python3` remains 3.12.3 |
+| Node | v22.14.0 from the official archive into `/opt/openjm/node-22`, `/usr/local/bin/node`, npm 10.9.2 (Linux paths win over the inherited Windows npm) |
+| Bootstrap command | `powershell -NoProfile -ExecutionPolicy Bypass -File C:\rel1b4\OpenJM-Enterprise-AI\scripts\install-wsl2.ps1 -RepoPath C:\rel1b4\OpenJM-Enterprise-AI -Distro openjm-rel1b4 -Profile development` |
+| Bootstrap exit | **0** (completion banner printed) |
+| RepoPath mapping | `C:\rel1b4\OpenJM-Enterprise-AI` -> `/mnt/c/rel1b4/OpenJM-Enterprise-AI` |
+| Installer stages | deps from the committed development lock; editable application install; preflight; migration; `npm ci` (137 packages); `vite build`; REL1-A verifier |
+| Verifier | `REL1-A VERIFY OK: version=0.2.0 profile=development frontend=present` (exit 0) |
+| Migration | current `0021_support_content_scope` == head `0021_support_content_scope` (development SQLite `./data/openjm.db`) |
+| Backend | `env -u PYTHONPATH -u PYTHONHOME .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18160`, pid 14521, venv python `/opt/openjm/python-3.11/bin/python3.11`, `Application startup complete` |
+| `/api/health` | 200 `{"status":"ok","product":"OpenJM Enterprise AI","version":"0.2.0","knowledge_engine":"DB-GPT","model":"gemma-4-12b-local","profile":"development"}` |
+| `/api/ready` | 200 `{"ready":true,"status":"ready"}` |
+| Readiness detail | database ok, migrations ok (no drift), storage ok, knowledge ok, scheduler ok, connectors ok, notifications ok. `model_provider` reports `error`/`ConnectTimeout` for the development-profile default local model, which is **not** a readiness gate (readiness gates only on database, migrations and storage). No credential was exposed, no model was substituted, and Rahkia was not involved. |
+| Frontend | `frontend/dist` emitted (index.html + assets); no browser/persona journey claimed here (separate #79 row) |
+
+The clean Linux development host, the clean Linux production/PostgreSQL host and the
+production-installed browser/persona journey remain **NOT RUN**.
