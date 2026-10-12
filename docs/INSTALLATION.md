@@ -22,13 +22,76 @@ The installer fails early, with a message, when a required dependency or
 supported version is missing. It is idempotent: re-running it preserves an
 existing `.env` and never deletes production data.
 
-## Linux
+## Development install vs production install
+
+These are two different things, and the distinction matters. A plain source
+checkout is **not** a production release artifact.
+
+### Development / source install (contributors)
+
+Use this when you are working on the source tree:
 
 ```bash
 git clone https://github.com/sjevans1/OpenJM-Enterprise-AI.git
 cd OpenJM-Enterprise-AI
-scripts/install-linux.sh --profile production      # or --profile development
+scripts/install-linux.sh --profile development
 ```
+
+The development profile installs the application plus the `[dev]` extras and is
+intended for a working checkout, not for a production host.
+
+### Production install (assembled REL1 release payload)
+
+A production install must run against the **assembled release payload**, not a
+bare clone. The production installer installs the application wheel that the
+release bundle ships, alongside the committed production lock and the bundled
+offline wheelhouse. It does not resolve dependencies from `pyproject.toml`, does
+not install `[dev]` extras, and does not perform an editable install.
+
+In practice this means:
+
+1. obtain (or build) the REL1 release payload - the bundle directory containing
+   `python/app/*.whl`, `python/requirements.lock` and `python/wheelhouse/`, or
+   the release archive that unpacks to it;
+2. work from the `app/` directory inside that unpacked payload, which is the
+   canonical release tree;
+3. run `scripts/install-linux.sh --profile production` from there.
+
+Running `--profile production` directly inside a plain `git clone` fails early
+with `production install requires the bundled application wheel at
+python/app/*.whl`, because the freshly cloned source tree has no release
+wheelhouse next to it. That error is expected and is not a defect: build or
+fetch the release payload first. See `docs/OFFLINE_BUNDLE.md` and
+`docs/DEPLOYMENT_PROFILES.md`.
+
+## Linux (development example)
+
+```bash
+git clone https://github.com/sjevans1/OpenJM-Enterprise-AI.git
+cd OpenJM-Enterprise-AI
+scripts/install-linux.sh --profile development
+```
+
+## Establishing the first platform operator
+
+There is **no default administrator and no default password**, and there is no
+HTTP route that grants platform authority. The first platform operator is
+provisioned once, deliberately, through the supported service bootstrap:
+
+```bash
+# from backend/ with the application environment active
+python -m app.services.platform_bootstrap <oidc-subject> \
+    [--issuer URL] [--email ADDR] [--display-name NAME]
+```
+
+The `<oidc-subject>` is the validated OIDC subject of the human who will hold
+platform authority. The bootstrap refuses to replay once an operator exists, so
+it cannot be used to accumulate standing anonymous privilege, and it grants the
+accepted platform capability set only - it does not grant customer-content
+access. Subsequent tenant and customer administration happens in the product
+through the ordinary tenant/customer surfaces, not through this bootstrap.
+
+See `docs/OPERATIONS.md` and `docs/SECURITY_POSTURE.md`.
 
 What it does, in order:
 

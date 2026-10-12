@@ -47,6 +47,23 @@ Selected fields:
 | `retention_enabled` | optional | opt-in lifecycle |
 | `product_name` etc. | optional | white-label display text |
 
+## Governed report execution (`OPENJM_REPORT_RUNS_ENABLED`)
+
+Saved Reports can be defined and their definitions stored, but **executing** a
+report run is disabled by default:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `OPENJM_REPORT_RUNS_ENABLED` | `false` | when false, `POST /api/reports/{id}/runs` returns **424** and no run executes |
+
+This default is deliberate: running a governed report exercises the model and
+retrieval path and writes run history, so it is opt-in. An operator who wants
+report execution (including for isolated acceptance) sets
+`OPENJM_REPORT_RUNS_ENABLED=true` in the environment. Enabling it does not
+change report **authorization** - tenant and evidence scoping still apply - it
+only allows the run to proceed. There is no production requirement to enable it;
+leave it false unless report execution is actually needed on that host.
+
 ## Production failure conditions (fail closed)
 
 Startup refuses when any of these holds in a `production` profile:

@@ -2,8 +2,15 @@
 
 ## Production defaults
 
-- **Dev auth disabled**: `auth_mode=oidc` is required; `auth_allow_dev_mode` is
-  refused in production. There is no silent fallback from OIDC to dev identity.
+- **Dev auth disabled**: production requires `auth_mode=oidc`, and that is the
+  control that actually enforces the posture - there is no silent fallback from
+  OIDC to dev identity. The local development identity requires **both**
+  `auth_mode=dev` **and** `auth_allow_dev_mode=true`; setting
+  `auth_allow_dev_mode=true` on its own does not activate a dev principal while
+  `auth_mode=oidc` is in force. The production preflight **warns** about
+  `auth_allow_dev_mode` being true rather than failing solely on the flag, since
+  the flag is inert without `auth_mode=dev`. The `auth_mode=oidc` requirement
+  itself remains fail-closed.
 - **CORS constrained**: an explicit origin list is required; the wildcard is
   refused in production.
 - **Trusted proxy explicit**: `trust_proxy_headers` must be set deliberately;

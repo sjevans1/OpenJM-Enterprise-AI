@@ -45,6 +45,33 @@ Components reported:
 No secret or tenant content appears in any operational response; a test asserts
 this.
 
+## Reading detailed readiness during a dependency outage
+
+`/api/ready/detail` is designed so that **no single failed dependency aborts the
+report**. When PostgreSQL is unavailable:
+
+- the request still returns **HTTP 200** and never 500;
+- the normal top-level shape is preserved: `ready`, `profile`, `components`;
+- `ready` becomes `false`;
+- `components.database.status` becomes `error` (or another bounded degraded/error
+  status), and other DB-backed components (`migrations`, `scheduler`,
+  `connectors`, `notifications`) report bounded `error`/`degraded` status rather
+  than raising;
+- non-database components (`storage`, `knowledge`, `model_provider`) are still
+  reported, so the map stays complete and you can see which parts are healthy.
+
+Only bounded exception **class names** are surfaced as component detail. No
+connection string, credential, SQLAlchemy transport message or traceback is ever
+placed in the response, so the body is safe to paste into an incident ticket.
+
+When the database returns, detailed readiness recovers on its own - the backend
+does **not** need to be restarted.
+
+`/api/ready` is the cheap public go/no-go and degrades to
+`{"ready": false, "status": "degraded"}` in the same situation. Structured JSON
+logs and correlation IDs are the complementary diagnostics when the component
+map only tells you *which* component is unhappy; the logs tell you why.
+
 ## Structured logging
 
 `app.core.observability` installs a JSON formatter with a correlation id and a

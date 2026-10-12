@@ -68,17 +68,20 @@ architectures (from `scripts/`), the health/readiness checks (from
 metrics surface (from `backend/app/core/observability.py`,
 `backend/app/core/middleware.py`).
 
-**Proposed for REL1 (not implemented):**
+**Status of this list:**
 
 1. The offline bundle and the installer's ability to consume it
-   ([OFFLINE_BUNDLE.md](../deployment/OFFLINE_BUNDLE.md)).
+   ([OFFLINE_BUNDLE.md](../deployment/OFFLINE_BUNDLE.md)). **Implemented.**
 2. The release manifest and `SHA256SUMS` emission
-   ([RELEASE_MANIFEST.md](../deployment/RELEASE_MANIFEST.md)).
+   ([RELEASE_MANIFEST.md](../deployment/RELEASE_MANIFEST.md)). **Implemented.**
 3. A consolidated `openjm_ops.py doctor` command
-   ([HEALTH_DOCTOR_CHECKS.md](../operations/HEALTH_DOCTOR_CHECKS.md)).
+   ([HEALTH_DOCTOR_CHECKS.md](../operations/HEALTH_DOCTOR_CHECKS.md)). **Proposed, not implemented.**
 4. A `openjm_ops.py support-bundle` command
-   ([DIAGNOSTICS_AND_SUPPORT_BUNDLE.md](../operations/DIAGNOSTICS_AND_SUPPORT_BUNDLE.md)).
-5. A decision on whether the release manifest is signed.
+   ([DIAGNOSTICS_AND_SUPPORT_BUNDLE.md](../operations/DIAGNOSTICS_AND_SUPPORT_BUNDLE.md)). **Proposed, not implemented.**
+5. A decision on whether the release manifest is signed. **Open.**
+
+The implemented operator CLI today is exactly: `backup`, `verify`, `restore`,
+`upgrade`, `retention`, `config`. Nothing else is claimed.
 
 ## Findings the REL1 work must address
 

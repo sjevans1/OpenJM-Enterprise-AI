@@ -125,24 +125,31 @@ and final integrated qualification, not another broad business-feature wave.
    release gates, and the prior PostgreSQL production-profile qualification ran
    on 2026-10-10. This is implementation/package capability, and it is the only
    part of REL1 that is complete.
-2. **REL1-B4 final host/runtime qualification: partly PASS, partly OPEN under
-   Issue #79.** **PASS**: the clean Linux **development** host (Docker Agentic
+2. **REL1-B4 final host/runtime qualification: PASS, and Issue #79 is CLOSED /
+   COMPLETED.** PASS: the clean Linux **development** host (Docker Agentic
    Platform Cloud sandbox) and the supported **Windows/WSL2** runtime install.
-   **PASS** (2026-10-12, frozen artifact `709ce47b`): the clean Linux **production**
-   host with PostgreSQL and production-safe paths, and the **browser/persona journey on
-   the
-   production-installed artifact**. Issue #79 makes the outstanding rows part of
-   the release acceptance contract, so they are NOT optional compatibility
-   coverage, and they must not be upgraded from CI, prior WSL evidence, the prior
-   PostgreSQL qualification or contract tests. Current status is recorded in
+   PASS (2026-10-12, frozen artifact `709ce47b`): the clean Linux **production**
+   host with PostgreSQL and production-safe paths, and the **browser/persona
+   journey on the production-installed artifact**. Both mandatory Issue #79 rows
+   were executed against the real released artifact. Evidence boundary: that live
+   host/browser qualification belongs to the frozen artifact
+   `709ce47bf3ae1b7135446c376bcf312b25606b5c`; later `main` commits do not
+   automatically inherit it. Current status is recorded in
    `docs/REL1_B4_ACCEPTANCE.md`.
 3. **Product journey acceptance on the controlled QA environment: PASS, and
    distinct from host qualification.** QA2 executed the real OIDC persona and
    delegated-support journeys, QA3 executed the live vector/RAG
    authoritative-candidate path, and OPS1 executed the operator-plane journey.
-   That is product acceptance on a production-like environment, not the
-   REL1-B4 clean-host row, which remains NOT RUN.
-4. **Rahkia cutover is DEFERRED by design.** Do not connect the application to
+   That is product acceptance on a production-like environment, independently
+   corroborating the REL1-B4 host rows above.
+4. **Zero-tribal-knowledge handoff qualification (ZTK1): PASS by evidence
+   aggregation.** An isolated operator with no prior product context completed a
+   full independent lifecycle examination, which surfaced documentation gaps
+   G1-G5 and one genuine product defect (D1). D1 was corrected and live-validated
+   under Issue #105 / PR #106, the documentation was repaired, and a fresh
+   isolated operator re-verified the affected gates F1-F7. Unaffected gates were
+   intentionally not rerun. See `docs/ZTK1_ACCEPTANCE.md`.
+5. **Rahkia cutover is DEFERRED by design.** Do not connect the application to
    Rahkia during the remaining product build. The specialist integration phase
    later verifies call paths, M1/M2/M3 attribution, hardware/security/performance
    and supported deployment topologies.
@@ -173,12 +180,12 @@ date; do not read an older row as current-artifact host evidence.
 
 The PostgreSQL production profile, the frontend production build, the live OIDC
 persona/delegated-support journeys and the live vector/RAG authoritative-candidate
-journey all pass. Current #79 host/runtime state: **PASS** for the clean Linux
-development host and the Windows/WSL2 supported runtime; **NOT RUN / OPEN** for the
-clean Linux production/PostgreSQL host and the production-installed browser/persona
-journey. The remaining rows are mandatory release-acceptance rows, not optional
-compatibility coverage, and they must not be upgraded from CI, prior WSL evidence,
-the prior PostgreSQL qualification or contract tests.
+journey all pass. Current #79 host/runtime state: **PASS, and Issue #79 is CLOSED /
+COMPLETED** - the clean Linux development host, the Windows/WSL2 supported runtime,
+the clean Linux production/PostgreSQL host and the production-installed
+browser/persona journey were all executed. The final two rows were qualified live
+against the frozen REL1 artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`; later
+`main` commits do not automatically inherit that live-host evidence.
 
 ## How this matrix is maintained
 
