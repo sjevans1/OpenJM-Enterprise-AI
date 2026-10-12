@@ -55,6 +55,7 @@ from test_ca2b_candidate_integration import (  # noqa: F401
 
 from app.core.config import get_settings
 from app.models import Document
+from app.services import orchestrator as orchestrator_module
 from app.services import retrieval_candidates as rc
 from app.services.connectors.candidate_authorization import CursorError, StrictScopeError
 from app.services.tools import KnowledgeSearchTool
@@ -525,6 +526,62 @@ def _stats(samples: list[float]) -> dict:
         "max_ms": round(ordered[-1], 2),
         "stdev_ms": round(statistics.stdev(ordered), 2) if len(ordered) > 1 else 0.0,
     }
+
+
+async def test_one_exploratory_traversal_per_full_hybrid_request(
+    file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """The same request-level proof for a Hybrid request, which the review asked for by name.
+
+    The structured side is made inert by stubbing its planner seam, so this exercises a real
+    hybrid routing and its knowledge leg with the REAL tool registry, and therefore the real
+    handoff, rather than a fake tool that would prove nothing about provider accounting.
+    """
+    from app.services.orchestrator import OpenJMOrchestrator
+    from app.services.structured_planner import StructuredPlanningResult
+
+    total = 150
+    await prepare(file_db, provider, total, name="m-hybrid")
+    mode(rc.MODE_CANDIDATE)
+    stub_retrieve(monkeypatch, body_records(knowledge))
+
+    async def no_plan(*args, **kwargs):
+        return StructuredPlanningResult(candidate=False, plan=None, rationale="inert for this test")
+
+    monkeypatch.setattr(orchestrator_module.structured_planner, "is_candidate", lambda *a, **k: False)
+    monkeypatch.setattr(orchestrator_module.structured_planner, "plan", no_plan)
+
+    invocations = {"n": 0}
+    original = rc.governed_candidates
+
+    async def counting(*args, **kwargs):
+        invocations["n"] += 1
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(rc, "governed_candidates", counting)
+
+    with request_context() as principal:
+        async with file_db() as db:
+            provider.check_calls.clear()
+            plan = await OpenJMOrchestrator().plan(
+                "What does the policy document say?", db, principal.user_id, mode="hybrid"
+            )
+            provider_calls = len(provider.check_calls)
+
+    report(
+        {
+            "scenario": "full orchestrator Hybrid request, 150 resources",
+            "exploratory_gate_invocations": invocations["n"],
+            "provider_calls_for_entire_request": provider_calls,
+            "per_request_cap": rc.DEFAULT_REQUEST_CHECK_CAP,
+            "execution_class": plan.execution_class,
+        }
+    )
+    assert plan.execution_class == "hybrid", "the request must have routed as hybrid"
+    assert invocations["n"] == 1, (
+        f"the exploratory gate ran {invocations['n']} times for one hybrid request; it must run once"
+    )
+    assert provider_calls <= rc.DEFAULT_REQUEST_CHECK_CAP
 
 
 async def test_one_exploratory_traversal_per_full_knowledge_request(
