@@ -73,9 +73,20 @@ CA2-C (PR #100): `backend/app/services/actions/connector_tools.py`,
 
 PR #94 was based on `main@8d6b7d8`. Because #98 is stacked on #94 and had merged current main, the
 GitHub diff for #98 contained 29 files including unrelated main deployment, installer and REL1
-changes. Reconciling CA2-A onto `main@709ce47` (`3ce6ccc`) removes them from the reviewed feature
-diff. Each merge was clean, none of the incoming files touches a CA2 path, and no CA2 code changed
-as a result.
+changes. Reconciling CA2-A onto `main@709ce47` (`3ce6ccc`) fixed #94's own diff but not #98's: with
+#94's branch head no longer an ancestor of the CA2-B branch, the merge base fell back to the old
+pre-reconciliation commit, so the deployment changes reappeared. The CA2-B branch therefore also
+merges the reconciled CA2-A head. Both branches now contain `main@709ce47` and share it as the merge
+base, so:
+
+| PR | Diff vs its base | Unrelated deployment files |
+| --- | --- | --- |
+| #94 | 5 files, CA2-A only | 0 |
+| #98 | 21 files, CA2-B only | 0 |
+| #100 | 2 files, CA2-C only | 0 |
+
+Every merge was clean, none of the incoming files touches a CA2 path, and no CA2 code changed as a
+result. Main itself is untouched by all of this: the merges land on the CA2 branches only.
 
 ### Sequential merge strategy for #94, #98, #100
 
