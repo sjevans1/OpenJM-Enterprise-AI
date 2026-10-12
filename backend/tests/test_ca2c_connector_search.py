@@ -336,6 +336,32 @@ async def test_matching_does_not_become_a_match_everything_filter(
 # ============================================================ truthful completeness
 
 
+async def test_a_truncated_scan_with_no_matches_does_not_claim_matches_exist(
+    file_db, connector, provider, knowledge
+):
+    """Truncation proves unchecked resources, not that further matches exist.
+
+    More than MATCH_SCAN_LIMIT resources, none of which matches: the search is incomplete, but
+    asserting that further matching resources exist would be a claim about rows never read.
+    """
+    instance_id = await seed_titled(file_db, provider, MATCH_SCAN_LIMIT + 1, name="c2c-no-matches")
+    assert await rows_before(file_db, instance_id, f"m{MATCH_SCAN_LIMIT:03d}") == MATCH_SCAN_LIMIT
+
+    with request_context():
+        result = await search(file_db, query="nothing-matches-this-token")
+
+    assert result["matches"] == []
+    assert result["matches_complete"] is False, (
+        "a truncated scan must still be reported as incomplete"
+    )
+    assert "may be incomplete" in result["note"]
+    assert "More matching resources exist" not in result["note"], (
+        "the note must not assert that unchecked resources match; it can only say the search may be "
+        "incomplete"
+    )
+    assert "narrow the query" in result["note"]
+
+
 async def test_matches_complete_is_false_when_the_match_cap_is_reached(
     file_db, connector, provider, knowledge
 ):

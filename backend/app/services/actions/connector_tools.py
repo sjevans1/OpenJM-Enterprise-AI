@@ -213,18 +213,25 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
         if len(matches) >= MAX_MATCHES:
             break
 
-    # Truthful completeness. False when the scan hit its bound, or when the match list was capped
-    # while at least one further matching resource existed to examine. A caller is therefore never
-    # told that an incomplete search was exhaustive, and is never told that a complete search of an
-    # empty result means no resource matches when matching resources simply were not reached.
+    # Truthful completeness. False when the scan hit its bound, or when the match list was capped.
+    # A caller is therefore never told that an incomplete search was exhaustive. The WORDING matters
+    # as much as the flag: a truncated scan proves that resources were left UNCHECKED, not that
+    # further matching resources exist. Claiming more matches exist would assert something about rows
+    # this request never read, so each cause gets its own non-asserting sentence.
     scan_capped = scan_truncated
     matches_capped = len(matches) >= MAX_MATCHES
     matches_complete = not scan_capped and not matches_capped
     note = "Only resources whose current user authorization was proven are returned."
-    if not matches_complete:
+    if scan_capped:
         note += (
-            " More matching resources exist than are listed here; narrow the query, or use"
-            " connector.fetch for a specific resource."
+            " This search may be incomplete: the scan reached its limit before every candidate could"
+            " be checked, so a further matching resource may exist beyond that point. narrow the"
+            " query or use connector.fetch for a specific resource."
+        )
+    elif matches_capped:
+        note += (
+            " More matches may exist than are listed here: the result list reached its limit."
+            " narrow the query or use connector.fetch for a specific resource."
         )
 
     return {
