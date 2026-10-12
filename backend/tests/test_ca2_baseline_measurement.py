@@ -148,3 +148,72 @@ async def test_baseline_latency_distribution(file_db, connector, provider, knowl
     print("\n=== CA2 BASELINE (gate latency, 150-item corpus) ===")
     print(json.dumps(record, indent=2, sort_keys=True))
     print("=== END ===\n")
+
+
+async def test_ca2a_contract_measurement(file_db, connector, provider, knowledge):
+    """Measure the CA2-A contract on the same 150-resource fixture as the baseline.
+
+    Reports resource fetches and authorization calls as separate counts, which is the split
+    the comparative benchmark needs. Provider overhead and database overhead are NOT yet
+    isolated from each other here; this records counts and total wall time per page.
+    """
+    from app.services.connectors import candidate_authorization as ca
+    from app.services.document_policy import DocumentAccess
+
+    instance_id, ext_to_doc = await _seed_all_authorized(file_db, provider)
+    access = DocumentAccess(tenant_id=TENANT_A, principal_id=PRINCIPAL_A, owner_key="u1")
+
+    pages = []
+    reachable: set[str] = set()
+    cursor = None
+    started = time.perf_counter()
+    for _ in range(50):
+        async with file_db() as db:
+            page_start = time.perf_counter()
+            result = await ca.authorize_candidates(
+                db, access=access, query="policy document", budget=32, cursor=cursor
+            )
+            page_ms = (time.perf_counter() - page_start) * 1000
+        pages.append(
+            {
+                "rows_fetched": result.rows_fetched,
+                "provider_checks": result.provider_checks,
+                "examined": result.examined,
+                "authorized": len(result.authorized_document_ids),
+                "coverage": result.coverage.value,
+                "reason": result.coverage_reason,
+                "page_ms": round(page_ms, 2),
+            }
+        )
+        reachable |= set(result.authorized_document_ids)
+        cursor = result.cursor
+        if cursor is None:
+            break
+    total_ms = (time.perf_counter() - started) * 1000
+
+    record = {
+        "contract": "CA2-A",
+        "baseline_commit": "8d6b7d8",
+        "fixture_resources": N,
+        "authorized_in_fixture": N,
+        "page_budget": 32,
+        "pages": len(pages),
+        "reachable_external_ids": len(reachable),
+        "still_omitted": N - len(reachable),
+        "total_rows_fetched": sum(p["rows_fetched"] for p in pages),
+        "total_provider_checks": sum(p["provider_checks"] for p in pages),
+        "total_examined": sum(p["examined"] for p in pages),
+        "fetch_to_check_ratio": round(
+            sum(p["rows_fetched"] for p in pages) / max(1, sum(p["provider_checks"] for p in pages)), 3
+        ),
+        "pages_total_ms": round(total_ms, 2),
+        "per_page": pages,
+    }
+    # The claim CA2-A exists to make, asserted on the same fixture the baseline was measured on.
+    assert len(reachable) == N, f"CA2-A reached only {len(reachable)} of {N}"
+    assert pages[-1]["coverage"] == "complete"
+    assert pages[-1]["reason"] == ""
+
+    print("\n=== CA2-A CONTRACT (150-item corpus, budget 32) ===")
+    print(json.dumps(record, indent=2, sort_keys=True))
+    print("=== END ===\n")
