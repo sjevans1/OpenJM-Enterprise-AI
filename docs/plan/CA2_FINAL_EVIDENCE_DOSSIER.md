@@ -7,7 +7,7 @@ Repository: `sjevans1/OpenJM-Enterprise-AI`
 | Package | PR | Branch | Head | Base | State |
 | --- | --- | --- | --- | --- | --- |
 | CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `3ce6ccc` | `main@709ce47` | draft, experimentally accepted |
-| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `7c7b3f4` | PR #94 branch | draft, conditionally accepted |
+| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `6d30b6b` | PR #94 branch | draft, conditionally accepted |
 | CA2-C search | #100 | `feat/ca2c-search-completeness` | `5d8f7fa` | `main@709ce47` | draft, Unicode correction applied |
 
 Baseline when CA2 began: `main@8d6b7d8`. Current `main`: `709ce47`.
@@ -325,10 +325,19 @@ that the reset is what prevents that, and its docstring says so.
 
 | Head | Run | Result |
 | --- | --- | --- |
+| CA2-A `3ce6ccc` (current) | `38230734152` | **success** |
+| CA2-B `6d30b6b` (current) | `38232317447` | **success** |
+| CA2-C `5d8f7fa` (current) | `38231163795` | **success** |
 | CA2-A `8557487` | `38220473733` | success |
 | CA2-B `707c50c` | `38227735920` | success |
 | CA2-C `1125427` | `38225959902` | success |
-| CA2-A `3ce6ccc`, CA2-B `7c7b3f4`, CA2-C `5d8f7fa` | this round | run IDs confirmed in the handoff |
+
+All three current heads passed the full workflow, including the Backend/Python 3.11 job and the
+Frontend/Node 22 job that covers the new coverage-notice rendering.
+
+The commit carrying this dossier is itself docs-only and is the CA2-B branch tip; its CI repeats the
+same passing jobs over an identical code tree plus markdown, because the heads above are validated
+with the code they actually contain.
 
 Earlier, `978a2b1` failed and `63f5f1e` repaired it (regression 2 below).
 
@@ -374,8 +383,9 @@ notice.
    regressions in it would not be caught by CI.
 7. **Frontend tests run against a stubbed fetch**, so they assert rendering, not a live server round
    trip; the live server round trip is covered by the backend HTTP regressions.
-8. **This round's CI** for `3ce6ccc`, `7c7b3f4` and `5d8f7fa` was in flight when this dossier was
-   written; the handoff records the concluded run IDs.
+8. **This round's CI has concluded green** for all three current heads; the run IDs are in H. The
+   dossier-carrying commit is docs-only, so its own run repeats the same jobs over an identical code
+   tree.
 
 ---
 
