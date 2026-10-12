@@ -990,3 +990,187 @@ test('a principal holding reports:write is offered Save as report', async () => 
   await askOneGroundedQuestion()
   expect(await screen.findByRole('button', { name: /save as report/i })).toBeTruthy()
 })
+
+// ---------------------------------------------------------------------------
+// CA2-B: the partial-coverage warning must reach the USER, not just the JSON.
+//
+// The server attaches coverage_notice when it could not examine every source the principal is
+// authorized to read. A field on the response that no component reads is not a warning, so these
+// assert what is actually rendered.
+// ---------------------------------------------------------------------------
+
+const PARTIAL_COVERAGE_NOTICE = {
+  code: 'partial_coverage',
+  coverage: 'partial',
+  reason: 'provider_cap_reached',
+  message:
+    'This request reached its authorization budget before every connector source could be checked, ' +
+    'so this answer may not include every source you are authorized to read. Ask a narrower ' +
+    'question, or ask again to continue checking.',
+}
+
+function stubChatWithCoverage(coverage: unknown) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method || 'GET'
+      if (url === '/api/auth/config') return jsonResponse(OIDC_AUTH_CONFIG)
+      if (url === '/api/auth/me') {
+        return jsonResponse(principalContext({ permissions: ['chat:use'] }))
+      }
+      if (url === '/api/chat' && method === 'POST') {
+        return jsonResponse({ ...EVIDENCE_ANSWER, coverage_notice: coverage })
+      }
+      return jsonResponse([])
+    }),
+  )
+}
+
+test('a partial answer shows the coverage warning to the user', async () => {
+  storeAuthenticatedSession()
+  stubChatWithCoverage(PARTIAL_COVERAGE_NOTICE)
+  const { container } = render(<App />)
+
+  await askOneGroundedQuestion()
+
+  const notice = container.querySelector('[data-coverage-notice]')
+  expect(notice).toBeTruthy()
+  expect(notice?.textContent).toMatch(/may not include every source you are authorized to read/i)
+  // The server's whole sentence, verbatim: the UI must not paraphrase or downgrade it.
+  expect(notice?.textContent).toContain(PARTIAL_COVERAGE_NOTICE.message)
+})
+
+test('a complete answer carries no coverage warning', async () => {
+  storeAuthenticatedSession()
+  stubChatWithCoverage(null)
+  const { container } = render(<App />)
+
+  await askOneGroundedQuestion()
+
+  expect(container.querySelector('[data-coverage-notice]')).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// CA2-B history: reopening an incomplete answer must still show its qualification.
+// ---------------------------------------------------------------------------
+
+const RELOADED_PARTIAL_NOTICE = {
+  code: 'partial_coverage',
+  coverage: 'partial',
+  reason: 'provider_cap_reached',
+  message:
+    'This request reached its authorization budget before every connector source could be checked, ' +
+    'so this answer may not include every source you are authorized to read. Ask a narrower ' +
+    'question, or ask again to continue checking.',
+}
+
+const RELOADED_CONVERSATION = {
+  id: 'conversation-history',
+  title: 'Levy policy question',
+  created_at: '2026-01-02T03:04:05Z',
+  updated_at: '2026-01-02T03:04:06Z',
+}
+
+function stubReloadedPartialConversation() {
+  const detail = {
+    ...RELOADED_CONVERSATION,
+    messages: [
+      {
+        id: 'message-user',
+        role: 'user',
+        content: 'what is the reforestation levy policy?',
+        evidence: [],
+        artifacts: [],
+        created_at: '2026-01-02T03:04:05Z',
+      },
+      {
+        id: 'message-assistant',
+        role: 'assistant',
+        // What the server persists for a partial answer: the answer plus the fixed qualification.
+        content: `An answer.\n\nCoverage note: ${RELOADED_PARTIAL_NOTICE.message}`,
+        execution_class: 'knowledge',
+        requested_mode: 'knowledge',
+        evidence: [],
+        artifacts: [],
+        coverage_notice: RELOADED_PARTIAL_NOTICE,
+        created_at: '2026-01-02T03:04:06Z',
+      },
+      {
+        id: 'message-user-later',
+        role: 'user',
+        content: 'and the levy rate?',
+        evidence: [],
+        artifacts: [],
+        created_at: '2026-01-02T03:05:05Z',
+      },
+      {
+        id: 'message-assistant-later',
+        role: 'assistant',
+        // A later COMPLETE turn: clean text, and no structured notice to render.
+        content: 'The levy rate is 0.4 percent.',
+        execution_class: 'knowledge',
+        requested_mode: 'knowledge',
+        evidence: [],
+        artifacts: [],
+        coverage_notice: null,
+        created_at: '2026-01-02T03:05:06Z',
+      },
+    ],
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/config') return jsonResponse(OIDC_AUTH_CONFIG)
+      if (url === '/api/auth/me') {
+        return jsonResponse(principalContext({ permissions: ['chat:use'] }))
+      }
+      if (url === '/api/conversations') return jsonResponse([RELOADED_CONVERSATION])
+      if (url === `/api/conversations/${RELOADED_CONVERSATION.id}`) return jsonResponse(detail)
+      return jsonResponse([])
+    }),
+  )
+}
+
+test('reopening a partial conversation shows the warning exactly once', async () => {
+  storeAuthenticatedSession()
+  stubReloadedPartialConversation()
+  const { container } = render(<App />)
+
+  fireEvent.click(await screen.findByRole('button', { name: /Levy policy question/ }))
+  await screen.findAllByText(/An answer\./)
+
+  // The WHOLE displayed assistant answer, status banner included. The previous version of this test
+  // only inspected .message-content, so it passed while the reopened conversation actually showed the
+  // warning twice: once as prose carried in the persisted text, once as the styled notice beside it.
+  const assistantMessages = Array.from(container.querySelectorAll('.assistant-message'))
+  expect(assistantMessages.length).toBeGreaterThan(0)
+
+  const partial = assistantMessages.filter((node) =>
+    (node.textContent || '').includes(RELOADED_PARTIAL_NOTICE.message),
+  )
+  const complete = assistantMessages.filter(
+    (node) => !(node.textContent || '').includes(RELOADED_PARTIAL_NOTICE.message),
+  )
+  expect(partial.length).toBeGreaterThan(0)
+  expect(complete.length).toBeGreaterThan(0)
+
+  for (const node of partial) {
+    const occurrences = (node.textContent || '').split(RELOADED_PARTIAL_NOTICE.message).length - 1
+    const banners = node.querySelectorAll('[data-coverage-notice]').length
+    expect(banners).toBe(1)
+    // Exactly one warning, and it is the banner: the answer text no longer repeats it.
+    expect(occurrences).toBe(1)
+    expect(node.querySelector('.message-content')?.textContent || '').not.toContain(
+      RELOADED_PARTIAL_NOTICE.message,
+    )
+    // The answer itself is still shown, only without the qualification sentence.
+    expect(node.querySelector('.message-content')?.textContent || '').toContain('An answer.')
+  }
+
+  for (const node of complete) {
+    expect(node.querySelectorAll('[data-coverage-notice]')).toHaveLength(0)
+    expect(node.textContent || '').not.toContain(RELOADED_PARTIAL_NOTICE.message)
+  }
+})

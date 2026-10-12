@@ -638,11 +638,25 @@ async def _corpus_digest(
 
 
 async def _local_eligible(
-    db: AsyncSession, access: DocumentAccess, resource: ExternalResource
+    db: AsyncSession,
+    access: DocumentAccess,
+    resource: ExternalResource,
+    *,
+    documents: dict[str, Document] | None = None,
 ) -> bool:
-    """Local eligibility, evaluated BEFORE any provider budget is spent."""
+    """Local eligibility, evaluated BEFORE any provider budget is spent.
+
+    ``documents`` may supply the page's document rows already loaded in ONE batched read. The
+    tenant predicate, the retrievability filter and the visibility rules are identical either way;
+    only the number of statements differs. The traversal path passes a preloaded map because the
+    per-candidate lookup measured as roughly one extra SQL statement per candidate, which was the
+    dominant database-time overhead over the legacy path.
+    """
     if not resource.document_id:
         return False
+    if documents is not None:
+        document = documents.get(resource.document_id)
+        return document is not None and document_is_visible(access, document)
     document = (
         await db.execute(
             select(Document).where(
@@ -792,6 +806,24 @@ async def authorize_candidates(
     rows_fetched = len(rows)
     at_scan_bound = rows_fetched > window
 
+    # One batched read for the page's documents, so local eligibility does not cost a statement per
+    # candidate. Same predicate as the per-candidate lookup: tenant, retrievable, then policy.
+    page_documents: dict[str, Document] = {}
+    page_document_ids = [row.document_id for row in rows[:window] if row.document_id]
+    if page_document_ids:
+        page_documents = {
+            document.id: document
+            for document in (
+                await db.execute(
+                    select(Document).where(
+                        Document.id.in_(page_document_ids),
+                        Document.tenant_id == access.tenant_id,
+                        *retrievable_filter(),
+                    )
+                )
+            ).scalars().all()
+        }
+
     for resource in rows[:window]:
         if checks >= budget:
             stop_reason = REASON_BUDGET
@@ -803,7 +835,7 @@ async def authorize_candidates(
             continue
         seen.add(key)
 
-        if not await _local_eligible(db, access, resource):
+        if not await _local_eligible(db, access, resource, documents=page_documents):
             decisions.append(
                 CandidateDecision(
                     connector_instance_id=resource.connector_instance_id,

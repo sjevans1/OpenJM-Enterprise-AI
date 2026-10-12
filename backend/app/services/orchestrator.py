@@ -39,7 +39,7 @@ from app.services.tools import (
 )
 from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 settings = get_settings()
 
@@ -91,6 +91,9 @@ class ExecutionPlan:
     requested_mode: ExecutionMode = "chat"
     structured_result: dict | None = None
     trace_ids: list[str] = field(default_factory=list)
+    # CA2-B: the application-generated partial-coverage notice for this execution, if the source
+    # set could not be fully checked. None means nothing needs saying.
+    coverage_notice: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -194,18 +197,69 @@ class OpenJMOrchestrator:
         scope: ReportSourceScope | None = None,
         access: DocumentAccess | None = None,
     ) -> list[Document]:
+        """The ready documents for this request. Contract UNCHANGED.
+
+        CA2-B needs the candidate set and its coverage beside the documents, so that work moved to
+        :meth:`_ready_documents_with_context` and this method keeps returning exactly what it always
+        returned. Changing THIS signature instead was a silent regression: existing callers and
+        tests unpack a list, and two of them failed in CI with "'list' object has no attribute
+        'id'" because they were handed a tuple.
+        """
+        documents, _candidate_set = await self._ready_documents_with_context(
+            db, user_id, scope=scope, access=access
+        )
+        return documents
+
+    async def _ready_documents_with_context(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        scope: ReportSourceScope | None = None,
+        access: DocumentAccess | None = None,
+    ) -> tuple[list[Document], "Any | None"]:
         # Governed, tenant-wide retrieval (resolved product decision): a native
         # public/internal source with tenant_visible is available to every active
         # member of the tenant; connector content additionally needs the current
         # connector authorization gate. See app.services.document_policy.
         if access is not None:
-            documents = await governed_tenant_documents(db, access)
+            from app.services.connectors.candidate_authorization import StrictScopeError
+            from app.services.retrieval_candidates import (
+                candidate_mode_enabled,
+                governed_candidates,
+                strict_pinned_documents,
+            )
+
+            if scope is not None and candidate_mode_enabled():
+                # CA2-B B2: an authoritative pinned scope is resolved by exact current-source
+                # authorization, never from an exploratory traversal whose window could omit a
+                # pinned source. Fail-closed behaviour is preserved (a denied, revoked,
+                # unresolved or restricted source raises) and the ordering matches the governed
+                # ordering a scoped run already produced.
+                try:
+                    documents = await strict_pinned_documents(
+                        db, access, document_ids=sorted(set(scope.document_ids))
+                    )
+                except StrictScopeError as exc:
+                    raise ReportScopeError(
+                        "Pinned Knowledge document is no longer available"
+                    ) from exc
+                return documents, None
+
+            if candidate_mode_enabled():
+                # CA2-B B3: produced once for this logical request and handed to the tool below, so
+                # the connector scope is not traversed twice for one user request.
+                candidate_set = await governed_candidates(db, access, query="")
+                documents = list(candidate_set.documents)
+            else:
+                candidate_set = None
+                documents = await governed_tenant_documents(db, access)
+
             if scope is not None:
                 pinned = set(scope.document_ids)
                 documents = [item for item in documents if item.id in pinned]
                 if {item.id for item in documents} != pinned:
                     raise ReportScopeError("Pinned Knowledge document is no longer available")
-            return documents
+            return documents, candidate_set
 
         # Legacy owner/connector path for internal callers that supply no
         # request identity (direct service/test use; never the HTTP path).
@@ -241,7 +295,7 @@ class OpenJMOrchestrator:
         documents = visible_documents(access, documents)
         if scope is not None and {item.id for item in documents} != scope.document_ids:
             raise ReportScopeError("Pinned Knowledge document is no longer available")
-        return documents
+        return documents, None
 
     async def _structured_sources(
         self,
@@ -451,7 +505,9 @@ class OpenJMOrchestrator:
         direct_answer (no vector search). Otherwise runs the governed
         knowledge.search tool.
         """
-        documents = await self._ready_documents(db, user_id, scope=scope, access=access)
+        documents, candidate_set = await self._ready_documents_with_context(
+            db, user_id, scope=scope, access=access
+        )
         lowered = message.lower().strip()
 
         if any(pattern in lowered for pattern in CATALOG_PATTERNS):
@@ -467,13 +523,37 @@ class OpenJMOrchestrator:
                 )
                 for doc in documents
             ]
+            notice = (
+                candidate_set.notice_for_user()
+                if candidate_set is not None and candidate_set.is_partial
+                else None
+            )
             if documents:
                 names = "\n".join(f"- {doc.original_name}" for doc in documents)
                 answer = f"I currently have access to these indexed documents:\n{names}"
+                if notice is not None:
+                    # A NONEMPTY partial list must not look exhaustive.
+                    answer = f"{answer}\n\n{notice['message']}"
+            elif notice is not None:
+                # CA2-B B-1: an empty list produced by incomplete searching must never be
+                # presented as a confirmed absence of documents.
+                answer = (
+                    "I could not check every source in this request, so I cannot confirm whether "
+                    f"you have indexed documents available. {notice['message']}"
+                ).strip()
             else:
                 answer = "There are currently no indexed documents available to you."
+            from app.core.context import set_coverage_notice
+
+            set_coverage_notice(notice)
             return evidence, answer, []
 
+        # CA2-B B-3 / E1: hand the candidate set this request already produced to the tool, so the
+        # connector corpus is not authorized a second time for the same logical request. For a
+        # pinned scope the handoff is deliberately withheld, because the tool must revalidate the
+        # exact scope immediately before evidence consumption, including a revocation between the
+        # preflight and the retrieval itself.
+        exploratory = scope is None
         knowledge_result = await tool_registry.execute(
             "knowledge.search",
             ToolContext(
@@ -488,9 +568,18 @@ class OpenJMOrchestrator:
                 report_scope=scope,
                 budget=budget,
                 access=access,
+                candidate_documents=documents if exploratory else None,
+                coverage_notice=(
+                    candidate_set.notice_for_user()
+                    if exploratory and candidate_set is not None
+                    else None
+                ),
             ),
             {"query": message},
         )
+        from app.core.context import set_coverage_notice
+
+        set_coverage_notice(knowledge_result.trace_metadata.get("coverage_notice"))
         return knowledge_result.evidence, None, knowledge_result.trace_ids
 
     # ------------------------------------------------------------------

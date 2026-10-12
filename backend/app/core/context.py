@@ -43,3 +43,31 @@ def current_principal() -> Principal:
             code="no_identity_context",
         )
     return principal
+
+
+# CA2-B: the application-generated partial-coverage notice for the current request.
+#
+# Request scoped, like the principal above, and deliberately NOT cached across requests: it
+# describes one execution's coverage and must never be replayed into another. Both the orchestrator
+# and the chat response layer read it, so a coverage signal produced deep in the Knowledge path
+# reaches the response without adding fields to every intermediate return type.
+_current_coverage_notice: ContextVar[dict | None] = ContextVar(
+    "current_coverage_notice", default=None
+)
+
+
+def set_coverage_notice(notice: dict | None) -> None:
+    """Publish the coverage notice for this request, overwriting any previous value.
+
+    Overwriting rather than accumulating is deliberate: a request that does not produce a notice
+    must not inherit one from an earlier request on the same task.
+    """
+    _current_coverage_notice.set(notice)
+
+
+def current_coverage_notice() -> dict | None:
+    return _current_coverage_notice.get()
+
+
+def reset_coverage_notice() -> None:
+    _current_coverage_notice.set(None)

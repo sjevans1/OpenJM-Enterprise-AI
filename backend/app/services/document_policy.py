@@ -178,7 +178,20 @@ async def governed_tenant_documents(db, access: DocumentAccess) -> list:
     current connector authorization gate AND the classification/group policy.
     Classification never widens a connector's provider-side authorization.
     Tenant isolation is preserved by the ``tenant_id`` predicate.
+
+    CA2-B prototype switch: when ``retrieval_candidate_mode`` is ``candidate``, the candidate set
+    is produced by the CA2-A contract integration in
+    :mod:`app.services.retrieval_candidates` instead. The default is ``legacy``, so this branch is
+    inert in production, and the signature, return type and legacy behaviour below are unchanged.
     """
+    from app.services.retrieval_candidates import MODE_CANDIDATE, configured_mode
+
+    if configured_mode() == MODE_CANDIDATE:
+        from app.services.retrieval_candidates import governed_candidates
+
+        candidate_set = await governed_candidates(db, access, query="")
+        return list(candidate_set.documents)
+
     from app.models import Document
     from app.services.document_lifecycle import retrievable_filter
 

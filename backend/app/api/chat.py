@@ -48,6 +48,8 @@ def _decode_evidence(raw: str | None) -> list[Evidence]:
 def _message_out(
     message: Message, artifacts: list[ChatArtifactOut] | None = None
 ) -> MessageOut:
+    from app.services.retrieval_candidates import persisted_coverage_notice
+
     return MessageOut(
         id=message.id,
         role=message.role,
@@ -56,6 +58,7 @@ def _message_out(
         requested_mode=message.requested_mode,
         evidence=_decode_evidence(message.evidence_json),
         artifacts=artifacts or [],
+        coverage_notice=persisted_coverage_notice(message.content),
         created_at=message.created_at,
     )
 
@@ -130,6 +133,14 @@ async def chat(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require(Permission.CHAT_USE)),
 ):
+    # CA2-B request-context cleanup: clear any coverage notice left by an earlier request on this
+    # task before this one runs. The notice is request-scoped state, and without an explicit reset a
+    # request that produces no notice could inherit a stale one and report partial coverage for a
+    # source set it checked completely.
+    from app.core.context import reset_coverage_notice
+
+    reset_coverage_notice()
+
     if request.conversation_id:
         conversation = await _owned_conversation(db, request.conversation_id)
         if not conversation:
@@ -270,9 +281,30 @@ async def chat(
         content = answer
     assistant_message.content = content
 
+    # CA2-B history: the qualification travels with the PERSISTED turn, and is written here because
+    # this is where the persisted text is finalised (the artifact path rewrites it just above). The
+    # response below still returns the clean `content` plus the notice separately, so a reader of the
+    # live response sees the warning exactly once; a persisted turn has no separate channel, so the
+    # fixed server-written sentence goes into the text it was given with. Without it, reopening a
+    # partial answer shows it unqualified, which is the silent omission this programme removes.
+    from app.core.context import current_coverage_notice
+    from app.services.retrieval_candidates import PERSISTED_COVERAGE_LEAD
+
+    coverage_notice = current_coverage_notice()
+    if coverage_notice and coverage_notice.get("message"):
+        assistant_message.content = (
+            f"{content}{PERSISTED_COVERAGE_LEAD}{coverage_notice['message']}"
+        )
+
     conversation.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(assistant_message)
+
+    # CA2-B E2/F5: attach this request's coverage notice to the plan before serialising it, so a
+    # partial source check is visible in the user-facing response and not only in trace metadata.
+    # Application generated, never model invented, and it survives a skipped or failed model call
+    # because it is set here rather than derived from model output.
+    plan.coverage_notice = coverage_notice
 
     return ChatResponse(
         conversation_id=conversation.id,
@@ -282,4 +314,5 @@ async def chat(
         mode=plan.requested_mode,
         evidence=plan.evidence,
         artifacts=artifacts,
+        coverage_notice=plan.coverage_notice,
     )
