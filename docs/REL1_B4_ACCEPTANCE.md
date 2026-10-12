@@ -1,10 +1,18 @@
 # REL1-B4 host-acceptance evidence
 
-This document holds two qualifications. The **original REL1-B4 record**
-artifact source `44ceb0c7` is retained below as history. The **current-main host
-qualification** (2026-10-11, source `7e859f2801bee1d6b5d52688b633709e5e9ed27d`)
-is recorded in its own section and is the operative status; the historical tables
-must not be read as current-artifact evidence.
+This document holds three qualifications. The **original REL1-B4 record**
+artifact source `44ceb0c7` is retained below as history, and the **2026-10-11 host
+qualification** (source `7e859f2801bee1d6b5d52688b633709e5e9ed27d`) is retained as
+history. The **final REL1-B4 production-host and installed-browser qualification**
+(2026-10-12, frozen release artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`)
+is the operative status; the historical tables must not be read as current-artifact
+evidence.
+
+> REL1-B4 final host/browser qualification was executed against the frozen release
+> artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`. This evidence document is
+> integrated on later `main@7a08e93982b29e628ad00d12690006679f52012c`; intervening
+> post-qualification product changes are outside the scope of that live-host run and
+> do not inherit its evidence automatically.
 
 REL1-B4 closes the REL1 offline-release train: the production application-wheel
 install (removing the offline editable-install blocker), a deterministic release
@@ -15,6 +23,222 @@ record (B4-H).
 Rows marked `PASS` were executed and the result recorded. Rows marked `NOT RUN`
 were not executed in this environment and are **not claimed**. Where a stricter
 equivalent was executed on the acceptance host it is stated under the row.
+
+## Final REL1-B4 production-host and installed-browser qualification (2026-10-12)
+
+**Operative status for the frozen REL1-B4 release artifact.** Qualification was
+executed against frozen artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c` on a
+genuinely fresh Docker Agentic Platform Cloud consumer. Documentation is integrated
+on later `main@7a08e93982b29e628ad00d12690006679f52012c`; the ~40 intervening product
+commits were **not** exercised by this live run and do not inherit its evidence.
+
+### Result
+
+| Issue #79 mandatory row | Result |
+| --- | --- |
+| Clean Linux production/PostgreSQL host | **PASS** |
+| Production-installed browser/persona journey | **PASS** |
+
+### Frozen release trust anchors
+
+| Anchor | Value |
+| --- | --- |
+| Qualified source SHA | `709ce47bf3ae1b7135446c376bcf312b25606b5c` |
+| Product / train | OpenJM Enterprise AI `0.2.0` / `REL1` |
+| Production lock sha256 | `90afebf3c719b1db838cbf77a3799477c8ac312d16817aca7fab670b34fde72b` |
+| Application wheel | `openjm_enterprise_ai_backend-0.2.0-py3-none-any.whl` |
+| Application wheel sha256 | `cc15c0863c65d143b4cc58d806fd7c5e4caeb22d251c3eca24ee37a4f0f2f5de` |
+| Trusted RELEASE-MANIFEST sha256 | `0422bcbc1c423cfedeac62600940612613523e391220ff5060e736d3f074898e` |
+| Release archive | `openjm-rel1-0.2.0.tar.gz`, 3243341682 bytes |
+| Archive sha256 | `c7a58dad97bd64bbe8b2131c207cbc66701f95121470b2d7a0c77ab10ea0ed3c` |
+| npm cache deterministic digest | `ea249931ecd51bf628e075f0c6062e0996c3ba4f405c99c99d5bbb527703fc2e` |
+| Bundle verification | `verified release payload: 918 files` |
+
+Producer/consumer separation held: the artifact was built in an independent clean
+checkout of the qualified SHA on the maintainer workstation and transferred to the
+cloud consumer, whose clean-host proof (no OpenJM checkout, archive, venv,
+node_modules, container, volume, `.env`, credential key or Keycloak) was recorded
+before transfer. In-sandbox archive sha256 matched the producer digest exactly, and
+the bundled verifier passed against the **out-of-band trusted** manifest sha.
+
+### Consumer environment
+
+| Field | Value |
+| --- | --- |
+| Sandbox | `sbx_001m4qnqpks8p3zpabep3e5f0w4` (`shell/openjm-rel1-prod`), Docker Agentic Platform Cloud |
+| OS / kernel / arch | Ubuntu 26.04.1 LTS / 6.12.103 / x86_64 |
+| Shape | 8 vCPU / 15 GiB RAM |
+| Docker / Compose | 29.8.1 / 5.5.1 |
+
+### Python 3.11.9
+
+CPython 3.11.9 at `/opt/openjm/python-3.11`; sha256
+`e7de3240a8bc2b1e1ba5c81bf943f06861ff494b69fda990ce2722a504c6153d`; GPG **GOOD
+SIGNATURE**, signer Pablo Galindo Salgado, primary fingerprint
+`A035 C8C1 9219 BA82 1ECE A86B 64E6 28F8 D684 696D`. stdlib verified: ssl, hashlib,
+sqlite3, ctypes, bz2, lzma, venv.
+
+Qualification-helper parsing defect recorded accurately: the helper's regex expected
+`key ID <hex>` whereas gpg 2.x emitted `using RSA key <hex>`, so the helper printed
+`GPG_SIGNATURE_FAILED`. It **did not fail closed** — the script's `if/else` merely
+printed a marker and continued. Explicit subsequent key import and verification
+produced the valid GOOD SIGNATURE before the interpreter was accepted. This is a
+helper defect, not a CPython authenticity failure and not an OpenJM product defect.
+
+### Production runtime identity and paths
+
+Runtime `openjm`, uid/gid `999:999`. Paths `/var/lib/openjm`, `/var/lib/openjm/uploads`,
+`/var/lib/openjm/vector`, `/var/backups/openjm` all writable by that identity, mode 755,
+not world-writable, no `777`. Credential key `/etc/openjm/credentials.key` owner
+`root:openjm` mode `640`. Production `.env` final state `openjm:openjm` mode `600`.
+
+Bounded acceptance-environment preparation, recorded as such and **not** product
+defects: the first installer invocation ran as `agent` and correctly failed reading the
+secure credential key (`PermissionError` on `/etc/openjm/credentials.key`, which is
+`root:openjm 640`); installation was rerun under the intended `openjm` runtime identity;
+`/workspace`, `/workspace/release` and the release root were minimally traversable
+(mode `711`, traverse without listing) because they were `agent:agent 750`; `.env`
+ownership changed from `agent:agent 600` to `openjm:openjm 600`; and application-tree
+ownership was prepared for the runtime identity because the canonical installer writes
+`backend/.venv` and the frontend build output there. No secret was made world-readable.
+
+### PostgreSQL 16.15
+
+Real `PostgresSQL 16.15` (image lineage `postgres:16`), loopback-bound during
+qualification; application database `openjm`, application user `openjm`;
+authentication PASS, `pg_isready` PASS; migration head
+`0021_support_content_scope`, database current `0021_support_content_scope`, therefore
+**current == head**.
+
+### Canonical installer
+
+`bash scripts/install-linux.sh --profile production`, executed from the verified
+release artifact under `openjm`: Python 3.11.9 accepted, Node 22 accepted, production
+profile selected, committed production lock used, bundled wheelhouse detected,
+hash-pinned offline dependency installation, bundled application wheel installed
+`--no-deps` and non-editable, no dev extras, production configuration preflight PASS,
+PostgreSQL migrations PASS, frontend production build PASS, REL1-A verifier
+`REL1-A VERIFY OK: version=0.2.0 profile=production frontend=present`, `Install complete`.
+
+Installed application resolves from
+`backend/.venv/lib/python3.11/site-packages/app/...` with no editable application
+install; `pip check` PASS; representative dev extras (`pytest`, `pytest-asyncio`,
+`pgserver`) absent.
+
+### Production runtime
+
+The installed backend ran as `openjm` via
+`backend/.venv/bin/python -m uvicorn app.main:app` with no `PYTHONPATH`; the application
+process itself ran as `openjm` (a root PID observed during inspection was only the
+`sudo` wrapper). `GET /api/health` → 200, `GET /api/ready` → 200 `ready:true`,
+`GET /api/version` → 200 (product OpenJM Enterprise AI, version 0.2.0, profile
+production).
+
+### Keycloak / OIDC
+
+Keycloak 26.7.4 (JVM 21.0.12.1), realm `openjm`, discovery 200, issuer
+`http://127.0.0.1:18090/realms/openjm`. Client `openjm` final contract: `publicClient=false`,
+`standardFlowEnabled=true`, `directAccessGrantsEnabled=false`, PKCE S256, tenant mapper,
+OpenJM audience mapper.
+
+Qualification-environment troubleshooting, recorded honestly: the declarative user
+profile initially stripped the unmanaged `tenant` attribute, so fixture policy was
+corrected until the synthetic persona tenant attributes were retained; the live personas
+then lacked the profile-required `email`/`firstName`/`lastName` fields, which caused
+Keycloak to trigger automatic `VERIFY_PROFILE`; the synthetic personas were populated
+rather than weakening the realm's profile requirement. Temporary Direct Access Grants
+enablement occurred during troubleshooting — an **acceptance-harness mistake** — and was
+reversed before acceptance; the final accepted client has
+`directAccessGrantsEnabled=false`. Password grant is **not** part of the accepted
+authentication contract.
+
+### B5 persona authority (resolved live principals)
+
+| Persona | Tenant | Role | Authority detail |
+| --- | --- | --- | --- |
+| qa.employee | Acme / `acme` | viewer | All Employees membership; no `tenant:admin`, no steward scope, no platform capability |
+| qa.steward | Acme | editor | Groups All Employees + HR Leadership; steward scope department/HR; no tenant admin, no platform capability |
+| qa.clientadmin | Acme | owner | resolved permission `tenant:admin`; platform capabilities none |
+| qa.platform | OpenJM Platform Operations / `openjm-platform` | owner | exactly `platform:metadata:read`, `platform:operators:admin`, `platform:tenants:admin`; `platform:content:support` **absent**; no Acme membership |
+| qa.other | Globex / `globex` | owner | no Acme membership, no platform capability |
+
+Organizational fixtures: departments General, HR, Finance; groups All Employees,
+HR Leadership, Finance Leadership. Seeding was idempotent and used the installed
+application's own ORM/service semantics, no raw SQL.
+
+All five personas completed Keycloak authorization endpoint → PKCE S256 → fresh
+one-time authorization code → `/api/auth/oidc/callback` → OpenJM-native session →
+`/api/auth/me`. No dev auth, no forged headers, no fabricated tokens, no password grant.
+
+### Frontend served through the accepted Caddy boundary
+
+Installer-built frontend `/workspace/release/openjm-rel1-0.2.0/app/frontend/dist` (not
+rebuilt for QA), served by `caddy:2.11.4-alpine` at `127.0.0.1:15173`. `/` → 200,
+`/chat` → 200, proxied `/api/health` → 200. The served production bundle
+`assets/index-B7FImGXs.js` matched the canonical installer output.
+
+Caddy initially returned 502 because a container cannot reach a host process bound only
+to host loopback; the **same** installed backend was rebound to `0.0.0.0:18010` inside
+the isolated sandbox so Caddy could reach it through `host.docker.internal:18010`. No
+host or cloud port was published. This is an acceptance-topology adjustment, not a
+product change.
+
+### Real browser
+
+Chrome Headless Shell 153.0.8010.12 (Playwright artifact `chromium-headless-shell-1243`),
+driven against the installer-produced production SPA.
+
+| Persona | Result |
+| --- | --- |
+| Employee | **PASS** — Chat visible, Reports visible, Administration absent, platform plane absent; `/api/admin/members` 403, `/api/platform/tenants` 403; no unexpected console/network failures |
+| Steward | **PASS** — HR stewardship resolved, no tenant administration, no platform plane; tenant-admin probe 403, platform probe 403; clean browser health |
+| Client admin | **PASS** — Administration visible, `/api/admin/members` 200, platform plane absent; bounded mutation performed (below) |
+| Platform operator | **PASS** — genuine OIDC session, platform identity resolves, Control Center visible, Platform navigation visible, `/api/platform/tenants` 200, zero fatal console errors, no unexpected 401 |
+| Second tenant | **PASS** — Globex identity, explicit Acme-scoped denial (below) |
+
+Client-admin bounded mutation: `rel1-browser-probe` creation returned 200 and the group
+became visible. Hard DELETE is **not** an exposed or supported route — the app's OpenAPI
+schema offers groups `get`/`post` plus `/{group_id}/status` and `/{group_id}/members`; the
+initial DELETE attempts returned 404. Cleanup therefore used the supported
+`PATCH /api/admin/groups/{id}/status`, which set the group to `archived`; it was then
+verified that **no ACTIVE `rel1-browser-probe` remained**. The group was archived, not
+hard-deleted, and there is no active fixture drift.
+
+Platform operator — earlier browser failure, recorded accurately: the first harness
+stored/injected the session incorrectly, using the wrong field name for
+`platformCapabilities` and incorrect injection timing. Because the frontend
+`authorizedFetch()` clears the session on any 401, the bad harness produced cascading
+eight 401s and an apparently unauthenticated SPA. Diagnosis was explicit rather than
+summarised. The corrected harness used the current `StoredSession` contract (`token`,
+`expiresAt`, `principalId`, `tenantId`, `role`, `permissions`, `platformCapabilities`)
+and injected it with Playwright `add_init_script` before application bootstrap. The
+final traced run recorded `FIRST_401: None`, `/api/auth/config` 200, `/api/auth/me` 200
+with Authorization attached, Control Center + Platform navigation visible, and 0 console
+errors. Classification: **qualification-harness defect, not a product defect.**
+
+Explicit Acme-scoped platform negative (replacing the earlier under-targeted
+`/api/admin/members` probe, which resolved against the caller's own tenant): with a
+genuine platform session and explicit `X-OpenJM-Tenant: <ACME_TENANT_ID>`, both
+`GET /api/auth/me` and `GET /api/knowledge/documents` returned **403** ("Principal has no
+active membership for the requested tenant"). No Acme membership, no support delegation,
+`platform:content:support` absent. The platform operator therefore receives **no implicit
+Acme customer-content authority**.
+
+Explicit Acme-scoped second-tenant negative (the authoritative tenant-isolation check):
+with a genuine `qa.other`/Globex session and explicit Acme tenant scope, `/api/auth/me`,
+`/api/knowledge/documents` and `/api/admin/members` all returned **403**.
+
+### Browser health — PASS
+
+Across the accepted runs: 0 fatal console errors, 0 uncaught page errors, 0 broken
+production assets, 0 OIDC callback failures, no redirect loops, 0 unexpected 5xx, and no
+unexpected authentication loss. Intentional authorization 401/403/404 probes are recorded
+separately and are not browser-health failures.
+
+### Model policy
+
+No model substitution, no public provider, no inference required. Rahkia remains
+**DEFERRED** and was neither integrated nor qualification-tested.
 
 ## Environment of record
 
@@ -49,8 +273,8 @@ and merged). Rows below are the current status; the earlier tables are history.
 
 | Env | Requirement | Present | Classification |
 | --- | --- | --- | --- |
-| A | native/separate clean Linux host, development | no | **NOT RUN** |
-| B | native/separate clean Linux host, production (PostgreSQL, production paths) | no | **NOT RUN** |
+| A | native/separate clean Linux host, development | no | **NOT RUN** (superseded for production by the 2026-10-12 final qualification; see below) |
+| B | native/separate clean Linux host, production (PostgreSQL, production paths) | no | **NOT RUN** (superseded: **PASS** in the 2026-10-12 final qualification; see below) |
 | C | Windows host with WSL2 | yes | executed (see below) |
 
 Why A/B are NOT RUN, exactly:
@@ -103,7 +327,7 @@ environment; the bundle must be built with the pinned resolver toolchain.
 | # | Item | Status | Evidence |
 | --- | --- | --- | --- |
 | 1 | Clean Linux **development** install | **PASS** (2026-10-12) | Executed for real on a fresh Docker Agentic Platform CLOUD sandbox `openjm-rel1-dev` (`sbx_001m4qacck9mzv3jptmrzqm00mz`, medium 4 vCPU / 8 GiB, Ubuntu 26.04.1 LTS, kernel 6.12.103, x86_64). Clean-host proof: no OpenJM checkout, no `.venv`, no `node_modules`, no OpenJM database, bare interpreter (pip list = 6). Independent GitHub clone at `2456f92a74d091ed425e24256f9910152671b4ca`. Operator prerequisites provisioned first: Python 3.11.9 built from the GPG-verified python.org source (digest `e7de3240...`, independently re-verified against an unrelated mirror, prefix `/opt/openjm/python-3.11`) and the distribution's own Node v22.22.1. `scripts/install-linux.sh --profile development` then ran unmodified and exited **0** (`REL1-A VERIFY OK: version=0.2.0 profile=development frontend=present`), migration current == head `0021_support_content_scope`, frontend built, backend started from the new venv on port 18077, `/api/health` 200, `/api/ready` 200 `ready:true`. See the evidence table below. |
-| 2 | Clean Linux **production** install (PostgreSQL + production paths) | **NOT RUN** | no clean Linux host, no root, no PostgreSQL (inventory B) |
+| 2 | Clean Linux **production** install (PostgreSQL + production paths) | **NOT RUN** (superseded: **PASS** on the frozen REL1-B4 artifact, 2026-10-12; see the final qualification section) | no clean Linux host, no root, no PostgreSQL (inventory B) at the time |
 | 3 | Offline committed-lock install of the **current** artifact | **PASS** (subset) | user-space venv: `pip install --no-index --find-links python/wheelhouse --require-hashes -r python/requirements.lock` then `pip install --no-deps python/app/*.whl`; `app` imported from `site-packages`, `pip show` 0.2.0, dev extras present 0. Not a clean-host row. |
 | 4 | Trusted-digest verification | **PASS** | `release-integrity.py verify <bundle> --expected-manifest-sha256 fb97c0bf...` -> `verified release payload: 916 files` |
 | 5 | Tamper-negative (bounded, practical) | **PASS** | on a disposable hardlink copy, mutating one payload (`app/README.md`) was refused (`ERROR: size mismatch`); the canonical bundle re-verified clean at 916 files |
@@ -113,7 +337,7 @@ environment; the bundle must be built with the pinned resolver toolchain.
 | 9 | Migration to head | **PASS** (CI, current SHA) | full backend suite green on `7e859f28` (run 38186244075); host-level migration NOT RUN |
 | 10 | `/api/ready` / `/api/health` | **PASS** (CI/prior host) | prior accepted host evidence plus CI; not re-run on a clean host |
 | 11 | Frontend production build | **PASS** | CI Frontend / Node 22 green on `7e859f28` (run 38186244075) |
-| 12 | Browser / persona journey on a production install | **NOT RUN** | no clean production host to serve it |
+| 12 | Browser / persona journey on a production install | **NOT RUN** (superseded: **PASS** on the frozen REL1-B4 artifact, 2026-10-12; see the final qualification section) | no clean production host to serve it at the time |
 
 ### Windows + WSL2 supported path (row 7 detail)
 

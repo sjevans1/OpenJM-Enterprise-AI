@@ -110,7 +110,7 @@ Security automated capability: **6/6 PASS**.
 | Metering / entitlements (M1/M2/M3) | accepted | **PASS** |
 | Admission / capacity (INF1-A/B/C) | registry/admission/capacity telemetry accepted | **PASS** |
 | Backup / recovery (E1/E2/E3 + VS8) | accepted automated recovery evidence | **PASS** |
-| Installer / productization (REL1) | implementation and package capability accepted: reproducible install, committed hash-pinned locks with a drift gate, production wheelhouse, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged application wheel, CI release gates, and the prior PostgreSQL production-profile qualification (2026-10-10) | **PASS** for implementation/package capability; **NOT RUN / OPEN** for final clean-host qualification under Issue #79 (clean Linux development host; clean Linux production host with PostgreSQL and production-safe paths; supported Windows/WSL2 runtime; browser/persona journey on the production-installed artifact). See `docs/REL1_B4_ACCEPTANCE.md`. |
+| Installer / productization (REL1) | implementation and package capability accepted: reproducible install, committed hash-pinned locks with a drift gate, production wheelhouse, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged application wheel, CI release gates, and the prior PostgreSQL production-profile qualification (2026-10-10) | **PASS** for implementation/package capability, and **PASS** for the REL1-B4 required production-host/browser qualification on the frozen REL1 artifact `709ce47b` (clean Linux production host with PostgreSQL and production-safe paths; production-installed browser/persona journey). Evidence: the final REL1-B4 qualification section in `docs/REL1_B4_ACCEPTANCE.md`. Integrated on `main@7a08e939`; post-qualification product changes do not inherit that live-run evidence. |
 | Rahkia qualification | intentionally not integrated during current product build | **DEFERRED** |
 
 ## Remaining completion gates
@@ -128,8 +128,9 @@ and final integrated qualification, not another broad business-feature wave.
 2. **REL1-B4 final host/runtime qualification: partly PASS, partly OPEN under
    Issue #79.** **PASS**: the clean Linux **development** host (Docker Agentic
    Platform Cloud sandbox) and the supported **Windows/WSL2** runtime install.
-   **NOT RUN / OPEN**: the clean Linux **production** host with PostgreSQL and
-   production-safe paths, and the final **browser/persona journey on the
+   **PASS** (2026-10-12, frozen artifact `709ce47b`): the clean Linux **production**
+   host with PostgreSQL and production-safe paths, and the **browser/persona journey on
+   the
    production-installed artifact**. Issue #79 makes the outstanding rows part of
    the release acceptance contract, so they are NOT optional compatibility
    coverage, and they must not be upgraded from CI, prior WSL evidence, the prior
@@ -166,8 +167,8 @@ date; do not read an older row as current-artifact host evidence.
 | Live authoritative-candidate / vector-RAG journey (BV6-B) | DB-GPT knowledge engine + Chroma, `glm-5.3-flash` | **PASS** | QA3 (2026-10-11) 50 PASS: ordinary retrieval, curation lifecycle, two-person rule, additive candidate, non-authoritative negatives, relevance gate, revocation/regrant, unauthorized and cross-tenant negatives, authorization-before-context, withdrawal. See `docs/qa/QA3_ACCEPTANCE.md` |
 | Clean Linux development host install | Docker Agentic Platform Cloud sandbox `openjm-rel1-dev` (medium 4 vCPU / 8 GiB, Ubuntu 26.04.1, kernel 6.12.103, x86_64) | **PASS** (2026-10-12) | Fresh clean sandbox, independent GitHub clone at `2456f92a`, Python 3.11.9 operator-provisioned (GPG-verified python.org source, digest re-verified independently), Node 22.22.1, canonical `install-linux.sh --profile development` exit 0, REL1-A verifier OK, migration current == head `0021_support_content_scope`, frontend built, backend started from the new venv, `/api/health` 200, `/api/ready` 200 `ready:true`. See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Real Windows/WSL2 runtime install | Windows 11 Pro build 26200, WSL 2.6.3.0, fresh `openjm-rel1b4` distro (Ubuntu 24.04.5, root) | **PASS** (2026-10-12) | Real supported chain from Windows PowerShell through the hardened `install-wsl2.ps1` to `install-linux.sh --profile development` at `c3937c88`: bootstrap exit 0, REL1-A verifier OK, migration current == head `0021_support_content_scope`, frontend built, backend started from the new venv, `/api/health` 200, `/api/ready` 200 `ready:true`. See `docs/REL1_B4_ACCEPTANCE.md`. |
-| Clean Linux **production** host install (PostgreSQL, production-owned paths) | none | **NOT RUN** | No clean Linux production host has been qualification-executed. The dated `Full PostgreSQL production-profile install/migrate/ready` row above is controlled-environment capability evidence, not a clean-host row, and does not satisfy this one. See `docs/REL1_B4_ACCEPTANCE.md`. |
-| **Production-installed** browser/persona journey | none | **NOT RUN** | The dated persona-journey row above is the QA-environment journey; the journey against a production-installed build has not been executed. See `docs/REL1_B4_ACCEPTANCE.md`. |
+| Clean Linux **production** host install (PostgreSQL, production-owned paths) | fresh Docker Agentic Platform Cloud consumer, frozen artifact `709ce47b` | **PASS** | Real PostgreSQL 16.15, canonical `install-linux.sh --profile production` from the verified artifact, migration current == head `0021_support_content_scope`, non-root runtime. See the final REL1-B4 qualification section in `docs/REL1_B4_ACCEPTANCE.md`. |
+| **Production-installed** browser/persona journey | same installed artifact + real Keycloak 26.7.4 + real Chromium 153 | **PASS** | Real authorization-code + PKCE S256 for all five personas; employee/steward/client-admin/platform/second-tenant browser journeys, explicit Acme-scoped platform and second-tenant denials. See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Rahkia production cutover | n/a | **DEFERRED** | deliberate product decision |
 
 The PostgreSQL production profile, the frontend production build, the live OIDC
@@ -197,4 +198,4 @@ committed-lock install of the current artifact PASS (bundled wheelhouse with
 `--no-index --require-hashes`, application wheel with `--no-deps`, no dev extras).
 The clean Linux development host and the Windows/WSL2 runtime install are **PASS**
 (see `docs/REL1_B4_ACCEPTANCE.md`). The clean Linux production/PostgreSQL host and the
-on-host browser/persona journey remain **NOT RUN** and OPEN under Issue #79.
+on-host browser/persona journey are **PASS** for the frozen REL1 artifact `709ce47b` under Issue #79.
