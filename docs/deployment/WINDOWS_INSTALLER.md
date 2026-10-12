@@ -71,3 +71,110 @@ directly on Windows. They predate the WSL2 path and are not a supported
 production configuration: the supported Windows production deployment runs the
 backend inside WSL2 via `install-wsl2.ps1`. No production TLS boundary, systemd
 unit or container topology is provided for a Windows-native backend.
+
+
+## REL1-B4H hardening contract (2026-10-12)
+
+`scripts/install-wsl2.ps1` remains a thin delegator to
+`scripts/install-linux.sh`. REL1-B4H hardens its failure reporting and removes an
+invalid provisioning assumption.
+
+### Repository path resolution
+
+Order, deterministic and diagnostic:
+
+1. an explicit `-RepoPath` always wins, and a non-existent path fails with
+   `Repository path does not exist: <path>`;
+2. otherwise the repository is derived from the script location using invocation
+   metadata (`$PSCommandPath`, then `$MyInvocation.MyCommand.Path`, then
+   `$MyInvocation.MyCommand.Definition`);
+3. the current working directory is never used as a fallback;
+4. if the script location cannot be resolved, the bootstrap fails with
+   `Cannot resolve the script location to locate the repository ... Re-run with -RepoPath <path>`.
+
+Two PowerShell details this relies on:
+
+- `Resolve-Path ... .ProviderPath` is used rather than `.Path`, which returns a
+  PowerShell provider prefix for a provider-qualified location. This does **not**
+  make a UNC location usable: see the supported contract below;
+- the resolution happens in the script body, never in a `param()` default, because
+  an empty `$PSScriptRoot` in a parameter default throws during parameter binding
+  before any diagnostic can be printed.
+
+### Supported repository source path
+
+The supported repository source is a **Windows drive-letter filesystem path**,
+for example `C:\rel1b4\OpenJM-Enterprise-AI`. It is the only shape this
+bootstrap maps into WSL, and it maps as `/mnt/<drive>/...`.
+
+- an explicit `-RepoPath` always wins;
+- script-location auto-resolution works when the script lives on a supported
+  Windows drive path;
+- a UNC or provider path (for example
+  `\\wsl.localhost\<distro>\home\...\OpenJM-Enterprise-AI`) is **not**
+  supported and fails closed:
+  `Unsupported repository path '<path>': this bootstrap maps a Windows
+  drive-letter path into WSL as /mnt/<drive>/... . ... Re-run with -RepoPath
+  C:\path\to\OpenJM-Enterprise-AI.`
+
+A location inside another WSL distribution is never assumed to exist in the
+target distribution, and the bootstrap never falls back to the current working
+directory. The same guard applies to an explicit UNC `-RepoPath`.
+
+### Privilege detection
+
+The bootstrap inspects the WSL runtime before installing anything and reports one
+of three states: `root (uid 0)`, `non-root with sudo (uid N)`, or
+`non-root without sudo (uid N)`.
+
+- **root:** base packages are installed with `apt-get` directly, never through `sudo`;
+- **non-root with usable sudo:** `sudo` must be usable *without interaction*.
+  The probe is `command -v sudo ... && sudo -n true ...`, so an account that has a
+  sudo binary but still requires a password is classified as having no usable
+  sudo, not as sudo-capable. Base packages then use `sudo -n`; the script never
+  prompts for or automates a password;
+- **non-root without usable sudo:** the bootstrap fails immediately with
+  `Required prerequisites are missing and this user cannot elevate privileges ...
+  Provision Python 3.11 / required packages or use a sudo-capable account.`
+
+### Python 3.11 is an operator prerequisite
+
+The bootstrap does not install Python. Stock Ubuntu 24.04 (Noble) ships Python
+3.12, so `apt-get install python3.11` is not a valid path there, and installing a
+pinned 3.11 from an unverified third-party source would widen the release supply
+chain. When Python 3.11 is absent the bootstrap fails early with the exact
+remedy, naming the runtime and its privilege state:
+
+```
+Python 3.11 absent in '<distro>' (root (uid 0)). Install a supported Python 3.11
+runtime inside '<distro>', then re-run this script. Stock Ubuntu 24.04 provides
+Python 3.12, so this bootstrap deliberately does not install Python 3.11 from an
+unpinned source.
+```
+
+Python 3.11 remains mandatory (`aiohttp==3.8.4` does not build on 3.12).
+
+### Node.js 22
+
+Required when the frontend is included, and never auto-installed. Absent Node
+fails with `Node.js 22 is required for the frontend build ... or re-run with
+-SkipFrontend`; a wrong major version names the version found. `-SkipFrontend`
+removes the requirement entirely.
+
+### Reported failure categories
+
+repository path unresolved; distribution absent; Python 3.11 absent; Node.js 22
+absent or wrong major; privilege escalation unavailable; canonical installer
+failed (with the installer's exit code). Each exits non-zero. The previous
+behaviour, where a root-only runtime produced `sudo: command not found` and then
+a misleading downstream `Python 3.11 is required`, is gone.
+
+### Bounded behavioural harness
+
+`scripts/tests/wsl2_bootstrap_harness.ps1` drives the bootstrap through these
+cases with a stub `wsl` shim and never creates or removes a real distribution.
+Run it from Windows PowerShell:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tests\wsl2_bootstrap_harness.ps1
+```
