@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -78,6 +78,40 @@ async def list_documents(
     # also passes the connector gate inside governed_tenant_documents.
     documents = await governed_tenant_documents(db, access_from_principal(principal))
     return [_document_out(document) for document in documents]
+
+
+class DocumentCatalogPageOut(BaseModel):
+    """Additive catalog surface. ``GET /documents`` is unchanged and still returns a list."""
+
+    items: list[DocumentOut]
+    mode: str
+    coverage: str | None
+    partial: bool
+    notice: dict[str, Any] | None
+
+
+@router.get("/documents/page", response_model=DocumentCatalogPageOut)
+async def list_documents_page(
+    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(require(Permission.KNOWLEDGE_READ)),
+):
+    """CA2-B prototype: the catalog with truthful coverage, on an additive surface.
+
+    ``GET /documents`` is deliberately untouched so existing clients keep their exact contract,
+    including its ``list[DocumentOut]`` response model. This surface exists because coverage
+    cannot be expressed inside a bare list: a caller that wants to know whether the catalog was
+    fully checked has nowhere to read that today.
+    """
+    from app.services.retrieval_candidates import governed_candidates
+
+    candidate_set = await governed_candidates(db, access_from_principal(principal), query="")
+    return DocumentCatalogPageOut(
+        items=[_document_out(document) for document in candidate_set.documents],
+        mode=candidate_set.mode,
+        coverage=candidate_set.coverage.value if candidate_set.coverage is not None else None,
+        partial=candidate_set.is_partial,
+        notice=candidate_set.notice_for_user(),
+    )
 
 
 class DocumentPolicyUpdate(BaseModel):

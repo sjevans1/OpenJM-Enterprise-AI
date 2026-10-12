@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     rag_neighbor_primary_limit: int = 2
     rag_neighbor_max_chunks: int = 2
 
+    # CA2-B prototype switch. ``legacy`` is the default and is the production behaviour: the
+    # governed candidate set is produced by the corpus-wide connector authorization gate exactly
+    # as before. ``candidate`` enables the CA2-A contract integration behind
+    # app/services/retrieval_candidates.py. This is an experimental surface, not a production
+    # default, and it must not be enabled without the CA2-B performance and correctness gates.
+    retrieval_candidate_mode: str = "legacy"
+
     credential_encryption_key: str = ""
     credential_key_file: Path = REPO_ROOT / "data" / "credentials.key"
     structured_max_rows: int = 200

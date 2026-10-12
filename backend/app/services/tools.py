@@ -268,6 +268,10 @@ class KnowledgeSearchTool:
         if context.budget is not None:
             context.budget.count_knowledge()
 
+        # CA2-B: an application-generated partial-coverage notice, present only in the candidate
+        # mode when coverage is genuinely partial. The legacy path leaves it None.
+        coverage_notice: dict[str, Any] | None = None
+
         # Connector-owned documents enter this selection only through the
         # current authorization gate, which revalidates the mapped user's
         # provider permissions and yields nothing when it cannot prove access.
@@ -279,9 +283,13 @@ class KnowledgeSearchTool:
         if context.access is not None:
             # Governed, tenant-wide selection (resolved product decision) with
             # the connector gate intersected inside governed_tenant_documents.
-            documents = list(
-                await governed_tenant_documents(context.db, context.access)
+            from app.services.connectors.candidate_authorization import StrictScopeError
+            from app.services.retrieval_candidates import (
+                candidate_mode_enabled,
+                governed_candidates,
+                strict_pinned_documents,
             )
+
             if context.report_scope is not None:
                 try:
                     pinned = set(context.report_scope.require_documents())
@@ -289,11 +297,43 @@ class KnowledgeSearchTool:
                     raise ToolPermissionError(
                         "Report does not permit Knowledge retrieval"
                     ) from exc
-                documents = [doc for doc in documents if doc.id in pinned]
-                if {doc.id for doc in documents} != pinned:
-                    raise ToolPermissionError(
-                        "Pinned Knowledge document is no longer authorized"
-                    )
+                if candidate_mode_enabled():
+                    # Authoritative: revalidate the exact pinned scope at consumption time
+                    # instead of trusting a corpus-window candidate set. The result is never
+                    # assembled from authorizations collected on earlier pages, and a source that
+                    # is denied, revoked, unresolved or restricted raises rather than vanishing.
+                    try:
+                        documents = await strict_pinned_documents(
+                            context.db, context.access, document_ids=sorted(pinned)
+                        )
+                    except StrictScopeError as exc:
+                        raise ToolPermissionError(
+                            "Pinned Knowledge document is no longer authorized"
+                        ) from exc
+                else:
+                    documents = [
+                        document
+                        for document in await governed_tenant_documents(
+                            context.db, context.access
+                        )
+                        if document.id in pinned
+                    ]
+                    if {doc.id for doc in documents} != pinned:
+                        raise ToolPermissionError(
+                            "Pinned Knowledge document is no longer authorized"
+                        )
+            elif candidate_mode_enabled():
+                # Exploratory: a bounded candidate set that reports partial coverage truthfully
+                # instead of dropping authorized documents silently.
+                candidate_set = await governed_candidates(
+                    context.db, context.access, query=query
+                )
+                documents = list(candidate_set.documents)
+                coverage_notice = candidate_set.notice_for_user()
+            else:
+                documents = list(
+                    await governed_tenant_documents(context.db, context.access)
+                )
         else:
             ownership = Document.user_id == context.user_id
             connector_document_ids = await authorized_connector_document_ids_for_context(
@@ -456,6 +496,11 @@ class KnowledgeSearchTool:
             # flag-off (and flag-on-but-none-eligible) trace is unchanged.
             output["report_candidate_count"] = len(candidate_records)
             trace_metadata["report_candidates"] = candidate_records
+        if coverage_notice is not None:
+            # Same additive pattern: present only when coverage is genuinely partial, so the
+            # legacy trace is byte-identical. Application-generated, and it carries no counts,
+            # identifiers, titles or provider detail.
+            trace_metadata["coverage_notice"] = coverage_notice
 
         return ToolResult(
             evidence=normalized,
