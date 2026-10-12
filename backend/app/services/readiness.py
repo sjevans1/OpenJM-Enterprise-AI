@@ -166,18 +166,54 @@ async def notification_component(db: AsyncSession) -> dict:
     return {"status": STATUS_OK, "pending": int(pending or 0)}
 
 
+async def _guarded(label: str, probe, db: AsyncSession | None = None) -> dict:
+    """Run one readiness probe without letting its failure abort the report.
+
+    A dependency outage can leave the shared ``AsyncSession`` in a poisoned
+    state: once a statement raises, every later statement raises
+    ``PendingRollbackError`` until the transaction is rolled back. Probes are
+    therefore expected to report failure rather than raise, and any probe that
+    does raise is contained here so the remaining components are still reported.
+    The session is reset after a DB-dependent failure so a later probe is not
+    poisoned by an earlier one.
+
+    Only the exception *class name* is surfaced, so no connection string,
+    credential or traceback can reach the response.
+    """
+
+    try:
+        return await probe()
+    except Exception as exc:  # noqa: BLE001 - reported, never raised
+        if db is not None:
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001 - recovery is best effort
+                pass
+        return {"status": STATUS_ERROR, "detail": type(exc).__name__}
+
+
 async def readiness_components(db: AsyncSession) -> dict[str, dict]:
-    """Build the full per-component readiness report (safe fields only)."""
+    """Build the full per-component readiness report (safe fields only).
+
+    The report is always complete: failure of any individual component is
+    reported as that component's state and never aborts the whole report.
+    """
     return {
-        "database": await database_component(db),
-        "migrations": await migration_component(db),
-        "storage": storage_component(),
-        "knowledge": knowledge_component(),
-        "model_provider": await model_provider_component(),
-        "scheduler": await scheduler_component(db),
-        "connectors": await connector_component(db),
-        "notifications": await notification_component(db),
+        "database": await _guarded("database", lambda: database_component(db), db),
+        "migrations": await _guarded("migrations", lambda: migration_component(db), db),
+        "storage": await _guarded("storage", lambda: _as_awaitable(storage_component())),
+        "knowledge": await _guarded("knowledge", lambda: _as_awaitable(knowledge_component())),
+        "model_provider": await _guarded("model_provider", model_provider_component),
+        "scheduler": await _guarded("scheduler", lambda: scheduler_component(db), db),
+        "connectors": await _guarded("connectors", lambda: connector_component(db), db),
+        "notifications": await _guarded("notifications", lambda: notification_component(db), db),
     }
+
+
+async def _as_awaitable(value):
+    """Adapt a synchronous component result to the async probe interface."""
+
+    return value
 
 
 def overall_ready(components: dict[str, dict]) -> bool:
