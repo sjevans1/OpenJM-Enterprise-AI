@@ -4,7 +4,7 @@ Living acceptance matrix for the Hardening & Business Value Realization phase
 (Issue #45). It maps the global phase-acceptance statements to current
 implementation evidence and the remaining manual/runtime qualification.
 
-- **Observed at `ecb7b69969a189a80aece6302836a4cd8d723a4f`** on **2026-10-11** (current integrated `main`; QA1, QA2 and QA3 accepted and merged).
+- **Observed at `7e859f2801bee1d6b5d52688b633709e5e9ed27d`** on **2026-10-11** (current integrated `main`; QA1, QA2, QA3 and OPS1 accepted and merged).
 - **Live qualification product heads:** `4479d82ba773affab926d81bffbc1a9d272fdbef` for QA3 (authoritative/vector-RAG qualification, see `docs/qa/QA3_ACCEPTANCE.md`) and `ecb7b69969a189a80aece6302836a4cd8d723a4f` for OPS1 (OpenJM Operations Control Center, see `docs/qa/OPS1_ACCEPTANCE.md`).
 - Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3, REL1-A and
   REL1-B1..B4, on the accepted VS1-VS8 foundation.
@@ -152,8 +152,8 @@ and final integrated qualification, not another broad business-feature wave.
 | Final browser/persona journey (end user, data steward, client admin, OpenJM operator) | live QA env: PostgreSQL production profile, Keycloak 26.7.4 OIDC, seeded personas | **PASS** | QA2 (2026-10-11) live Chrome journeys for all four personas through real OIDC authorization-code + PKCE |
 | Live delegated-support / OIDC walkthrough | live Keycloak 26.7.4 + PostgreSQL 16 | **PASS** | QA2 delegated-support grant, consumption, ceiling, audit, revocation and expiry exercised live; residual delegation revoked at handoff |
 | Live authoritative-candidate / vector-RAG journey (BV6-B) | DB-GPT knowledge engine + Chroma, `glm-5.3-flash` | **PASS** | QA3 (2026-10-11) 50 PASS: ordinary retrieval, curation lifecycle, two-person rule, additive candidate, non-authoritative negatives, relevance gate, revocation/regrant, unauthorized and cross-tenant negatives, authorization-before-context, withdrawal. See `docs/qa/QA3_ACCEPTANCE.md` |
-| Clean Linux development host install | none | **NOT RUN** | no separate clean host; compatibility coverage, not an Issue #45 deployment gate |
-| Real Windows/WSL2 runtime install | none | **DEFERRED** | no real Windows host; non-blocking compatibility qualification, machine-testable contract PASS only. Full Windows support is not claimed |
+| Clean Linux development host install | none | **NOT RUN** | no separate clean Linux host is attached and no virtualization tooling is installed; `sudo` needs a password and paid cloud is not authorised. See `docs/REL1_B4_ACCEPTANCE.md` (inventory A). |
+| Real Windows/WSL2 runtime install | Windows 11 Pro build 26200, WSL 2.6.3.0, fresh `openjm-rel1b4` distro | **NOT RUN** | the supported path was executed from Windows PowerShell (detection PASS, Windows to WSL mapping PASS, canonical-installer delegation PASS, correct fail-fast), but the clean runtime had no Python 3.11 and no `sudo`, so the install did not complete. Partial-path evidence only; not a PASS. See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Rahkia production cutover | n/a | **DEFERRED** | deliberate product decision |
 
 The PostgreSQL production profile, the frontend production build, the live OIDC
@@ -168,3 +168,15 @@ productization package lands. Link exact-head acceptance evidence. Do not turn a
 manual/live gate into PASS merely because automated CI is green. The companion
 `backend/tests/test_acceptance_matrix.py` protects the document's required
 persona and feature-area structure.
+
+## REL1-B4 host qualification (current artifact)
+
+The current-main REL1-B4 host qualification is recorded in `docs/REL1_B4_ACCEPTANCE.md`.
+Re-verified on the current release artifact built from
+`7e859f2801bee1d6b5d52688b633709e5e9ed27d`: trusted-digest verification PASS
+(`fb97c0bf...`, 916 files), bounded tamper-negative PASS, and offline
+committed-lock install of the current artifact PASS (bundled wheelhouse with
+`--no-index --require-hashes`, application wheel with `--no-deps`, no dev extras).
+The clean Linux development and production host rows, the Windows/WSL2 runtime
+install and the on-host browser/persona journey remain **NOT RUN** for want of a
+clean Linux host and a fully provisioned clean WSL2 runtime.
