@@ -1,143 +1,226 @@
 # CA2 — Bounded, query-relevant connector retrieval with no silent omission
 
-Plan revision: `ca2-retrieval-1`
+Plan revision: `ca2-retrieval-2` (supersedes `ca2-retrieval-1`)
 Repository: **sjevans1/OpenJM-Enterprise-AI only**
 Base: `main` at `8d6b7d8`
-Status: **planning only. No implementation is proposed for authorization by this document.**
 Depends on: CA1 (accepted, merged `a4e1e4f`)
-Authorization for planning: owner directive, 2026-10-11.
+Status: **planning. No implementation is authorized by this document.**
+Binding records: the owner integration hold on PR #94, and the D1-D5 architecture decisions
+recorded on PR #94.
 
-## Objective
+## 0. Integration hold (binding)
 
-Remove the possibility that an authorized connector resource is silently omitted from
-retrieval because it falls outside an arbitrary candidate window, while keeping
-authorization fail-closed and bounded.
+**Nothing in this stream merges to `main`.** Planning PR #94, every implementation PR, and any
+market-research-derived product change stay unmerged until the owner gives explicit,
+head-specific authorization after reviewing comparative evidence. A draft-PR merge, a green CI
+run, a completed package or a model recommendation is not authorization.
 
-## Confirmed evidence
+Also binding, from the hold:
 
-Reproduced against `aacc9f2` before CA1 and re-confirmed present on current `main`:
+1. **No wholesale rebuild.** Preserve the accepted Chroma/DB-GPT retrieval stack, model routing,
+   Rahkia boundary, tenancy, and existing interfaces and schemas. Any replatform needs its own
+   separately authorized architecture decision. Prefer bounded adapters and contract changes.
+2. **No reduction in accepted functionality.** A frozen current-main baseline and behaviour
+   matrix must cover Chat, Knowledge, Data, Hybrid, native and connector evidence,
+   ACL/classification, revocation, outage fail-closed, CA1 cross-user availability, catalogs and
+   pagination, `connector.search` and `connector.fetch`, actions/tools, report
+   snapshots/reruns/exports, neighbour context, dedup and provenance, tenant isolation, audit,
+   and client-hosted and OpenJM-managed deployments.
+3. **Measurable, material improvement** on matched fixtures, with tolerances declared before
+   measurement.
+4. **Reversible and isolated.** Keep the old path until acceptance; provide a tested
+   disable/rollback method; prove compatibility with the latest `main`, not only the plan base.
+5. **Owner go/no-go** on a scorecard, regression matrix, exact-head CI, independent review,
+   explicit risks and rollback evidence.
 
-| Bound | Location on `main` at `8d6b7d8` | Effect |
+## 1. Objective
+
+Remove the possibility that an authorized connector resource is silently omitted from retrieval,
+catalog listing or search because it falls outside an arbitrary candidate window, while keeping
+authorization fail-closed, bounded and leak-free.
+
+This is a controlled enhancement to the existing product. It is not a rebuild, migration or
+replacement of the established architecture.
+
+## 2. Phase 1 seam map (read from the code, not inferred)
+
+Read from `main` at `8d6b7d8`. This section is the finding that shapes the whole plan.
+
+### 2.1 Retrieval is per-document, so candidates cannot be discovered from an index
+
+`DBGPTKnowledgeEngine` gives every document **its own Chroma collection**:
+
+    knowledge.py:75-83   _collection_name(document_id) -> f"{settings.vector_collection}_{safe}"
+
+and retrieval iterates a caller-supplied document list, querying one collection per document:
+
+    knowledge.py:150-172
+        async def retrieve(self, query, documents: list[tuple[str, str]], ...):
+            for document_id, title in documents:
+                retriever = EmbeddingRetriever(top_k=..., index_store=self._store(document_id))
+
+There is no corpus-wide index. **Relevance-first corpus-wide candidate discovery is therefore not
+possible without replacing the per-document collection design, which the hold forbids.** Ranking
+today is per-document and merged afterwards, so the candidate set must be enumerated from
+metadata.
+
+This is the decisive constraint, and it is why the `ca2-retrieval-1` recommendation to move
+authorization after retrieval is withdrawn: there is nothing to retrieve from until the
+candidates are known.
+
+### 2.2 The candidate set is already enumerated in full; only authorization is truncated
+
+    document_policy.py:169-216  governed_tenant_documents(db, access)
+        rows = select(Document).where(tenant_id, *retrievable_filter())
+                              .order_by(Document.created_at.desc())      # NO limit
+        connector_origin = await connector_origin_document_ids(...)
+        authorized_connector_ids = await authorized_connector_document_ids_for_context(db)
+        for document in rows:
+            if not document_is_visible(access, document): continue
+            if document.id in connector_origin and document.id not in authorized_connector_ids:
+                continue                                                  # <- the omission
+            selected.append(document)
+
+So:
+
+- candidate discovery is **already** document-id/metadata based and **unbounded**;
+- the local policy gate `document_is_visible` is complete, unbounded and fail-closed
+  (classification, department, `tenant_visible`, groups);
+- the **only** truncation is inside `authorized_connector_document_ids`, bounded by
+  `MAX_AUTHORIZATION_CHECKS = 100` (`authorization.py:67`, applied at `:362`, default at `:340`),
+  whose select has **no ordering**;
+- an unexamined connector candidate is then treated as **denied** at the intersection above.
+
+**The defect is therefore: unexamined is treated as denied, and the truncation is invisible.**
+Raising the number changes the size of the omission, not its nature.
+
+### 2.3 Blast radius
+
+| Path | Entry | Effect of the bound |
 | --- | --- | --- |
-| `MAX_AUTHORIZATION_CHECKS = 100` | `services/connectors/authorization.py:67`, applied as `.limit(limit)` at `:362`, default at `:340` | The authorization gate enumerates at most 100 `ExternalResource` rows per request and authorizes exactly those |
-| `connector.search` `statement.limit(200)` | `services/actions/connector_tools.py:137` | The connector search tool sees at most 200 rows |
+| Chat / Knowledge / Hybrid | `orchestrator.py:202` -> `governed_tenant_documents` | Authorized connector evidence beyond the window is absent from answers |
+| Catalog listing | `api/knowledge.py:79` -> `governed_tenant_documents` | An authorized document is absent from the catalog, so discovery is wrong |
+| Tool execution | `tools.py:283` -> `governed_tenant_documents` | Same omission inside tool results |
+| Reports (pinned) | `api/reports.py:224` -> gate directly | A report over an incomplete authorization set can produce an incomplete artifact |
 
-Reproduction with 150 resources all authorized for one principal:
+The catalog case matters as much as retrieval: a document that exists and is authorized is **not
+listed**, which is a discovery failure rather than an answer failure.
 
-    PROBE2: bound=100 seeded=150 authorized=100 denied=0
-    assert 100 == 150
+### 2.4 Revised design conclusion
 
-100 returned, 50 unreachable, and **no denial recorded for the 50**, so nothing surfaced the
-loss. There is no ordering on that select, so which 100 is unspecified and depends on the
-planner and storage order. An availability defect that is not reproducible run to run is the
-worst kind, because it does not appear in a bug report.
+Do **not** invert the flow. Do **not** touch embeddings, Chroma, model routing or identity.
 
-The gate is called from four retrieval paths, so all four inherit the behaviour:
-`services/orchestrator.py:223` (chat and Knowledge), `services/document_policy.py:205`,
-`services/tools.py:299` (tool execution), `api/reports.py:224` (report execution).
+Keep candidate discovery where it is and repair the authorization step:
 
-## Why the current shape cannot be fixed by raising the number
+1. **Candidate-scoped authorization with an explicit candidate list.** Replace corpus-wide
+   enumeration with an interface that accepts the candidates plus a declared budget, so the
+   caller's already-complete candidate set drives the checks.
+2. **Deterministic ordering.** The select must be ordered and the order stable. Since no global
+   relevance score exists before retrieval, order by stable identity (`connector_instance_id`,
+   `external_id`, `document_id`), and spend the budget on likely-relevant candidates first by
+   applying a cheap query filter where the caller has one (the same title/external-id prefilter
+   D3 mandates for `connector.search`).
+   **Deviation to flag for the owner:** D4 asks for relevance DESC first. With per-document
+   collections there is no pre-retrieval relevance score to sort by, so relevance-first ordering
+   is not available without the replatform the hold forbids. The plan proposes stable-identity
+   ordering plus a cheap query prefilter, and records this as a consequence to accept or overrule.
+3. **Explicit coverage outcome.** The gate returns the authorized set **and** whether coverage is
+   complete or partial, with a typed reason. Exhaustion is never silent.
+4. **Split semantics by request class (D2).** Exploratory requests may return a proven-authorized
+   subset marked `coverage=partial`. Authoritative requests fail closed with a typed
+   `authorization_incomplete` outcome and no immutable snapshot.
+5. **Never claim absence.** A truncated search must not report that no documents exist.
 
-The bound exists for a good reason, stated in the code: it stops one question from becoming an
-unbounded number of outbound provider calls. But it is applied to the wrong list. Today the gate
-answers "which documents is this principal authorized for", which requires enumerating the
-corpus. Any fixed number then becomes a silent truncation of an authorized set. Raising it
-replaces a small silent omission with a large one, and moves the provider-call cost, without
-changing the failure mode.
+This is the "focused two-phase metadata prefilter and candidate authorization solution" the owner
+permitted as the fallback. The seam analysis shows it is the correct primary approach, not a
+fallback.
 
-## Scope
+## 3. Budgets (D5, initial pilot ceilings, not permanent limits)
 
-- The authorization/retrieval boundary for connector-sourced evidence, and the two bounds above.
-- Determination of what "bounded and query-relevant" means concretely, and the reporting of any
-  truncation.
-- Tests at the scale and with the permission shapes that expose the defect.
+| Path | Budget | Concurrency | Deadline |
+| --- | --- | --- | --- |
+| Chat / Knowledge / Hybrid | 32 provider checks per user request, shared across sub-queries | max 4 | ~5s |
+| `connector.search` | 32 checks per call | max 4 | interactive |
+| Exact named `connector.fetch` / authorization | 1 | 1 | interactive |
+| Pinned / scheduled report | 64 checks | bounded | ~30s, failing explicitly if exceeded |
 
-## Exclusions
+Deduplicate repeated resource checks within one request. Track provider latency, check count,
+coverage and failures. Bounded retries with backoff. No secret or denied-content leakage. Clear
+timeout status and strict authorization even when the provider is unavailable.
 
-- No change to the CA1 semantics: authorization still decides, still never mutates shared
-  content, and still fails closed.
-- No new database table or migration unless a later plan revision argues for one explicitly.
-- No change to the provider authorization contract, the mapping contract, or tenant isolation.
-- No change to the model gateway, chunking, embeddings, or the vector store.
-- Not the `connector.search` 200 bound unless it is agreed into CA2 explicitly (see open
-  question 3).
-- Not INF1, M3 entitlements, or Workspace integration.
+## 4. Invariants
 
-## Invariants
-
-1. **Fail-closed.** Any failure to prove authorization excludes the evidence for that request.
-2. **No silent omission.** If a bound is reached, that fact is recorded and observable on the
-   request. Truncation is a reported condition, never a quiet one.
-3. **Deterministic.** The same corpus, permissions and question produce the same result set and
-   the same truncation decision. No dependence on planner or storage order.
-4. **Non-enumerating.** A denial or an outage must not reveal which other resources exist.
-5. **Bounded.** Provider calls per request remain capped by an explicit, declared budget.
-6. **CA1 preserved.** Authorization remains non-mutating; content-scoped withdrawal stays an
+1. A candidate may be identified internally by a trusted retrieval process, but its content and
+   protected metadata may not reach the model, user, tool output, report, artifact or
+   unauthorized metadata surface until all required authorization checks have passed.
+2. Fail-closed on any failure to prove authorization.
+3. No silent omission; truncation is reported.
+4. Deterministic: the same corpus, permissions and question produce the same result set and the
+   same coverage decision.
+5. Non-enumerating: denials and outages never reveal names, counts or provider details.
+6. Bounded provider calls per request.
+7. CA1 preserved: authorization never mutates shared content; content-scoped withdrawal stays an
    explicit lifecycle operation.
+8. No loss of any accepted capability.
 
-## Design options
+## 5. Packages
 
-**A. Order and report.** Keep enumerate-then-authorize, add a deterministic `order_by`, and
-record truncation when the bound bites. Smallest change. Does not remove the omission, only makes
-it visible and reproducible. Still omits authorized documents.
+Adjustable if the code indicates a smaller, safer division.
 
-**B. Invert the flow: authorize the candidates retrieval actually wants.** Retrieval already
-filters by tenant and by chunk-level ACL inside the vector and keyword query, which is the stated
-design intent ("filtered inside the query, never after top-k"). Pass the retrieved candidate set
-into the authorization gate and ask "may this principal receive these N candidates", where N is
-the retrieval window and not the corpus size. The bound becomes a per-request provider-call
-budget on an already-relevant, already-ordered set, and corpus size stops determining what is
-reachable. This removes the omission by construction rather than by raising a limit.
+**CA2-A — Candidate discovery, authorization contract, bounded execution.**
+The candidate-scoped authorization interface, deterministic ordering, coverage outcome,
+per-request deduplication, budget enforcement and typed results. No caller changes. Unit-testable
+in isolation, and the slice that carries the contract change.
 
-**C. Two-phase: cheap pre-filter then authorize.** A bounded, ordered pre-filter selects
-candidates using tenant and permission-container columns already on the row, then authorizes only
-those. A subset of B, useful if B's plumbing proves too invasive, at the cost of a second pass.
+**CA2-B — Integration with Knowledge, Chat, Hybrid, catalog and authoritative report paths.**
+`governed_tenant_documents` and the report path consume the new contract, propagate
+`coverage=partial` into exploratory responses, fail closed with `authorization_incomplete` for
+pinned reports, and leave `document_is_visible` exactly as it is.
 
-**Recommendation: B, with C as the fallback.** B is the only option that makes the defect
-structurally impossible, it aligns with the ACL design already chosen, and it bounds provider
-calls on relevant candidates rather than on an arbitrary slice. A is worth doing as a minimal
-interim only if B cannot land quickly, and it must not be presented as a fix.
+**CA2-C — `connector.search` query filtering, deterministic ordering and pagination (D3).**
+Apply title/external-id filtering **before** the limit, replace the `statement.limit(200)`
+behaviour (`connector_tools.py:137`) with deterministic ordering and truthful pagination, and
+expose `has_more`. Separately reviewable.
 
-## Required acceptance tests
+Each package: own branch, own worktree, own exact-head CI, own review, own human merge approval.
+Draft PRs only. Keep the existing retrieval behaviour available for baseline comparison and
+provide a tested rollback.
 
-At minimum, and each at a scale that fails today:
+## 6. Phase 4 — measured comparison
 
-1. **More than the bound.** At least 150 authorized resources; all 150 reachable. (The current
-   code returns exactly 100.)
-2. **Varied ordering.** The same set, inserted and selected in a different order, yields the
-   same result set and the same truncation decision, with no dependence on planner order.
-3. **Selective permissions.** Some resources authorized and some denied for the same principal:
-   only the authorized ones are returned, and each denial is recorded by reason.
-4. **Relevant documents outside the initial window.** A resource that is expected to answer the
-   question, sitting beyond the first window, is still retrieved.
-5. **Budget determinism.** When the declared provider-call budget is reached, the outcome is
-   deterministic and truncation is recorded on the request.
-6. **Non-enumeration.** Denial and outage paths return the same shape for a resource that exists
-   and one that does not, so existence cannot be inferred.
-7. **CA1 regression.** The CA1 suite still passes unchanged: a denial for one principal still
-   does not reduce another principal's retrieval, and order independence still holds.
+Same fixtures and comparable runtime, baseline versus candidate. At least 150 authorized connector
+resources, proving resources beyond the original first-100 and first-200 windows remain reachable
+through relevant queries or truthful pagination. A single interactive query is not required to
+authorize all 150.
 
-## Evidence and gates
+Report per dimension: retrieval completeness (reachable authorized sources, omissions, coverage);
+answer correctness; security (unauthorized exposure, tenant-isolation regressions); functional
+parity against the frozen matrix; latency p50/p95 interactive and report; provider usage (checks,
+retries, timeouts, concurrency); CPU/memory/GPU; operating economics; reliability (outage,
+recovery, determinism); reversibility (demonstrated rollback).
 
-- Exact-head `OpenJM CI` green with `Backend / Python 3.11` and `Frontend / Node 22`.
-- Focused connector suites plus the scale tests above, with before/after numbers.
-- Its own review and its own human merge approval. CA2 is a separate package with separate
-  gates; CA1 acceptance does not transfer.
-- No GLM supervisory requirement is created by this plan.
-- Bounded work packages, each independently reviewable. This plan does not authorize
-  implementation.
+Tolerances declared before measurement. Passing existing CI is mandatory and not sufficient.
 
-## Open questions for the owner
+## 7. Phase 5 — integration decision
 
-1. **Is inverting the flow acceptable?** Option B changes the gate's contract from "return the
-   set of authorized documents" to "decide these candidates". That is a deliberate interface
-   change and needs a decision, not an assumption.
-2. **What should happen when the budget is reached?** Serving the authorized subset and
-   recording the truncation fits the stated goal, since omission is the defect. Failing the whole
-   request is stricter. This is a product call.
-3. **Does the `connector.search` 200 bound belong in CA2** or in its own package? It is the same
-   class of defect in a different surface.
-4. **What is the deterministic ordering key?** Resource id, `last_synced_at`, or relevance score
-   from retrieval. The key determines which items are dropped if a bound ever bites.
-5. **What provider-call budget is acceptable per request** for the four retrieval paths, given
-   they have different latency expectations (chat versus a scheduled report)?
+One decision report: baseline and candidate commit hashes; architecture changes and affected
+interfaces; functional parity matrix; security regression evidence; baseline-versus-candidate
+benchmark table; confirmed improvements quantified; performance/capacity/cost trade-offs; rollback
+evidence; unresolved regressions or limitations; and a recommendation of **ACCEPT, REVISE or
+REJECT**. ACCEPT does not authorize merging.
+
+If there is any material functional regression, unauthorized exposure, unapproved rebuild,
+unbounded cost increase or unproven improvement, recommend REVISE or REJECT.
+
+## 8. Stop conditions
+
+- If the invariant in section 4 cannot be proven, stop and recommend a narrower approach.
+- If meaningful improvement requires the replatform the hold forbids, stop.
+- If a material regression appears, stop the candidate.
+
+## 9. Accepted constraints
+
+- GLM supervision is not a gate for this project and is not introduced here.
+- No ownership of BV, REL, INF, M, OPS or other active packages. Reconcile with the latest
+  accepted `main` before final evaluation.
+- Framework PR #7 is a separate controller-hardening package and is not part of CA2.
