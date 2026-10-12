@@ -102,7 +102,7 @@ environment; the bundle must be built with the pinned resolver toolchain.
 
 | # | Item | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Clean Linux **development** install | **NOT RUN** | no clean Linux host (inventory A) |
+| 1 | Clean Linux **development** install | **PASS** (2026-10-12) | Executed for real on a fresh Docker Agentic Platform CLOUD sandbox `openjm-rel1-dev` (`sbx_001m4qacck9mzv3jptmrzqm00mz`, medium 4 vCPU / 8 GiB, Ubuntu 26.04.1 LTS, kernel 6.12.103, x86_64). Clean-host proof: no OpenJM checkout, no `.venv`, no `node_modules`, no OpenJM database, bare interpreter (pip list = 6). Independent GitHub clone at `2456f92a74d091ed425e24256f9910152671b4ca`. Operator prerequisites provisioned first: Python 3.11.9 built from the GPG-verified python.org source (digest `e7de3240...`, independently re-verified against an unrelated mirror, prefix `/opt/openjm/python-3.11`) and the distribution's own Node v22.22.1. `scripts/install-linux.sh --profile development` then ran unmodified and exited **0** (`REL1-A VERIFY OK: version=0.2.0 profile=development frontend=present`), migration current == head `0021_support_content_scope`, frontend built, backend started from the new venv on port 18077, `/api/health` 200, `/api/ready` 200 `ready:true`. See the evidence table below. |
 | 2 | Clean Linux **production** install (PostgreSQL + production paths) | **NOT RUN** | no clean Linux host, no root, no PostgreSQL (inventory B) |
 | 3 | Offline committed-lock install of the **current** artifact | **PASS** (subset) | user-space venv: `pip install --no-index --find-links python/wheelhouse --require-hashes -r python/requirements.lock` then `pip install --no-deps python/app/*.whl`; `app` imported from `site-packages`, `pip show` 0.2.0, dev extras present 0. Not a clean-host row. |
 | 4 | Trusted-digest verification | **PASS** | `release-integrity.py verify <bundle> --expected-manifest-sha256 fb97c0bf...` -> `verified release payload: 916 files` |
@@ -326,5 +326,65 @@ require environments not available here and are not claimed.
 | Readiness detail | database ok, migrations ok (no drift), storage ok, knowledge ok, scheduler ok, connectors ok, notifications ok. `model_provider` reports `error`/`ConnectTimeout` for the development-profile default local model, which is **not** a readiness gate (readiness gates only on database, migrations and storage). No credential was exposed, no model was substituted, and Rahkia was not involved. |
 | Frontend | `frontend/dist` emitted (index.html + assets); no browser/persona journey claimed here (separate #79 row) |
 
-The clean Linux development host, the clean Linux production/PostgreSQL host and the
-production-installed browser/persona journey remain **NOT RUN**.
+The clean Linux production/PostgreSQL host and the production-installed browser/persona
+journey remain **NOT RUN** and OPEN under Issue #79. Clean Linux development (above) and
+the Windows/WSL2 supported runtime are **PASS**.
+
+
+### Clean Linux development host qualification evidence (2026-10-12)
+
+| Field | Value |
+| --- | --- |
+| Platform | Docker Agentic Platform **Cloud** sandbox (not local Docker, not Compose, not Offload) |
+| Sandbox | `openjm-rel1-dev` / `sbx_001m4qacck9mzv3jptmrzqm00mz`, medium shape (4 vCPU / 8 GiB), TTL 4h, `linux/amd64` |
+| OS / kernel / arch | Ubuntu 26.04.1 LTS (Resolute Raccoon) / 6.12.103 / x86_64 |
+| User | `agent`, uid 1000, groups `agent sudo docker`; passwordless `sudo -n` usable |
+| Free disk | 29.4 GB (well above the ~12-15 GB minimum) |
+| Clean-host proof | no OpenJM checkout, `.venv`, `node_modules` or database anywhere; bare interpreter (pip list = 6) |
+| Clone | `git clone https://github.com/sjevans1/OpenJM-Enterprise-AI.git` inside the sandbox, checked out `2456f92a74d091ed425e24256f9910152671b4ca` (`rev-parse` matches, tree clean) |
+| Python | 3.11.9 from official python.org source; expected = observed = `e7de3240a8bc2b1e1ba5c81bf943f06861ff494b69fda990ce2722a504c6153d`, corroborated by an unrelated mirror, GPG `Good signature` (CPython release key); isolated at `/opt/openjm/python-3.11`, exposed as `/usr/local/bin/python3.11`, system `python3` left at 3.14.4; stdlib verified (ssl, hashlib, sqlite3, ctypes, bz2, lzma, venv) and pip 24.0 |
+| Node / npm | distribution-provided `/usr/bin/node` v22.22.1, `/usr/bin/npm` 9.2.0 (Node 22 already present, used as-is) |
+| Installer | `bash scripts/install-linux.sh --profile development` (unmodified) — exit **0** |
+| Installer stages | development lock installed from the committed lock; editable development application install; migration; `npm ci` (138 packages); `vite build`; `frontend built into frontend/dist` |
+| Verifier | `REL1-A VERIFY OK: version=0.2.0 profile=development frontend=present`; `REL1-A post-install verification passed` |
+| Migration | repository head `0021_support_content_scope` == current `0021_support_content_scope` (development SQLite `./data/openjm.db`) — host evidence |
+| Backend | `env -u PYTHONPATH -u PYTHONHOME .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18077`, pid 16392, venv python `/opt/openjm/python-3.11/bin/python3.11`, `Application startup complete` |
+| `/api/health` | 200 `{"status":"ok","product":"OpenJM Enterprise AI","version":"0.2.0","knowledge_engine":"DB-GPT","model":"gemma-4-12b-local","profile":"development"}` |
+| `/api/ready` | 200 `{"ready":true,"status":"ready"}`; components database/migrations/storage/knowledge/scheduler/connectors all ok, `storage.free_mb` 19708 |
+
+`model_provider` reported `error`/`ConnectError` for the development-profile default local model
+(`gemma-4-12b-local`). That component is explicitly not a readiness gate, no provider was
+started or substituted, no credential was exposed, and Rahkia was not involved.
+
+### Docker Cloud Compose feasibility (NOTE only, not a row change)
+
+A bounded toy probe was run in the same sandbox, outside the repository, using only disposable
+toy services (PostgreSQL 16-alpine plus a dependent service declaring
+`depends_on: db: condition: service_healthy` and a `pg_isready` healthcheck that mirrors the
+openJM production Compose pattern).
+
+Result: **COMPOSE VIABLE.** Private in-sandbox Docker Engine 29.8.1 (overlayfs storage,
+cgroup v2) and Compose v5.5.1. `docker compose up -d` returned 0; the `db` service went
+`Waiting -> Healthy`; the dependent service was released and its own logs prove real
+connectivity (`DEPENDENT_STARTED`, `DEPENDENT_READY_AFTER_1_TRIES`, query result `42`,
+`DEPENDENT_QUERY_OK`); a third container confirmed `accepting connections`; `docker compose down -v`
+returned 0. The documented Docker Cloud healthcheck/`service_healthy` limitation did **not**
+reproduce on this engine and Compose version, and the proof came from service logs and an actual
+dependent query rather than `docker inspect` alone.
+
+This does **not** change production status: the clean Linux production/PostgreSQL host row
+remains NOT RUN, and production was not executed. It establishes that Docker Cloud remains a
+production-host candidate. Production-host eligibility is therefore **INCONCLUSIVE** pending the
+real production run, not FAIL.
+
+### PRODUCTION TOOLING FINDING (recorded, not fixed here)
+
+`deploy/compose/Dockerfile.proxy` in the accepted baseline contains:
+
+```
+FROM node:20-bookworm-slim AS frontend
+```
+
+Issue #79 requires production to remain Node 22, and the accepted frontend/installer contract
+uses Node 22. This must be reconciled by a separate bounded REL1 correction before final
+production-host acceptance if it is still present. It does not affect the development row.
