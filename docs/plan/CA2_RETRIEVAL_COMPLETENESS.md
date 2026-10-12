@@ -1,12 +1,12 @@
 # CA2 — Bounded, query-relevant connector retrieval with no silent omission
 
-Plan revision: `ca2-retrieval-2` (supersedes `ca2-retrieval-1`)
+Plan revision: `ca2-retrieval-3` (supersedes `ca2-retrieval-2`)
 Repository: **sjevans1/OpenJM-Enterprise-AI only**
 Base: `main` at `8d6b7d8`
 Depends on: CA1 (accepted, merged `a4e1e4f`)
-Status: **planning. No implementation is authorized by this document.**
-Binding records: the owner integration hold on PR #94, and the D1-D5 architecture decisions
-recorded on PR #94.
+Status: **CA2-A contract-only implementation authorized. No merge authorized.**
+Binding records: the owner integration hold, D1-D5 architecture decisions, and the Phase 1
+independent plan review on PR #94.
 
 ## 0. Integration hold (binding)
 
@@ -117,36 +117,55 @@ Keep candidate discovery where it is and repair the authorization step:
    caller's already-complete candidate set drives the checks.
 2. **Deterministic ordering.** The select must be ordered and the order stable. Since no global
    relevance score exists before retrieval, order by stable identity (`connector_instance_id`,
-   `external_id`, `document_id`), and spend the budget on likely-relevant candidates first by
-   applying a cheap query filter where the caller has one (the same title/external-id prefilter
-   D3 mandates for `connector.search`).
-   **Deviation to flag for the owner:** D4 asks for relevance DESC first. With per-document
-   collections there is no pre-retrieval relevance score to sort by, so relevance-first ordering
-   is not available without the replatform the hold forbids. The plan proposes stable-identity
-   ordering plus a cheap query prefilter, and records this as a consequence to accept or overrule.
+   `external_id`, `document_id`).
+   **D4 decision: accepted.** The review resolved this explicitly: per-document Chroma
+   collections have no global pre-retrieval relevance score, so stable-identity ordering is the
+   deterministic baseline and no global index will be built to satisfy an ordering preference.
+   For explicit `connector.search`, title/external-ID matching belongs in the database candidate
+   selection **before** any page limit. For natural-language Knowledge / Chat / Hybrid, a
+   title/external-ID match may only **prioritise** candidates; it must never be a hard exclusion
+   of semantically relevant content.
 3. **Explicit coverage outcome.** The gate returns the authorized set **and** whether coverage is
    complete or partial, with a typed reason. Exhaustion is never silent.
 4. **Split semantics by request class (D2).** Exploratory requests may return a proven-authorized
    subset marked `coverage=partial`. Authoritative requests fail closed with a typed
    `authorization_incomplete` outcome and no immutable snapshot.
 5. **Never claim absence.** A truncated search must not report that no documents exist.
+6. **Safe continuation.** Stable ordering alone does not make items after the first window
+   discoverable. A progressive-scanning strategy is required so a candidate beyond the initial
+   authorization window remains reachable on a subsequent request even when its title does not
+   match the query. This is the core of the CA2-A contract, not a refinement of it.
 
 This is the "focused two-phase metadata prefilter and candidate authorization solution" the owner
 permitted as the fallback. The seam analysis shows it is the correct primary approach, not a
 fallback.
 
-## 3. Budgets (D5, initial pilot ceilings, not permanent limits)
+## 3. Budgets (D5) — EXPERIMENTAL TARGETS, NOT DEFAULTS
 
-| Path | Budget | Concurrency | Deadline |
+**Critical baseline-parity correction from the Phase 1 review.** The current production path may
+revalidate up to 100 resources per request. The D5 pilot figures of 32 (chat/search) and 64
+(reports) are **lower** than that. Enforcing them as new defaults would make previously
+accessible documents disappear from ordinary queries and would break pinned report runs
+involving 65 to 100 resources, which violates the no-functional-regression hold.
+
+Therefore:
+
+- 32 and 64 are **experimental configurations for benchmark and tuning**, not accepted defaults
+  and not product limits.
+- The existing production behaviour (up to 100) remains active until matched evidence proves
+  that a safe candidate-selection and continuation strategy maintains or improves existing
+  successful flows.
+- If that cannot be proved, stop and revise rather than reducing coverage.
+- Measured baseline to compare against: **exactly 100 provider checks consumed** on a 150-item
+  all-authorized corpus, with 50 authorized documents omitted (see the baseline document).
+
+| Path | Experimental target | Concurrency | Deadline |
 | --- | --- | --- | --- |
-| Chat / Knowledge / Hybrid | 32 provider checks per user request, shared across sub-queries | max 4 | ~5s |
+| Chat / Knowledge / Hybrid | 32 checks per user request, shared across sub-queries | max 4 | ~5s |
 | `connector.search` | 32 checks per call | max 4 | interactive |
 | Exact named `connector.fetch` / authorization | 1 | 1 | interactive |
 | Pinned / scheduled report | 64 checks | bounded | ~30s, failing explicitly if exceeded |
-
-Deduplicate repeated resource checks within one request. Track provider latency, check count,
-coverage and failures. Bounded retries with backoff. No secret or denied-content leakage. Clear
-timeout status and strict authorization even when the provider is unavailable.
+| **Current production behaviour** | **100** (do not regress) | current | current |
 
 ## 4. Invariants
 
@@ -224,3 +243,72 @@ unbounded cost increase or unproven improvement, recommend REVISE or REJECT.
 - No ownership of BV, REL, INF, M, OPS or other active packages. Reconcile with the latest
   accepted `main` before final evaluation.
 - Framework PR #7 is a separate controller-hardening package and is not part of CA2.
+
+## 10. CA2-A contract (authorized: contract-only, isolated, draft)
+
+Authorization: CA2-A contract-only implementation in an isolated worktree is permitted now that
+this plan reflects the Phase 1 review. It is **prototype authorization only**. No merge. CA2-B
+and CA2-C must not be started until the contract and coverage strategy have been independently
+reviewed.
+
+### 10.1 Candidate state model
+
+Four distinct internal states. Conflating any two of these is the current defect, so the contract
+names them explicitly:
+
+| State | Meaning | May be returned as evidence? |
+| --- | --- | --- |
+| `authorized` | Current permission proven for this principal | Yes |
+| `denied` | Provider proved this principal lacks access | No, and it is not an error |
+| `unexamined` | Not reached: budget exhausted or continuation pending | No, and it must never be reported as denied |
+| `unavailable` | Permission could not be proven: timeout, outage, rate limit, contradictory | No, fail closed |
+
+Only a coarse coverage state is exposed to a user: `complete` or `partial`. Never unauthorized
+counts, titles, identifiers or provider detail.
+
+### 10.2 Contract requirements
+
+1. **Local eligibility before provider budget.** `document_is_visible` and tenant/source
+   eligibility must be applied before any provider check is consumed. (The ordering inside
+   `governed_tenant_documents`, which currently calls the corpus-wide provider gate before
+   iterating locally visible documents, changes only in CA2-B, after independent verification.)
+2. **Candidate-scoped authorization.** Direct named-resource and pinned-scope checks authorize
+   the specifically requested resource ids rather than enumerating the corpus.
+3. **Determinism.** Stable-identity ordering with a declared sort key, so repeated identical
+   requests produce identical outcomes.
+4. **Coverage reporting.** Every result carries `complete` or `partial` plus a typed reason.
+   Exhaustion must never masquerade as a complete answer, and a truncated search must never claim
+   that no documents exist.
+5. **Per-request deduplication.** Identical provider checks within one request are performed once.
+   No cross-request allow caching without a separate security review.
+6. **Safe continuation.** A progressive-scanning cursor so that candidates beyond the first
+   authorization window remain reachable on later requests, including candidates whose titles do
+   not match the query. Stable ordering alone does not achieve this.
+7. **No replatform.** The contract must not require changes to Chroma, DB-GPT, embeddings, model
+   routing, identity or the Rahkia boundary. It is an adapter and contract change only.
+8. **Baseline preserved.** The existing production path stays active and unmodified as the
+   comparison path, and the new contract is exercised only through its own tests.
+9. **No leakage.** Tests must prove that no secret, denied title, denied identifier or denied
+   count reaches retrieval, model, tool, report or catalog output.
+
+### 10.3 CA2-A exclusions
+
+- No caller changes: `governed_tenant_documents`, the orchestrator, tools, reports and the
+  catalog are untouched in CA2-A and migrated in CA2-B.
+- No endpoint or response-shape change. `GET /documents` must keep returning a list, or an
+  explicitly compatible versioned/paginated surface must be introduced in CA2-B. Changing a list
+  to an object would itself be a regression.
+- No default budget change. 32 and 64 remain experimental configuration values.
+- No `connector.search` change; that is CA2-C.
+
+### 10.4 Benchmark refinements accepted
+
+- The 16-row matrix is a coverage checklist, not a substitute for an end-to-end test per row.
+- Include an adversarial scenario where semantic relevance exists only in the document body, with
+  an unrelated title, at an index beyond 100. Baseline confirms this is currently unreachable.
+- Test existing successful queries with 33 to 100 eligible resources, and pinned reports with 65
+  to 100, since those are the shapes the D5 budgets would have broken.
+- Latency measurement with representative provider delay and timeout, not only the fast
+  in-process fake.
+- Report provider-call, compute and economic cost deltas, not merely the absence of a new paid
+  dependency.

@@ -119,12 +119,73 @@ nothing was omitted. Only the Phase 4 comparison addresses those.
 | Auditing, error handling, operational behaviour | audit assertions; `authorization_incomplete` outcome tests |
 | Client-hosted and OpenJM-managed deployments | deployment profile checks; row 16 |
 
+## 5A. Actual baseline results (measured, not proposed)
+
+Harness: `backend/tests/test_ca2_baseline_measurement.py` on the frozen baseline `8d6b7d8`,
+fixture-only, in-process provider, 150 resources all authorized for one principal. Run on
+2026-10-12. Raw output is printed by the harness and reproduced here verbatim.
+
+    forward insertion
+      authorized_in_fixture                150
+      reachable_external_ids               100
+      omitted_external_ids                  50
+      omitted_sample                 m100 m101 m102 m103 m104
+      denials_recorded_for_omitted           0
+      provider_checks_consumed             100
+      allowed_set_size                     100
+      last_seeded_id_reachable           false
+      gate_latency_ms                   444.24
+
+    reversed insertion
+      reachable_external_ids               100
+      omitted_external_ids                  50
+      omitted_sample                 m100 m101 m102 m103 m104
+      provider_checks_consumed             100
+      gate_latency_ms                   307.27
+
+    gate latency distribution, 150-item corpus, 5 runs
+      p50   259.53 ms
+      p95   336.52 ms
+      min   250.71 ms
+      max   336.52 ms
+
+### What these numbers establish
+
+1. **Exactly 100 of 150 authorized documents are reachable.** The bound is consumed precisely:
+   100 provider checks, 100 results. 50 authorized documents are unreachable.
+2. **Zero denials are recorded for the 50 omitted.** They are not refused; they are never
+   examined, which is why nothing surfaced the loss. This is the measured form of "unexamined is
+   treated as denied".
+3. **The last-seeded document is unreachable**, which is the review's adversarial shape: a
+   document whose index exceeds the window cannot be retrieved regardless of its content.
+4. **Cost of the current bound**: ~2.6 ms per provider check in-process (259 ms p50 for 100
+   checks), so the bound is a real cost control, not decoration. Any proposal to raise coverage
+   must carry its provider-call and latency delta.
+5. **Correction to an earlier claim in this document.** Revision `ca2-retrieval-1` stated that
+   *which* 100 is returned is unspecified. That remains true in principle, because the select has
+   no `ORDER BY`, but this fixture did **not** demonstrate it: forward and reversed insertion both
+   omitted exactly `m100` to `m149`. The dependency is on physical row order, which happened to be
+   stable here. So the ordering risk is latent rather than observed, and it should be stated that
+   way. Determinism must still be established explicitly rather than assumed, which is why
+   D4's stable-identity ordering remains required.
+
+### Consequence for the contract
+
+Safe continuation is not optional. With 100 of 150 unreachable and the unreachable set stable,
+stable ordering alone would leave the same 50 permanently invisible. CA2-A must therefore define
+how a candidate beyond the first window becomes reachable on a later request, and the measured
+baseline above is the comparison point for whether it does.
+
 ## 6. Status
 
-Phase 1 seam map: **complete** (see plan section 2).
-Frozen baseline and dataset definition: **recorded here**.
-Traceability matrix: **recorded here**.
-Benchmark methodology and thresholds: **recorded here**.
+Phase 1 seam map: **complete** (plan section 2).
+Frozen baseline and dataset definition: **recorded**.
+Traceability matrix: **recorded**.
+Benchmark methodology and thresholds: **recorded**.
+Actual baseline measurements: **recorded above, measured on `8d6b7d8`**.
+Phase 1 independent review findings: **incorporated into plan revision `ca2-retrieval-3`**.
 
-Next, and only with the owner's go-ahead: record candidate acceptance criteria per package, then
-build CA2-A in its own worktree as a draft, keeping the current path intact for comparison.
+Next, with the review's conditional authorization: implement CA2-A contract-only in this isolated
+worktree, with its own tests and a draft PR, leaving the existing production path unmodified. No
+merge. CA2-B and CA2-C remain blocked on independent review of the contract and coverage
+strategy.
