@@ -40,9 +40,11 @@ threshold.** The live 1.138x is **not** p95 evidence and is not presented as suc
 
 | Finding | Disposition |
 | --- | --- |
-| CA2-C: three-arm SQL prefilter not a superset of the Python matcher (ẞ/ß, İ/i̇, ǅ/ǆ) | **Fixed.** Predicate removed, matching is Python-only over a bounded ordered scan. 19 tests. |
+| CA2-B: coverage warning lost when a conversation is reopened | **Fixed.** Persisted with the turn and replayed through `MessageOut`, no migration. See D2. |
+| CA2-C: incomplete-scan note asserted that unseen matches exist | **Fixed.** Per-cause non-asserting wording, with a regression. See H. |
+| CA2-C: three-arm SQL prefilter not a superset of the Python matcher (ẞ/ß, İ/i̇, ǅ/ǆ) | **Fixed.** Predicate removed, matching is Python-only over a bounded ordered scan. 20 tests. |
 | CA2-B: no real handler/API regression for the notice lifecycle | **Fixed.** Two HTTP regressions, one falsified. See H. |
-| CA2-B: frontend notice rendering unverified | **Verified and it was absent.** Rendered now. See D. |
+| CA2-B: frontend notice rendering unverified | **Verified and it was absent.** Rendered now, including on replay. See D. |
 | CA2-B: PR #98 diff contained unrelated main deployment changes | **Fixed.** CA2-A reconciled onto current main; the stack diff is now the CA2 delta. See B. |
 | CA2-C: PR #100 four commits behind main | **Fixed.** Reconciled. |
 | Dossier stale heads and run IDs | **Updated.** |
@@ -152,9 +154,47 @@ advisory, deliberately distinct from an error banner.
 It is carried **per message**, not as view state, so a later complete answer cannot clear or inherit
 an earlier notice, and reopening a conversation shows what that answer actually said.
 
-Frontend evidence: `tsc --noEmit` and `vite build` clean, and **98 tests passed across 14 files**,
-including two new ones asserting the warning is rendered verbatim from the server's sentence, and
-that a complete answer renders none.
+Frontend evidence: `tsc --noEmit` and `vite build` clean, and **99 tests passed across 14 files**,
+including three that assert the warning is rendered verbatim from the server's sentence, that a
+complete answer renders none, and that **reopening a partial conversation still shows it**.
+
+---
+
+## D2. History replay keeps the qualification
+
+The independent review found a real user-facing regression that the previous round's claim did not
+support: the notice was attached only to the **live response**. `chat()` set
+`ChatResponse.coverage_notice` after the assistant turn had already been committed, `MessageOut` had
+no such field, and the persisted `Message` carried only content, execution class, requested mode and
+evidence. `openConversation()` replaces the message array from `GET /api/conversations/{id}`, so a
+warning shown after the POST vanished the moment the same conversation was reopened. An incomplete
+answer read later, unqualified, is precisely the silent omission CA2 exists to remove.
+
+**No migration.** `Message` has no spare column, and the review required the evidence shape to be
+preserved while avoiding a migration unless truly required. So the qualification is written into the
+persisted assistant **text**, which is where a historical turn has its only channel:
+
+* the fixed, server-written sentence (never model text, never source data) is appended to the
+  persisted content as `"<answer>\n\nCoverage note: <fixed sentence>"`;
+* the live response keeps its **clean** `answer` and reports the notice separately, so a reader of the
+  live response sees the warning **exactly once** and not twice;
+* `MessageOut.coverage_notice` is populated on replay by recognising that exact prose
+  (`persisted_coverage_notice()`), so an API client gets the structured notice without parsing text,
+  and a client that ignores the field still cannot read an incomplete historical answer as complete;
+* only the exact sentences this module writes are ever recognised, so user content can never be
+  mistaken for a qualification;
+* legacy mode writes nothing, so a complete legacy answer is persisted byte-for-byte as returned.
+
+**One implementation detail worth recording**, because the first attempt looked correct and did
+nothing: `assistant_message.content` is finalised *after* the artifact path may rewrite it, so an
+annotation computed at message construction is discarded a few lines later. The write had to move to
+the point where the persisted text is actually final. The test caught it; the review could not have.
+
+Covered by HTTP tests: POST partial Knowledge, reload the conversation, assert the qualification is
+still there and structured; send a complete request in the same conversation and assert the earlier
+turn stays qualified, the new turn has no qualification, and its content equals the returned answer
+byte-for-byte; and a failing model call (502) leaves no assistant turn and therefore no phantom
+qualification.
 
 ---
 
@@ -169,7 +209,8 @@ that a complete answer renders none.
 | Nonempty partial result does not look exhaustive | **PASS** | catalog answer appends the notice |
 | Empty partial result is not proof of absence | **PASS** | answer text plus `coverage_notice` |
 | Coverage on the user-visible response | **PASS** | `ChatResponse.coverage_notice`, `ExecutionPlan.coverage_notice` |
-| **Coverage visible to the user in the UI** | **PASS (was FAIL)** | rendered per message; 2 frontend tests |
+| **Coverage visible to the user in the UI** | **PASS (was FAIL)** | rendered per message; 3 frontend tests |
+| **History replay keeps the qualification** | **PASS** | persisted with the turn, replayed via `MessageOut`; HTTP tests |
 | Notice cannot leak across requests | **PASS, falsified** | sequential HTTP test plus a falsified stale-context test |
 | `GET /documents` list contract preserved | **PASS** | response model asserted; additive header only |
 | Additive paginated catalog, non-duplicating | **PASS** | native first-page-only, `native_included` |
@@ -185,7 +226,7 @@ that a complete answer renders none.
 | p95 within 1.25x on comparable work | **PASS** | 1.028x / 1.047x locally and in CI |
 | Zero accepted functional regressions | **PASS after two repairs** | see H |
 | `connector.search` match beyond 200 | **PASS (CA2-C)** | rank 281 returned |
-| `connector.search` truthful incompleteness | **PASS (CA2-C)** | capped and truncated cases |
+| `connector.search` truthful incompleteness | **PASS (CA2-C)** | capped and truncated cases; the note never asserts unseen matches |
 | **`connector.search` Unicode correctness** | **PASS (CA2-C)** | ẞ/ß, İ/i̇, ǅ/ǆ, ASCII 'i' vs 'İ', all beyond 200 |
 | Live DB-GPT/Chroma verification | **PASS** | 13 checks, 0 failures |
 | Merge | **NOT DONE** | owner hold binding |
@@ -265,9 +306,10 @@ Local, at the heads above:
 | Suite | Result |
 | --- | --- |
 | CA2-A contract | 78 passed |
-| CA2-B integration plus measurement harness | 36 passed |
-| CA2-C search | **19 passed** (was 15) |
-| Frontend (vitest) | **98 passed across 14 files**, plus a clean `tsc`/`vite` build |
+| CA2-B integration plus measurement harness | 39 passed |
+| CA2-A + CA2-B + harness together | **117 passed** (was 115) |
+| CA2-C search | **20 passed** (was 15 before this round's Unicode work, 19 after it) |
+| Frontend (vitest) | **99 passed across 14 files**, plus a clean `tsc`/`vite` build |
 | Live retrieval harness | 13 checks, 0 failures |
 | `pytest tests/ --collect-only` | clean, no collection errors |
 | ruff `E9,F63,F7,F82` | clean |
@@ -383,9 +425,11 @@ notice.
    regressions in it would not be caught by CI.
 7. **Frontend tests run against a stubbed fetch**, so they assert rendering, not a live server round
    trip; the live server round trip is covered by the backend HTTP regressions.
-8. **This round's CI has concluded green** for all three current heads; the run IDs are in H. The
-   dossier-carrying commit is docs-only, so its own run repeats the same jobs over an identical code
-   tree.
+8. **The negative case is deliberate.** If a client ignores `MessageOut.coverage_notice`, it still
+   sees the qualification in the persisted text; that is why the text carries it rather than the
+   field alone. The trade-off is that history shows the qualification as prose rather than as a
+   styled notice. This is the smallest implementation that survives a reload without a migration, and
+   the review's own guidance permitted it.
 
 ---
 

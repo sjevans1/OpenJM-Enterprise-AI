@@ -1050,3 +1050,85 @@ test('a complete answer carries no coverage warning', async () => {
 
   expect(container.querySelector('[data-coverage-notice]')).toBeNull()
 })
+
+// ---------------------------------------------------------------------------
+// CA2-B history: reopening an incomplete answer must still show its qualification.
+// ---------------------------------------------------------------------------
+
+const RELOADED_PARTIAL_NOTICE = {
+  code: 'partial_coverage',
+  coverage: 'partial',
+  reason: 'provider_cap_reached',
+  message:
+    'This request reached its authorization budget before every connector source could be checked, ' +
+    'so this answer may not include every source you are authorized to read. Ask a narrower ' +
+    'question, or ask again to continue checking.',
+}
+
+const RELOADED_CONVERSATION = {
+  id: 'conversation-history',
+  title: 'Levy policy question',
+  created_at: '2026-01-02T03:04:05Z',
+  updated_at: '2026-01-02T03:04:06Z',
+}
+
+function stubReloadedPartialConversation() {
+  const detail = {
+    ...RELOADED_CONVERSATION,
+    messages: [
+      {
+        id: 'message-user',
+        role: 'user',
+        content: 'what is the reforestation levy policy?',
+        evidence: [],
+        artifacts: [],
+        created_at: '2026-01-02T03:04:05Z',
+      },
+      {
+        id: 'message-assistant',
+        role: 'assistant',
+        // What the server persists for a partial answer: the answer plus the fixed qualification.
+        content: `An answer.\n\nCoverage note: ${RELOADED_PARTIAL_NOTICE.message}`,
+        execution_class: 'knowledge',
+        requested_mode: 'knowledge',
+        evidence: [],
+        artifacts: [],
+        coverage_notice: RELOADED_PARTIAL_NOTICE,
+        created_at: '2026-01-02T03:04:06Z',
+      },
+    ],
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/config') return jsonResponse(OIDC_AUTH_CONFIG)
+      if (url === '/api/auth/me') {
+        return jsonResponse(principalContext({ permissions: ['chat:use'] }))
+      }
+      if (url === '/api/conversations') return jsonResponse([RELOADED_CONVERSATION])
+      if (url === `/api/conversations/${RELOADED_CONVERSATION.id}`) return jsonResponse(detail)
+      return jsonResponse([])
+    }),
+  )
+}
+
+test('reopening a partial conversation still shows the qualification', async () => {
+  storeAuthenticatedSession()
+  stubReloadedPartialConversation()
+  const { container } = render(<App />)
+
+  fireEvent.click(await screen.findByRole('button', { name: /Levy policy question/ }))
+  await screen.findAllByText(/An answer\./)
+
+  // Queried by node rather than by text, because the app renders more than one layout of the same
+  // conversation and a text query would be ambiguous.
+  const qualified = Array.from(container.querySelectorAll('.message-content')).filter((node) =>
+    (node.textContent || '').includes(RELOADED_PARTIAL_NOTICE.message),
+  )
+  expect(qualified.length).toBeGreaterThan(0)
+  for (const node of qualified) {
+    // Exactly once per rendered answer: the qualification must not be doubled by a second path.
+    expect((node.textContent || '').split(RELOADED_PARTIAL_NOTICE.message)).toHaveLength(2)
+  }
+})

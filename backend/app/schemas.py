@@ -86,6 +86,11 @@ class MessageOut(BaseModel):
     requested_mode: ExecutionMode | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     artifacts: list[ChatArtifactOut] = Field(default_factory=list)
+    # CA2-B: the qualification a historical answer was given with. Additive and optional, so existing
+    # clients are unaffected. Present only on an assistant turn produced from a partially checked
+    # source set; the same sentence is also appended to `content`, so a client that ignores this field
+    # still cannot read an incomplete historical answer as complete.
+    coverage_notice: dict | None = None
     created_at: datetime
 
 

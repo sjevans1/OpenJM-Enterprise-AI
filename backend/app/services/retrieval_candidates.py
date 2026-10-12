@@ -116,6 +116,38 @@ COVERAGE_NOTICE_FALLBACK = (
     "source you are authorized to read."
 )
 
+# The qualification written into a PERSISTED assistant turn.
+#
+# History must not lose the qualification an incomplete answer was given with, because an incomplete
+# answer read later, unqualified, is the silent omission this whole programme exists to remove. There
+# is no spare column on Message and the review requires the evidence shape to be preserved, so the
+# fixed server-written sentence is appended to the persisted answer text instead of changing storage.
+# The lead-in is what makes it recognisable on replay; only the exact prose this module writes is ever
+# recognised, so user content cannot be mistaken for a qualification.
+PERSISTED_COVERAGE_LEAD = "\n\nCoverage note: "
+
+_REASON_BY_MESSAGE = {message: reason for reason, message in COVERAGE_NOTICE_MESSAGES.items()}
+
+
+def persisted_coverage_notice(content: str | None) -> dict[str, Any] | None:
+    """The structured notice for a persisted assistant turn, or None if it carries no qualification.
+
+    Returned so history replay can expose the same shape the live response used, without a schema
+    change and without a caller having to parse prose.
+    """
+    if not content or PERSISTED_COVERAGE_LEAD not in content:
+        return None
+    tail = content.rsplit(PERSISTED_COVERAGE_LEAD, 1)[1].strip()
+    reason = _REASON_BY_MESSAGE.get(tail)
+    if reason is None and tail != COVERAGE_NOTICE_FALLBACK:
+        return None
+    return {
+        "code": COVERAGE_NOTICE_CODE,
+        "coverage": CoverageStatus.PARTIAL.value,
+        "reason": reason,
+        "message": tail,
+    }
+
 
 def configured_mode() -> str:
     """The configured integration mode, defaulting to legacy for any unrecognised value."""

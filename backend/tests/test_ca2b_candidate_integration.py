@@ -559,6 +559,44 @@ class _AnsweringGateway:
         return self.answer
 
 
+@contextlib.contextmanager
+def _as_fixture_principal():
+    """Run API requests as the fixture tenant's principal.
+
+    The route resolves its own principal, so a corpus seeded for the fixture tenant is only reachable
+    if the request IS that tenant's principal. Overriding get_principal is the stable hook for that,
+    and the request context is published as well because the governed-document gate reads the context
+    rather than the dependency.
+    """
+    from app.api import deps as api_deps
+    from app.core.identity import Principal
+    from app.core.permissions import permissions_for_role
+    from app.main import app
+
+    principal = Principal(
+        principal_id=PRINCIPAL_A,
+        tenant_id=TENANT_A,
+        subject="ca2b-http",
+        role="owner",
+        membership_id="ca2b-http-membership",
+        auth_method="local-dev",
+        permissions=permissions_for_role("owner"),
+    )
+    app.dependency_overrides[api_deps.get_principal] = lambda: principal
+    try:
+        with request_context():
+            yield principal
+    finally:
+        app.dependency_overrides.pop(api_deps.get_principal, None)
+
+
+async def _replayed_messages(client, conversation_id: str) -> list[dict]:
+    """The conversation as a user reopening it later would receive it."""
+    response = await client.get(f"/api/conversations/{conversation_id}")
+    assert response.status_code == 200, response.text
+    return response.json()["messages"]
+
+
 async def test_a_partial_knowledge_notice_cannot_leak_into_the_next_http_request(
     client, file_db, connector, provider, knowledge, mode, monkeypatch
 ):
@@ -572,32 +610,13 @@ async def test_a_partial_knowledge_notice_cannot_leak_into_the_next_http_request
     Only answer composition is stubbed. The orchestrator, the exploratory candidate traversal, the
     notice publication, the request context and the response assembly are all the real code.
     """
-    from app.api import deps as api_deps
-    from app.core.identity import Principal
-    from app.core.permissions import permissions_for_role
-    from app.main import app
     from app.services.connectors.base import ConnectorAuthUnavailable
 
     mode(rc.MODE_CANDIDATE)
     await seed(file_db, provider, 30, name="c2b-http-notice")
     monkeypatch.setattr("app.api.chat.model_gateway", _AnsweringGateway("An answer."))
 
-    # The route resolves its own principal, so the corpus seeded for the fixture tenant is only
-    # reachable if the request is that tenant's principal. Overriding get_principal is the stable
-    # hook for that; the context is published as well because the governed-document gate reads the
-    # request context rather than the dependency.
-    principal = Principal(
-        principal_id=PRINCIPAL_A,
-        tenant_id=TENANT_A,
-        subject="ca2b-http",
-        role="owner",
-        membership_id="ca2b-http-membership",
-        auth_method="local-dev",
-        permissions=permissions_for_role("owner"),
-    )
-    app.dependency_overrides[api_deps.get_principal] = lambda: principal
-
-    with request_context():
+    with _as_fixture_principal():
         # Request 1: the provider does not answer, so no candidate's authorization can be proven.
         provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
         first = await client.post(
@@ -649,3 +668,109 @@ async def test_a_stale_notice_in_the_ambient_context_is_cleared_before_the_reque
         "a notice already present in the ambient context must be cleared at request entry; otherwise "
         "an unrelated earlier value would be reported against this request's answer"
     )
+
+
+# ============================================================ history replay keeps the qualification
+
+
+async def test_a_partial_answer_stays_qualified_when_the_conversation_is_reloaded(
+    client, file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """An incomplete answer must not become a complete-looking answer in history.
+
+    POST a partial Knowledge request, reload the conversation over HTTP, then send a complete request
+    and reload again. The partial turn must still be qualified and the complete turn must carry no
+    qualification. Nothing here depends on in-memory state, so this is what a user reopening the
+    conversation much later would receive.
+    """
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    mode(rc.MODE_CANDIDATE)
+    await seed(file_db, provider, 30, name="c2b-history")
+    monkeypatch.setattr("app.api.chat.model_gateway", _AnsweringGateway("An answer."))
+
+    with _as_fixture_principal():
+        provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+        partial = await client.post(
+            "/api/chat",
+            json={"message": "what is the reforestation levy policy?", "mode": "knowledge"},
+        )
+        assert partial.status_code == 200, partial.text
+        partial_body = partial.json()
+        conversation_id = partial_body["conversation_id"]
+        notice = partial_body["coverage_notice"]
+        assert notice is not None, "the first request must be partial for this test to mean anything"
+        # The live answer stays clean: the user sees the warning once, as a notice, not twice.
+        assert notice["message"] not in partial_body["answer"]
+
+        replayed = await _replayed_messages(client, conversation_id)
+        assistant = [message for message in replayed if message["role"] == "assistant"]
+        assert len(assistant) == 1
+        assert assistant[0]["coverage_notice"] == notice, (
+            "history must expose the same qualification the live answer was given with; "
+            f"persisted_content={assistant[0]['content']!r}"
+        )
+        assert assistant[0]["content"].endswith(notice["message"]), (
+            "the persisted turn must carry the qualification in the text it was given with, so a "
+            "client that ignores the new field still cannot read it as a complete answer"
+        )
+
+        # A complete request in the same conversation. Legacy mode checks the whole source set, so
+        # this turn is genuinely complete and must not inherit anything from the partial one.
+        mode(rc.MODE_LEGACY)
+        provider.access_error = None
+        complete = await client.post(
+            "/api/chat",
+            json={
+                "message": "and the levy rate?",
+                "mode": "knowledge",
+                "conversation_id": conversation_id,
+            },
+        )
+        assert complete.status_code == 200, complete.text
+        assert complete.json()["coverage_notice"] is None
+
+        replayed = await _replayed_messages(client, conversation_id)
+        assistant = [message for message in replayed if message["role"] == "assistant"]
+        assert len(assistant) == 2
+        assert assistant[0]["coverage_notice"] == notice, (
+            "the earlier partial turn must stay qualified after a later complete turn"
+        )
+        assert assistant[1]["coverage_notice"] is None, (
+            "a complete turn must not inherit the previous turn's qualification"
+        )
+        # Legacy byte parity: a complete legacy answer is persisted exactly as it was returned.
+        assert assistant[1]["content"] == complete.json()["answer"]
+        assert "Coverage note:" not in assistant[1]["content"]
+
+
+async def test_a_failed_model_call_leaves_no_phantom_coverage_notice(
+    client, file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """A 502 must not persist an assistant turn, so it cannot persist a qualification either."""
+    from app.services.connectors.base import ConnectorAuthUnavailable
+    from app.services.model_gateway import ModelGatewayError
+
+    class _FailingGateway:
+        async def chat(self, messages, **kwargs):
+            raise ModelGatewayError("provider refused")
+
+    mode(rc.MODE_CANDIDATE)
+    await seed(file_db, provider, 30, name="c2b-phantom")
+    monkeypatch.setattr("app.api.chat.model_gateway", _FailingGateway())
+
+    with _as_fixture_principal():
+        provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+        failed = await client.post(
+            "/api/chat", json={"message": "what is the policy?", "mode": "knowledge"}
+        )
+        assert failed.status_code == 502, failed.text
+
+        listing = await client.get("/api/conversations")
+        assert listing.status_code == 200, listing.text
+        for conversation in listing.json():
+            for message in await _replayed_messages(client, conversation["id"]):
+                assert message.get("coverage_notice") is None, (
+                    "a failed model call must not leave a qualification attached to a turn"
+                )
+                assert "Coverage note:" not in message["content"]
