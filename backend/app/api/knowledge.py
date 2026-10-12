@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ from app.services.document_policy import (
     visible_documents,
 )
 from app.services.knowledge import KnowledgeEngineError, knowledge_engine
+from app.services.retrieval_candidates import MAX_REQUEST_CHECK_CAP
 
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -69,6 +70,7 @@ def _owned(principal: Principal):
 
 @router.get("/documents", response_model=list[DocumentOut])
 async def list_documents(
+    response: Response,
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require(Permission.KNOWLEDGE_READ)),
 ):
@@ -76,8 +78,16 @@ async def list_documents(
     # member sees the tenant's public/internal documents; confidential and
     # highly-restricted require explicit authorization, and connector content
     # also passes the connector gate inside governed_tenant_documents.
-    documents = await governed_tenant_documents(db, access_from_principal(principal))
-    return [_document_out(document) for document in documents]
+    from app.services.retrieval_candidates import governed_candidates
+
+    candidate_set = await governed_candidates(db, access_from_principal(principal), query="")
+    if candidate_set.is_partial:
+        # Backward-compatible signal for existing clients of this LIST contract: the body shape is
+        # unchanged, and a client that understands the header learns the listing is not exhaustive
+        # instead of having to infer it. Coarse and non-enumerating: a reason code, no identifiers.
+        response.headers["X-OpenJM-Coverage"] = "partial"
+        response.headers["X-OpenJM-Coverage-Reason"] = candidate_set.reason or "partial"
+    return [_document_out(document) for document in candidate_set.documents]
 
 
 class DocumentCatalogPageOut(BaseModel):
@@ -89,6 +99,10 @@ class DocumentCatalogPageOut(BaseModel):
     partial: bool
     notice: dict[str, Any] | None
     next_cursor: str | None = None
+    # Native sources are emitted on the first page only, so a caller continuing with a cursor knows
+    # whether this page is the whole catalog view or connector continuation only.
+    native_included: bool = True
+    continuation_available: bool = False
 
 
 @router.get("/documents/page", response_model=DocumentCatalogPageOut)
@@ -100,12 +114,14 @@ async def list_documents_page(
         description=(
             "Continuation cursor from a previous page. Repeat the request with this value to "
             "continue; omit it to start. A cursor is bound to this principal, this tenant and "
-            "this scope, and an invalid or expired one is refused."
+            "this scope, and an invalid or expired one is refused. Repeating WITHOUT a cursor "
+            "starts a fresh walk; a cursor resumes catalog checking only, never an earlier answer."
         ),
     ),
     check_cap: int = Query(
         default=256,
         ge=1,
+        le=MAX_REQUEST_CHECK_CAP,
         description="Provider authorization checks permitted for this page.",
     ),
 ):
@@ -120,15 +136,27 @@ async def list_documents_page(
     starts a fresh walk, which is the correct meaning of a new request, and ``next_cursor`` is
     only present when work actually remains.
     """
+    from app.services.connectors.candidate_authorization import CursorError
     from app.services.retrieval_candidates import governed_candidates
 
-    candidate_set = await governed_candidates(
-        db,
-        access_from_principal(principal),
-        query="",
-        check_cap=check_cap,
-        cursor=cursor,
-    )
+    try:
+        candidate_set = await governed_candidates(
+            db,
+            access_from_principal(principal),
+            query="",
+            check_cap=check_cap,
+            cursor=cursor,
+            # Native sources are emitted on the first page only, so continuation cannot duplicate
+            # them, and connector pages are the pages that can genuinely be incomplete.
+            include_native=cursor is None,
+        )
+    except CursorError as exc:
+        # A refused cursor is a client error with a coarse, non-enumerating message. It must not
+        # surface as an unhandled 500, and it must not disclose why in detail.
+        raise HTTPException(
+            status_code=400,
+            detail="The continuation cursor is not valid for this request.",
+        ) from exc
     return DocumentCatalogPageOut(
         items=[_document_out(document) for document in candidate_set.documents],
         mode=candidate_set.mode,
@@ -136,6 +164,8 @@ async def list_documents_page(
         partial=candidate_set.is_partial,
         notice=candidate_set.notice_for_user(),
         next_cursor=candidate_set.cursor,
+        native_included=cursor is None,
+        continuation_available=candidate_set.cursor is not None,
     )
 
 

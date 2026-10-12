@@ -340,7 +340,9 @@ async def test_partial_coverage_is_reported_and_the_notice_leaks_nothing(
 
     # Complete coverage says nothing at all, and never claims partial.
     async with file_db() as db:
-        complete = await rc.governed_candidates(db, access, query="policy", check_cap=4096)
+        complete = await rc.governed_candidates(
+            db, access, query="policy", check_cap=rc.MAX_REQUEST_CHECK_CAP
+        )
     assert complete.coverage.value == "complete"
     assert complete.notice_for_user() is None
 
@@ -474,7 +476,7 @@ async def test_the_request_cap_is_never_overshot_with_a_non_divisible_page_budge
     # A cap that exactly covers the corpus is complete, and says nothing.
     async with file_db() as db:
         complete = await rc.governed_candidates(
-            db, access_for(), query="policy", check_cap=1024, page_budget=7
+            db, access_for(), query="policy", check_cap=rc.MAX_REQUEST_CHECK_CAP
         )
     assert complete.provider_checks == 150
     assert complete.coverage.value == "complete"

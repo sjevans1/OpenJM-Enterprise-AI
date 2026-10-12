@@ -118,7 +118,7 @@ async def collect(
     n: int,
     candidate: bool,
     mode,
-    check_cap: int = 4096,
+    check_cap: int = rc.DEFAULT_REQUEST_CHECK_CAP,
     page_budget: int = 32,
     samples: int = 1,
     query: str = "policy",
@@ -229,12 +229,20 @@ async def test_scenario_reachability_legacy_versus_candidate(
     assert legacy["authorized_documents_reachable"] == legacy_expected, (
         f"legacy reached {legacy['authorized_documents_reachable']}, expected {legacy_expected}"
     )
-    assert cand["authorized_documents_reachable"] == n, (
-        f"candidate reached {cand['authorized_documents_reachable']} of {n}"
+    # F1: measured at the REAL application default cap (256), not an elevated diagnostic budget.
+    # Beyond the default the first user request is partial by design, and the remainder requires
+    # continuation rather than being counted as reachable in one request.
+    expected_candidate = min(n, rc.DEFAULT_REQUEST_CHECK_CAP)
+    assert cand["authorized_documents_reachable"] == expected_candidate, (
+        f"candidate reached {cand['authorized_documents_reachable']}, expected {expected_candidate} "
+        f"at the default cap of {rc.DEFAULT_REQUEST_CHECK_CAP}"
     )
-    assert cand["authorized_documents_reachable"] >= legacy["authorized_documents_reachable"]
+    if n > rc.DEFAULT_REQUEST_CHECK_CAP:
+        assert cand["coverage"] == "partial", "beyond the default cap coverage must be partial"
+        assert cand["more_work_remains"] is True, "remaining work must advertise continuation"
+    else:
+        assert cand["coverage"] == "complete"
     assert not (legacy["reachable_ids"] - cand["reachable_ids"]), "candidate must not lose a doc"
-    assert legacy["authorized_documents_reachable"] - len(cand["reachable_ids"]) <= 0
 
 
 async def test_scenario_mixed_native_and_connector_corpus(
@@ -379,6 +387,57 @@ async def test_scenario_beyond_256_continuation(file_db, connector, provider, kn
     )
     assert beyond in seen
     assert len(seen) == total
+
+
+async def test_diagnostic_full_walk_at_the_declared_maximum_cap(
+    file_db, connector, provider, knowledge, mode
+):
+    """Diagnostic, clearly separated from the default-cap result above.
+
+    Runs at MAX_REQUEST_CHECK_CAP, the declared safe upper bound, to show that the full corpus is
+    reachable when a caller is explicitly allowed the budget. It is NOT the default user
+    experience: at the default 256 cap a 400 resource corpus is partial and requires continuation.
+    """
+    total = 400
+    await prepare(file_db, provider, total, name="m-diag")
+    mode(rc.MODE_CANDIDATE)
+    async with file_db() as db:
+        diagnostic = await rc.governed_candidates(
+            db,
+            access_for(),
+            query="policy",
+            check_cap=rc.MAX_REQUEST_CHECK_CAP,
+            page_budget=32,
+        )
+    report(
+        {
+            "scenario": "diagnostic full walk at the declared maximum cap",
+            "cap_used": rc.MAX_REQUEST_CHECK_CAP,
+            "default_cap": rc.DEFAULT_REQUEST_CHECK_CAP,
+            "fixture_resources": total,
+            "reachable": len(diagnostic.documents),
+            "provider_calls": diagnostic.provider_checks,
+            "coverage": diagnostic.coverage.value if diagnostic.coverage else None,
+        }
+    )
+    assert len(diagnostic.documents) == total
+    assert diagnostic.provider_checks == total
+    assert diagnostic.provider_checks <= rc.MAX_REQUEST_CHECK_CAP
+
+
+async def test_the_declared_maximum_cap_is_enforced_and_cannot_be_bypassed(
+    file_db, connector, provider, knowledge, mode
+):
+    """The ceiling is enforced in the service, not only at the API, so no caller can bypass it."""
+    await prepare(file_db, provider, 5, name="m-ceiling")
+    mode(rc.MODE_CANDIDATE)
+    async with file_db() as db:
+        with pytest.raises(ValueError):
+            await rc.governed_candidates(
+                db, access_for(), query="policy", check_cap=rc.MAX_REQUEST_CHECK_CAP + 1
+            )
+        with pytest.raises(ValueError):
+            await rc.governed_candidates(db, access_for(), query="policy", check_cap=0)
 
 
 # =============================================== latency against the agreed threshold

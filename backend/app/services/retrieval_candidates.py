@@ -75,6 +75,12 @@ DEFAULT_REQUEST_CHECK_CAP = 256
 # if every page is scan-bound rather than budget-bound.
 MAX_TRAVERSAL_PAGES = 64
 
+# Hard ceiling on the provider authorization checks a single request may request. Enforced HERE,
+# not only at the API, so no caller can bypass the per-request guard by calling the service
+# directly. It is a ceiling, not a default: the default remains DEFAULT_REQUEST_CHECK_CAP (256) and
+# the legacy corpus bound of 100 is untouched.
+MAX_REQUEST_CHECK_CAP = 1024
+
 COVERAGE_NOTICE_CODE = "partial_coverage"
 
 # One fixed, application-generated message per cause. Fixed prose on purpose: a notice built from
@@ -195,6 +201,7 @@ async def governed_candidates(
     page_budget: int = DEFAULT_PAGE_BUDGET,
     connector_instance_ids: Sequence[str] | None = None,
     cursor: str | None = None,
+    include_native: bool = True,
 ) -> CandidateSet:
     """The governed candidate set for an exploratory request.
 
@@ -222,6 +229,11 @@ async def governed_candidates(
 
     if check_cap <= 0:
         raise ValueError("check_cap must be positive; the provider budget is always finite")
+    if check_cap > MAX_REQUEST_CHECK_CAP:
+        raise ValueError(
+            f"check_cap {check_cap} exceeds MAX_REQUEST_CHECK_CAP {MAX_REQUEST_CHECK_CAP}; "
+            "a single request is bounded"
+        )
     if page_budget <= 0:
         raise ValueError("page_budget must be positive")
 
@@ -273,12 +285,15 @@ async def governed_candidates(
 
     # The same intersection rule as the legacy gate: native sources pass on local policy alone,
     # connector-origin sources need both gates. Ordering is preserved from the legacy ordering.
-    keep = {
-        document.id
-        for document in local_visible
-        if document.id not in connector_origin
-    } | allowed_connector_documents
-
+    native_documents = [
+        document for document in local_visible if document.id not in connector_origin
+    ]
+    # Native sources need no authorization traversal, and re-emitting them on every continuation
+    # page would duplicate them, so they belong to the FIRST page only. A caller continuing with a
+    # cursor receives connector pages, which are the pages that can actually be incomplete.
+    keep = set(allowed_connector_documents)
+    if include_native:
+        keep |= {document.id for document in native_documents}
     documents = [document for document in local_visible if document.id in keep]
     partial = coverage is CoverageStatus.PARTIAL
     return CandidateSet(

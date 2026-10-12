@@ -274,6 +274,14 @@ async def chat(
     await db.commit()
     await db.refresh(assistant_message)
 
+    # CA2-B E2/F5: attach this request's coverage notice to the plan before serialising it, so a
+    # partial source check is visible in the user-facing response and not only in trace metadata.
+    # Application generated, never model invented, and it survives a skipped or failed model call
+    # because it is set here rather than derived from model output.
+    from app.core.context import current_coverage_notice
+
+    plan.coverage_notice = current_coverage_notice()
+
     return ChatResponse(
         conversation_id=conversation.id,
         message_id=assistant_message.id,
@@ -282,4 +290,5 @@ async def chat(
         mode=plan.requested_mode,
         evidence=plan.evidence,
         artifacts=artifacts,
+        coverage_notice=plan.coverage_notice,
     )

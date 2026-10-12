@@ -72,6 +72,10 @@ class ChatResponse(BaseModel):
     mode: ExecutionMode = "chat"
     evidence: list[Evidence] = Field(default_factory=list)
     artifacts: list[ChatArtifactOut] = Field(default_factory=list)
+    # CA2-B: application-generated partial-coverage notice. Optional with a default, so the
+    # response contract is additive and existing clients are unaffected. Present only when the
+    # answer was produced from a partially checked source set.
+    coverage_notice: dict | None = None
 
 
 class MessageOut(BaseModel):

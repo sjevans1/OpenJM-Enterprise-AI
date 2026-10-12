@@ -91,6 +91,9 @@ class ExecutionPlan:
     requested_mode: ExecutionMode = "chat"
     structured_result: dict | None = None
     trace_ids: list[str] = field(default_factory=list)
+    # CA2-B: the application-generated partial-coverage notice for this execution, if the source
+    # set could not be fully checked. None means nothing needs saying.
+    coverage_notice: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -500,21 +503,37 @@ class OpenJMOrchestrator:
                 )
                 for doc in documents
             ]
+            notice = (
+                candidate_set.notice_for_user()
+                if candidate_set is not None and candidate_set.is_partial
+                else None
+            )
             if documents:
                 names = "\n".join(f"- {doc.original_name}" for doc in documents)
                 answer = f"I currently have access to these indexed documents:\n{names}"
-            elif candidate_set is not None and candidate_set.is_partial:
-                # CA2-B B1: an empty list produced by incomplete searching must never be
+                if notice is not None:
+                    # A NONEMPTY partial list must not look exhaustive.
+                    answer = f"{answer}\n\n{notice['message']}"
+            elif notice is not None:
+                # CA2-B B-1: an empty list produced by incomplete searching must never be
                 # presented as a confirmed absence of documents.
-                notice = candidate_set.notice_for_user() or {}
                 answer = (
                     "I could not check every source in this request, so I cannot confirm whether "
-                    "you have indexed documents available. " + notice.get("message", "")
+                    f"you have indexed documents available. {notice['message']}"
                 ).strip()
             else:
                 answer = "There are currently no indexed documents available to you."
+            from app.core.context import set_coverage_notice
+
+            set_coverage_notice(notice)
             return evidence, answer, []
 
+        # CA2-B B-3 / E1: hand the candidate set this request already produced to the tool, so the
+        # connector corpus is not authorized a second time for the same logical request. For a
+        # pinned scope the handoff is deliberately withheld, because the tool must revalidate the
+        # exact scope immediately before evidence consumption, including a revocation between the
+        # preflight and the retrieval itself.
+        exploratory = scope is None
         knowledge_result = await tool_registry.execute(
             "knowledge.search",
             ToolContext(
@@ -529,9 +548,18 @@ class OpenJMOrchestrator:
                 report_scope=scope,
                 budget=budget,
                 access=access,
+                candidate_documents=documents if exploratory else None,
+                coverage_notice=(
+                    candidate_set.notice_for_user()
+                    if exploratory and candidate_set is not None
+                    else None
+                ),
             ),
             {"query": message},
         )
+        from app.core.context import set_coverage_notice
+
+        set_coverage_notice(knowledge_result.trace_metadata.get("coverage_notice"))
         return knowledge_result.evidence, None, knowledge_result.trace_ids
 
     # ------------------------------------------------------------------
