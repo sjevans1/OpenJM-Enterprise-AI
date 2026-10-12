@@ -111,7 +111,7 @@ calls, so at that size the candidate adds no provider work.
 | `connector.search` match beyond 200 | **PASS (CA2-C)** | rank 281 returned |
 | `connector.search` truthful incompleteness | **PASS (CA2-C)** | capped and truncated cases |
 | Live DB-GPT/Chroma verification | **BLOCKED** | no non-production stack, see J |
-| Full CI on all three heads | **PARTIAL** | CA2-C green; CA2-B re-running at `6d532eb` |
+| Full CI on all three heads | **PASS** | CA2-A `38220473733`, CA2-B `38220103969`, CA2-C `38218611479`, all success |
 | Merge | **NOT DONE** | owner hold binding |
 
 ---
@@ -184,19 +184,28 @@ Local, at the heads above:
 | Regression selection, CA2-C touched area | 165 passed |
 | ruff `E9,F63,F7,F82` | clean |
 
-CI, `OpenJM CI` workflow:
+CI, `OpenJM CI` workflow. **All three heads are green:**
 
-- **CA2-C `9d30203`: run `38218611479`, success.** Frontend and Backend both green.
-- **CA2-B `46a4b64`: run `38217916353`, failure** - `2 failed, 1488 passed, 19 subtests passed`. Both
-  failures were mine: changing `_ready_documents` from returning a `list` to a `tuple` broke
-  `tests/test_vs5_tenant_isolation.py::test_vector_retrieval_input_is_tenant_scoped` and
-  `::test_mid_deletion_document_is_not_retrievable` with `'list' object has no attribute 'id'`. The
-  CA2-B work moved to a new `_ready_documents_with_context` and the original method keeps its
-  contract. **Fixed at `6d532eb`; CI re-running at that head.**
-- Earlier CA2-B runs at `e7974fd` and `4af65ae` also failed; intermediate heads were cancelled as
-  superseded.
-- The 1.25x latency gate **passed on the runner** in that same run, so the optimization is not a
-  workstation-only result.
+| Head | Run | Result |
+| --- | --- | --- |
+| CA2-A `8557487` | `38220473733` | **success** (Backend / Python 3.11, Frontend / Node 22) |
+| CA2-B `01041c3` | `38220103969` | **success** (Backend / Python 3.11, Frontend / Node 22) |
+| CA2-C `9d30203` | `38218611479` | **success** (Backend / Python 3.11, Frontend / Node 22) |
+
+The CA2-A head had never had CI in this window, so a run was dispatched on its branch to close
+that gap.
+
+**The failure that mattered, and its repair.** CA2-B `46a4b64` (run `38217916353`) failed:
+`2 failed, 1488 passed, 19 subtests passed`. Both failures were mine. Changing `_ready_documents`
+from returning a `list` to a `tuple` broke
+`tests/test_vs5_tenant_isolation.py::test_vector_retrieval_input_is_tenant_scoped` and
+`::test_mid_deletion_document_is_not_retrievable` with `'list' object has no attribute 'id'`. The
+CA2-B work moved to a new `_ready_documents_with_context` and the original method keeps its
+contract, verified by the green run at `01041c3`. Earlier CA2-B runs at `e7974fd` and `4af65ae`
+also failed; intermediate heads were cancelled as superseded.
+
+The 1.25x latency gate **passed on the runner** in these runs, so the batched-read optimization is
+not a workstation-only result.
 
 **No live-stack test exists.** The vector engine is stubbed throughout, so retrieval is proven at the
 candidate-selection, evidence-integrity and tool-boundary level, not against a live index.
@@ -221,8 +230,9 @@ restores the previous behaviour.
    behind it; Chroma is installable but the engine drives it through DB-GPT's HTTP API. A disposable
    equivalent requires provisioning services and models, which needs owner approval. No fixture
    result is offered as a substitute.
-2. **CI for CA2-B at `6d532eb` was re-running** at the time of writing. The CA2-A head has not had a
-   fresh CI run in this window.
+2. **CI is green on all three heads** (see H). The CA2-B diff has not been rebased onto current
+   `main`; `main` has advanced to `bc0c458` since CA2 began, so the final merge strategy must
+   account for that rather than assuming a fast-forward.
 3. **CA2-B's diff touches the CA2-A module** for the batched-read optimization. No contract element
    changed and CA2-A's 78 tests pass, but CA2-A is the accepted artifact, so this is flagged.
 4. **`connector.search` scans rather than seeks**: `LIKE '%x%'` cannot use a btree index, so the query
