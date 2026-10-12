@@ -1,6 +1,9 @@
 # OpenJM Enterprise AI — Handoff Readiness
 
-Observed at accepted `main@c5ed073a332da7a8dd120dc3d85bf8e2328a0511` on 2026-10-10.
+Observed at accepted `main@6243f485ca535df9f619559ff1e03ba15e1e9142`.
+
+This page is the current handoff position. `docs/ZTK1_ACCEPTANCE.md` is the final
+zero-tribal-knowledge handoff evidence package.
 
 ## Current position
 
@@ -12,22 +15,32 @@ See `docs/ACCEPTANCE_MATRIX.md` for the current evidence map.
 
 | Area | Status | Current position |
 | --- | --- | --- |
-| Core product functionality | READY FOR FINAL QUALIFICATION | Major Issue #45 feature lanes are accepted. |
-| Security/governance | READY FOR FINAL QUALIFICATION | Tenant/group/classification enforcement, report/artifact authorization and delegated support have accepted automated evidence. |
-| Productization / installer | OPEN | REL1 implementation remains. |
-| Final browser journeys | NOT RUN | Repeat end-user, steward, client-admin and OpenJM-operator golden journeys against the packaged candidate. |
-| Live OIDC/PostgreSQL support path | NOT RUN | #72 automated semantics accepted; live production-like walkthrough remains. |
-| Real vector/RAG authoritative-candidate path | NOT RUN | #75 automated semantics accepted; real runtime qualification remains. |
-| Rahkia application cutover | DEFERRED | Specialist integration follows product completion. |
+| Core product functionality | COMPLETE | Major Issue #45 feature lanes (including #40-#44 surfaces) are accepted. |
+| Security/governance | COMPLETE | Tenant/group/classification enforcement, report/artifact authorization and delegated support have accepted automated evidence, plus bounded live sanity checks. |
+| Productization / installer | COMPLETE | REL1 implementation, package capability and the canonical production installer are accepted. |
+| Final browser journeys | COMPLETE | End-user, steward, client-admin and OpenJM-operator journeys executed against the production-installed artifact (frozen REL1 artifact `709ce47b`). |
+| Live OIDC/PostgreSQL support path | COMPLETE | Live Keycloak 26.7.4 OIDC authorization-code + PKCE against PostgreSQL 16.15 on a clean production host. |
+| Real vector/RAG authoritative-candidate path | COMPLETE | Knowledge ingestion/indexing, governed retrieval and the unauthorized negative are accepted. |
+| Detailed readiness under DB outage (D1) | COMPLETE | `/api/ready/detail` returns a bounded component report instead of 500; validated live and closed via Issue #105 / PR #106. |
+| Rahkia application cutover | DEFERRED | Deliberate product decision. The only explicitly deferred specialist phase. |
 | Workspace boundary | OK | Workspace remains a standalone repository/product. |
-| Release identity consistency | IN REL1-A | Canonical runtime/backend/frontend/npm-lock version is normalized to 0.2.0 and machine-checked on the REL1-A branch. |
+| Release identity consistency | COMPLETE | Canonical runtime/backend/frontend/npm-lock version is normalized to 0.2.0 and machine-checked. |
+| Handoff qualification (ZTK1) | COMPLETE | Independent zero-tribal-knowledge examination; see `docs/ZTK1_ACCEPTANCE.md`. |
 
-## Remaining useful handoff documentation
+Issue status: **#79 CLOSED / COMPLETED** (clean production host + production-installed
+browser/persona qualification against frozen REL1 artifact `709ce47b`). **#105 CLOSED /
+COMPLETED** (D1 readiness correction). **#104** carries the ZTK1 handoff evidence.
 
-- concise threat model;
-- API/integration index;
-- troubleshooting/incident-response runbook;
-- final release/process runbook;
-- refreshed Rahkia specialist handoff after product completion.
+Evidence boundary: the REL1-B4 clean production/browser live qualification belongs to
+the frozen artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`. Later `main` commits do
+not automatically inherit that specific live-host qualification.
 
-At this snapshot the only open PR is #64, this handoff audit. Historical merged/closed branches may be removed after this PR lands.
+## Remaining documentation
+
+- refreshed Rahkia specialist handoff when that phase starts (explicitly deferred);
+- ordinary doc upkeep as the product evolves.
+
+Reference set for an incoming operator: `README.md` (orientation),
+`docs/INSTALLATION.md`, `docs/CONFIGURATION.md`, `docs/OPERATIONS.md`,
+`docs/BACKUP_RESTORE.md`, `docs/UPGRADE_ROLLBACK.md`, `docs/SECURITY_POSTURE.md`,
+`docs/ACCEPTANCE_MATRIX.md`, `docs/ZTK1_ACCEPTANCE.md`.

@@ -2,6 +2,19 @@
 
 Clean rebuild of the OpenJM enterprise AI platform.
 
+**New here? Start with orientation, not this ledger.** The authoritative operator
+documents are: `docs/INSTALLATION.md` (development vs production install, first
+platform operator), `docs/CONFIGURATION.md`, `docs/OPERATIONS.md` (health,
+readiness, logs, metrics), `docs/BACKUP_RESTORE.md`, `docs/UPGRADE_ROLLBACK.md`,
+`docs/SECURITY_POSTURE.md`, and the acceptance/handoff map in
+`docs/ACCEPTANCE_MATRIX.md` and `docs/ZTK1_ACCEPTANCE.md`.
+
+Current status: the product programme is complete through the REL1 release train.
+Enterprise identity and tenant isolation (VS5), Administration and provisioning
+(#40), knowledge ingestion UX (#42), chat artifacts (#43) and chat-first
+stewardship UX (#44) are delivered and accepted, not future work. The only
+explicitly deferred specialist phase is the Rahkia application cutover.
+
 The previous Hermes-generated repository is treated as reference material only. This repository establishes the product and architecture from scratch around a proven vertical slice rather than a collection of disconnected screens.
 
 ## Vertical Slice 1 — complete
@@ -34,9 +47,9 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 ## Repository workflow
 
-`main` is the accepted baseline through **VS4**. VS1–VS3 and the complete VS4 Saved Reports workflow (immutable snapshots, governed pinned runs/history, bounded CSV/HTML exports, and integrated acceptance/recovery evidence) are merged and accepted.
+The vertical-slice history below is retained for context. The accepted baseline has moved well past it: VS1 through VS8, the BV/M/INF/E lanes, and the REL1 release train are merged and accepted, and the final clean-production-host and browser/persona qualification is complete.
 
-See `docs/PRODUCT_ROADMAP.md` and `docs/VS4_ACCEPTANCE_REPORT.md`. **VS5 — enterprise identity and tenant isolation — is the next product stage.**
+See `docs/PRODUCT_ROADMAP.md` for history and `docs/ACCEPTANCE_MATRIX.md` for the current evidence map.
 
 ## VS8 — self-hosted commercialization readiness
 
@@ -220,7 +233,7 @@ OpenJM exposes only implemented product workflows:
 
 - **Reports** — permission-checked historical snapshots, explicitly confirmed source-pinned fresh runs with immutable history, and governed bounded CSV/HTML exports.
 
-**Automations and Administration remain future capabilities.** VS4-D is validating the assembled Reports workflow; production multi-user identity remains VS5.
+Administration, provisioning and multi-user identity are delivered: production OIDC with tenant isolation, client administration, departments/groups/stewardship and platform operations are all implemented and accepted. See `docs/ACCEPTANCE_MATRIX.md`.
 
 There is no primary Jobs screen and no raw MMR/relevance debugging workflow in the user product.
 
