@@ -1,84 +1,86 @@
 # CA2 final evidence dossier
 
-Repository: `sjevans1/OpenJM-Enterprise-AI`
-Baseline main when CA2 began: `8d6b7d8`. Current main: `390b345` (advanced by other workstreams).
-Status: **NOT MERGED. NOT ACTIVATED. Awaiting owner review.**
+**Status: PROVISIONAL. Awaiting the owner's independent review. NOT merged, NOT activated.**
 
-| Package | PR | Branch | Head | State |
-| --- | --- | --- | --- | --- |
-| CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `8557487` | draft, base `main`, experimentally accepted |
-| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | see PR | draft, stacked on #94 |
-| CA2-C | not created | - | - | not implemented |
+Repository: `sjevans1/OpenJM-Enterprise-AI`
+Baseline when CA2 began: `main@8d6b7d8`. Current `main`: `bc0c458` (advanced by unrelated workstreams).
+
+| Package | PR | Branch | Head | Base | State |
+| --- | --- | --- | --- | --- | --- |
+| CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `8557487` | `main` | draft, experimentally accepted |
+| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `6d532eb` | PR #94 branch | draft |
+| CA2-C search | #100 | `feat/ca2c-search-completeness` | `9d30203` | `main` | draft, **CI green** |
 
 ---
 
 ## A. Executive summary
 
-**Intended fix.** OpenJM's Knowledge candidate set is built by one seam,
-`document_policy.governed_tenant_documents`, which intersects a corpus-wide connector
-authorization gate that stops at 100 checks without ordering. Measured on the frozen baseline
-(150 authorized resources): **100 reachable, 50 never examined, and zero denials recorded for the
-50**, so authorized evidence was silently absent from Knowledge answers.
+**Intended fix.** Two independent silent-omission defects.
 
-**Completed.** CA2-A rebuilt candidate authorization as bounded, resumable, namespace-aware
-traversal plus an exact-source contract and consumption-time revalidation, with truthful coverage
-and guaranteed fail-closed behaviour. CA2-B integrates it behind a flag that defaults to legacy,
-adds user-visible coverage reporting, real catalog continuation, strict pinned-scope
-authorization, and eliminates a duplicate per-request traversal. A comparative measurement
-harness now exists.
+1. The Knowledge candidate set is built through one seam, `governed_tenant_documents`, which
+   intersects a corpus-wide connector authorization gate that stops at 100 checks without ordering.
+   Measured on the frozen baseline at 150 authorized resources: **100 reachable, 50 never examined,
+   zero denials recorded for the 50**, so authorized evidence was silently absent.
+2. `connector.search` applied `.limit(200)` with no match predicate and no ordering, then matched in
+   Python, so the window bounded the *table* rather than the matches. A metadata match beyond
+   position 200 was permanently invisible, with no signal of omission.
 
-**Measurable result (fixture, in-process).** At 150 connector resources: legacy reaches **100**,
-candidate reaches **150**, recovering exactly the 50 that were omitted. At 400: legacy **100**,
-candidate **400**. Mixed native plus connector: legacy **105**, candidate **155**. A body-only
-relevant source past index 100 is now retrieved and cited, which under legacy it is not.
+**Measured result.** At 150 resources the candidate path reaches **150 of 150** where legacy reaches
+**100**, recovering exactly the 50 omitted, and retrieves and cites a body-only-relevant source past
+index 100 that legacy cannot reach at all. `connector.search` now finds a match at rank 281 and
+reports incompleteness truthfully.
 
-**Not completed.** Phases 1B (response-field propagation), 3 (optimization), 4 (CA2-C), the live
-DB-GPT/Chroma smoke test, and full exact-head CI. See section J.
+**Performance.** After one evidence-driven optimization the candidate p95 is **1.03x-1.05x** legacy
+on comparable work against an unchanged **1.25x** threshold (from 1.43x before), and the gate
+**passed on the GitHub runner**, not only locally.
+
+**Open.** Live DB-GPT/Chroma verification is BLOCKED. See J.
 
 ---
 
 ## B. Implementation inventory
 
-CA2-A (`8557487`, PR #94) - `backend/app/services/connectors/candidate_authorization.py`,
+CA2-A (`8557487`, PR #94): `backend/app/services/connectors/candidate_authorization.py`,
 `backend/tests/test_ca2_candidate_authorization.py`, `backend/tests/test_ca2_baseline_measurement.py`,
 `docs/plan/CA2_RETRIEVAL_COMPLETENESS.md`, `docs/plan/CA2_BASELINE_AND_TRACEABILITY.md`.
 
-CA2-B (PR #98) - `backend/app/services/retrieval_candidates.py` (the integration seam),
-`backend/tests/test_ca2b_candidate_integration.py`,
-`backend/tests/test_ca2_measurement_harness.py`, `docs/plan/CA2_B_CONSUMER_MAP.md`, plus additive
-edits to `app/core/config.py`, `app/services/document_policy.py`, `app/services/tools.py`,
-`app/services/orchestrator.py`, `app/api/knowledge.py`.
+CA2-B (PR #98): `backend/app/services/retrieval_candidates.py` (integration seam),
+`backend/tests/test_ca2b_candidate_integration.py`, `backend/tests/test_ca2_measurement_harness.py`,
+`docs/plan/CA2_B_CONSUMER_MAP.md`, plus additive edits to `app/core/config.py`,
+`app/core/context.py`, `app/services/document_policy.py`, `app/services/tools.py`,
+`app/services/orchestrator.py`, `app/api/knowledge.py`, `app/api/chat.py`, `app/schemas.py`, and a
+batched-read optimization inside the CA2-A module.
 
-Affected consumers: Knowledge/Chat/Hybrid retrieval, the `knowledge.search` tool, the document
-catalog, and pinned report scope preflight. Legacy behaviour is unchanged when
-`retrieval_candidate_mode = legacy`, which is the default.
+CA2-C (PR #100): `backend/app/services/actions/connector_tools.py`,
+`backend/tests/test_ca2c_connector_search.py`.
+
+Affected consumers: Knowledge/Chat/Hybrid retrieval, `knowledge.search`, the document catalog, pinned
+report scope preflight, and `connector.search`. Legacy behaviour is unchanged when
+`retrieval_candidate_mode = legacy`, which remains the default.
 
 ---
 
 ## C. Before and after (fixture, in-process, same instance both paths)
 
-| Connector resources | Path | Reachable | Provider calls | SQL statements | DB ms | p50 ms |
-| --- | --- | --- | --- | --- | --- | --- |
-| 80 | legacy | 80 | not counted* | 243 | 79.41 | 251.94 |
-| 80 | candidate | 80 | 80 | 328 | 98.46 | 314.38 |
-| 100 | legacy | 100 | not counted* | 303 | 111.94 | 361.23 |
-| 100 | candidate | 100 | 100 | 410 | 144.47 | 464.04 |
-| 150 | legacy | **100** | not counted* | - | 88.86 | 283.61 |
-| 150 | candidate | **150** | 150 | 612 | 173.73 | 555.51 |
-| 400 | legacy | **100** | not counted* | - | - | - |
-| 400 | candidate | **400** | 400 | - | - | - |
-| mixed 150+5 native | legacy | **105** | - | - | - | - |
-| mixed 150+5 native | candidate | **155** | - | - | - | - |
+| Scenario | Legacy | Candidate | Note |
+| --- | --- | --- | --- |
+| 40 / 80 / 100 resources | complete parity | complete parity | existing workflows preserved |
+| 150 resources | **100** reachable | **150** | the 50 omitted are recovered |
+| 400 resources, default 256 cap | **100** | **256**, partial, continuation advertised | not 400 in one request |
+| 400 resources, diagnostic at MAX cap 1024 | 100 | **400** | labelled diagnostic, not the default |
+| Mixed 150 connector + 5 native | **105** | **155** | native documents unaffected |
+| Body-only relevant source past index 100 | not reachable | retrieved and cited | via the real tool path |
+| Source beyond position 256 | not reachable | reachable by continuation | 300 resource walk |
+| Pinned 75 sources | n/a | 75 authorised | strict exact-source revalidation |
+| `connector.search`, match at rank 281 | invisible | returned | CA2-C |
 
-\* **Measurement gap, stated rather than hidden:** this harness counts provider calls only on the
-candidate path, because the legacy gate performs them inside
-`authorized_connector_document_ids` without exposing a counter. The CA2-A baseline harness
-measured the legacy gate at **exactly 100 provider checks** on a 150 resource corpus, which is a
-separately sourced figure, not one produced by this table.
+**Provider calls per request.** Knowledge and Hybrid each perform **exactly one** exploratory
+traversal (150 checks for 150 resources) against a 256 per-request cap; before the handoff wiring it
+was 2 traversals and 200 calls. At 100 resources legacy and candidate each make **100** provider
+calls, so at that size the candidate adds no provider work.
 
-**Provider calls are the cost driver**, and the candidate does more of them at larger corpora
-because it examines resources the legacy window never reaches. Unit pricing was not available to
-the harness, so no currency estimate is fabricated.
+**SQL and database time per request at 100 resources:** 303 legacy vs **314** candidate (was 410) and
+199 ms vs **221 ms** (was 365 ms).
 
 ---
 
@@ -86,126 +88,169 @@ the harness, so no currency estimate is fabricated.
 
 | Requirement | Verdict | Evidence |
 | --- | --- | --- |
-| No silent omission of authorized resources | **PASS** | 150: candidate 150 vs legacy 100; 400: 400 vs 100 |
-| Recovered body-relevant evidence past index 100 | **PASS** | body-only test: cited by candidate, absent under legacy |
-| Beyond position 256 reachable via continuation | **PASS** | 300 resource walk across pages |
-| Truthful partial coverage with no leaked detail | **PASS** | notice tests; fixed prose per reason, no counts or ids |
-| Empty partial result is not proof of absence | **PASS (answer text)** / **FAIL (response field)** | answer path fixed; `ChatResponse` field not added |
-| GET /documents list contract preserved | **PASS** | response model asserted unchanged |
-| Additive paginated catalog surface | **PASS** | `/documents/page` with sealed cursor |
-| Strict pinned scope for authoritative output | **PASS** | 75 pinned parity; revocation refuses |
+| No silent omission of authorized resources | **PASS** | 150: 150 vs 100; 400: continuation |
+| Recovered body-relevant evidence past index 100 | **PASS** | tool-level test, cited |
+| Beyond position 256 reachable by continuation | **PASS** | 300 resource walk |
+| Truthful partial coverage, no leaked detail | **PASS** | fixed prose per reason; no ids or counts |
+| Nonempty partial result does not look exhaustive | **PASS** | catalog answer appends the notice |
+| Empty partial result is not proof of absence | **PASS** | answer text plus `coverage_notice` |
+| Coverage on the user-visible response | **PASS** | `ChatResponse.coverage_notice`, `ExecutionPlan.coverage_notice` |
+| `GET /documents` list contract preserved | **PASS** | response model asserted; header added, body untouched |
+| Additive paginated catalog, non-duplicating | **PASS** | native first-page-only, `native_included` |
+| Cursor refusal is a 4xx, not a 500 | **PASS** | route converts `CursorError` |
+| Budget ceiling cannot be bypassed | **PASS** | enforced in the service AND at the API |
+| One traversal per logical request | **PASS** | Knowledge and Hybrid, provider-instrumented |
+| Strict exact-source for authoritative scopes | **PASS** | 75 pinned; revocation refuses |
 | Revocation honoured at consumption | **PASS** | strict scope raises after revoke |
-| Tenant isolation | **PASS** | cross-tenant access yields nothing, zero provider calls |
-| Provider outage fails closed and reports | **PASS** | reason `authorization_unavailable`, partial, notice present |
-| Cursor confidentiality, tamper and cross-principal refusal | **PASS** | AEAD sealed; tested for tamper, principal, query change |
-| One candidate traversal per logical request | **PASS (implemented)** / **NOT MEASURED** | provider count across a full orchestrator request not measured |
-| Rollback restores legacy behaviour | **PASS** | flag flip tested, 100 window restored, no migration |
-| p95 within 1.25x on comparable work | **PASS, MARGINAL** | 5-sample harness passes; single-sample comparison at 100 resources is ~1.29x |
-| Zero unauthorized evidence exposure | **PASS** | integrity gate retained and tested |
-| Live vector retrieval verification | **NOT TESTED** | no DB-GPT/Chroma runtime available; stubbed engine only |
-| Full exact-head CI | **NOT TESTED** | not run in this window |
-| CA2-C connector search completeness | **NOT STARTED** | - |
+| Tenant and principal isolation | **PASS** | cross-tenant yields nothing, zero provider calls |
+| Provider outage fails closed and reports | **PASS** | `authorization_unavailable` plus notice |
+| Cursor confidentiality and tamper resistance | **PASS** | AEAD; tamper, principal, query-change refused |
+| Rollback restores legacy behaviour | **PASS** | flag flip tested; no migration |
+| p95 within 1.25x on comparable work | **PASS** | 1.03x / 1.05x, and green on the GitHub runner |
+| Zero accepted functional regressions | **PASS after repair** | CI caught 2; fixed at `6d532eb`; see H |
+| `connector.search` match beyond 200 | **PASS (CA2-C)** | rank 281 returned |
+| `connector.search` truthful incompleteness | **PASS (CA2-C)** | capped and truncated cases |
+| Live DB-GPT/Chroma verification | **BLOCKED** | no non-production stack, see J |
+| Full CI on all three heads | **PARTIAL** | CA2-C green; CA2-B re-running at `6d532eb` |
+| Merge | **NOT DONE** | owner hold binding |
 
 ---
 
 ## E. Security assessment
 
-Tenant isolation, principal isolation, current provider authorization, denial versus unavailable
-semantics, revocation at consumption, classification and group access, cursor confidentiality and
-tamper resistance, strict exact-source authorization, and CA1 non-mutation are all covered by
-passing tests. No information leakage was found through notices, errors or metadata: notices are
-fixed application-generated prose keyed by reason, carrying no counts, identifiers, titles or
-provider detail. An unresolved issue is **not** claimed: see J.
+All passing on fixture evidence: tenant and principal isolation, current provider authorization,
+denial-versus-unavailable semantics, revocation at evidence consumption, classification and group
+access, cursor confidentiality and tamper resistance (AEAD, bound to tenant, principal, query and
+scope), strict exact-source authorization, no partial authoritative reports, and CA1 non-mutation (a
+denial during search does not change lifecycle or permission state). No information leakage was found
+through notices, errors or metadata: notices are fixed application-generated prose keyed by reason,
+carrying no counts, identifiers or titles.
 
 ---
 
 ## F. Compatibility assessment
 
-`GET /documents` is untouched including its `list[DocumentOut]` response model. The catalog
-additions are new fields and a new endpoint. Pinned report ordering was preserved by returning
-the exact-scope result in the existing `created_at DESC` order. Legacy-mode responses are
-byte-identical for the paths tested. Two behaviour changes are deliberate and flagged: the
-catalog-pattern answer no longer claims absence when coverage is partial, and pinned scopes now
-resolve by exact identity rather than from a corpus window.
+| Capability | Status |
+| --- | --- |
+| General Chat, Data, Hybrid routing | unchanged |
+| Knowledge retrieval and evidence integrity | unchanged; the integrity gate is retained |
+| `GET /documents` | body and response model unchanged; additive header only |
+| Pinned reports, ordering, fail-closed | preserved; ordering held at `created_at DESC` |
+| Native document policy semantics | preserved |
+| `connector.search` response keys | preserved; fields added only |
+| `retrieval_candidate_mode = legacy` | byte-identical in the paths tested |
+
+**One deliberate behaviour change, disclosed:** the catalog-pattern answer no longer claims absence
+when coverage is partial, and appends a notice to a nonempty partial list.
+
+**One regression found by CI and repaired:** see H.
 
 ---
 
 ## G. Performance and economics
 
-Fixture latency ratios at comparable work (100 resources, both paths examining 100) passed the
-1.25x p95 gate over 5 samples per path, but **the margin is thin**: a single-sample comparison at
-100 resources measures 464.04 ms candidate against 361.23 ms legacy, roughly **1.29x**, driven by
-**+35% SQL statements** (410 vs 303) from the per-page contract reads and the corpus digest. At
-150 resources the candidate is slower in absolute terms because it performs 50 additional
-authorization checks; that is additional work, not overhead, and should not be read as a
-regression.
+Comparable work, 100 resources, 15 samples, warmup excluded, paths interleaved with alternating
+order, per-request accounting, provider calls counted at the shared adapter:
 
-**The 1.25x target is met only marginally on this evidence and has not been validated on a live
-stack.** Cost tracks provider authorization calls, which rise with the corpus because coverage
-now means what it says. This is the central commercial tradeoff and it needs owner judgement.
+| Stage | legacy p50 / p95 | candidate p50 / p95 | ratio p50 / p95 | SQL |
+| --- | --- | --- | --- | --- |
+| before optimization | 526.39 / 798.84 | 675.90 / 1141.96 | 1.284 / **1.430 FAIL** | 303 vs 410 |
+| after, run 1 | 421.96 / 543.80 | 420.61 / 528.81 | 1.003 / **1.028 PASS** | 303 vs 314 |
+| after, run 2 | 653.74 / 823.50 | 629.59 / 862.59 | 0.963 / **1.047 PASS** | 303 vs 314 |
+| CI, GitHub runner | - | - | **PASS** | - |
+
+**Cost.** The cost driver is provider authorization calls, equal at 100 resources and rising with the
+corpus because coverage now means what it says: at 150 resources the candidate makes 150 checks where
+legacy makes 100, buying the 50 resources legacy never examines. Unit pricing for the provider is
+unavailable to this harness, so **no currency estimate is fabricated**. SQL and database time carry a
+small residual overhead, about +3.6% statements and +11% database time.
+
+Latency figures are in-process SQLite with a stubbed vector engine. They are decision-grade for
+comparing the two paths on identical work, and are **not** production latency figures.
 
 ---
 
 ## H. Test and CI evidence
 
+Local, at the heads above:
+
 | Suite | Result |
 | --- | --- |
 | CA2-A contract | 78 passed |
-| CA2-B integration | 14 passed |
-| CA2 measurement harness | 16 passed |
-| CA1 and connector security | 42 passed |
-| Regression selection over touched seams | 182 passed |
-| ruff E9,F63,F7,F82 | clean |
+| CA2-B integration plus measurement harness | 34 passed |
+| CA2-C search | 13 passed |
+| `test_vs5_tenant_isolation.py` | 11 passed |
+| Regression selection, CA2-B touched seams | 182 passed |
+| Regression selection, CA2-C touched area | 165 passed |
+| ruff `E9,F63,F7,F82` | clean |
 
-Environment: mocked, in-process, sqlite, stubbed vector engine, no network, no model calls. All
-timings are fixture timings. **Full exact-head CI was not run**, and no live-stack or DB-GPT/Chroma
-result exists. No GitHub Actions run IDs are reported because none were produced in this window.
+CI, `OpenJM CI` workflow:
+
+- **CA2-C `9d30203`: run `38218611479`, success.** Frontend and Backend both green.
+- **CA2-B `46a4b64`: run `38217916353`, failure** - `2 failed, 1488 passed, 19 subtests passed`. Both
+  failures were mine: changing `_ready_documents` from returning a `list` to a `tuple` broke
+  `tests/test_vs5_tenant_isolation.py::test_vector_retrieval_input_is_tenant_scoped` and
+  `::test_mid_deletion_document_is_not_retrievable` with `'list' object has no attribute 'id'`. The
+  CA2-B work moved to a new `_ready_documents_with_context` and the original method keeps its
+  contract. **Fixed at `6d532eb`; CI re-running at that head.**
+- Earlier CA2-B runs at `e7974fd` and `4af65ae` also failed; intermediate heads were cancelled as
+  superseded.
+- The 1.25x latency gate **passed on the runner** in that same run, so the optimization is not a
+  workstation-only result.
+
+**No live-stack test exists.** The vector engine is stubbed throughout, so retrieval is proven at the
+candidate-selection, evidence-integrity and tool-boundary level, not against a live index.
 
 ---
 
 ## I. Rollback
 
 Tested, not documented: setting `retrieval_candidate_mode` to `legacy` restores the 100-resource
-window, `coverage=None`, no notice and zero candidate provider calls, with no migration,
-reindexing or state change. Asserted in
+window, `coverage = None`, no notice, and zero candidate provider calls, with no migration,
+reindexing or irreversible state change. Asserted in
 `test_rollback_to_legacy_restores_previous_behaviour`.
+
+CA2-C needs no flag: it is a correctness fix inside the existing tool, and reverting the commit
+restores the previous behaviour.
 
 ---
 
 ## J. Outstanding issues and limitations
 
-1. **B1 incomplete.** The partial-coverage notice reaches the catalog response and the
-   catalog-pattern answer text, but is **not** propagated to `ExecutionPlan` or `ChatResponse`, so
-   an HTTP Chat or Knowledge answer does not yet carry the notice as structured data.
-2. **Legacy provider calls are not counted** by the measurement harness (see C).
-3. **p95 margin is thin and fixture-only.** ~1.29x on a single-sample comparison at 100
-   resources. The 5-sample gate passed, but this is not comfortable headroom and is not a
-   production measurement.
-4. **No live DB-GPT/Chroma verification.** The end-to-end retrieval proof is at the
-   candidate-selection and evidence-integrity boundary with the engine stubbed. This remains an
-   unresolved acceptance gate.
-5. **Full exact-head CI not run.**
-6. **Phase 3 optimization not performed.** The duplicate-SQL and per-candidate authorization
-   overhead identified above were measured but not optimized.
-7. **CA2-C not started.**
-8. **B3 saving is implemented but not measured** across a complete orchestrator request.
+1. **Live DB-GPT/Chroma verification: BLOCKED.** DB-GPT is a separate serving stack with a model
+   behind it; Chroma is installable but the engine drives it through DB-GPT's HTTP API. A disposable
+   equivalent requires provisioning services and models, which needs owner approval. No fixture
+   result is offered as a substitute.
+2. **CI for CA2-B at `6d532eb` was re-running** at the time of writing. The CA2-A head has not had a
+   fresh CI run in this window.
+3. **CA2-B's diff touches the CA2-A module** for the batched-read optimization. No contract element
+   changed and CA2-A's 78 tests pass, but CA2-A is the accepted artifact, so this is flagged.
+4. **`connector.search` scans rather than seeks**: `LIKE '%x%'` cannot use a btree index, so the query
+   examines the tenant's connector rows. Bounded in rows returned, not in rows examined, and not
+   measured at production scale.
+5. **Non-ASCII case folding** in the CA2-C SQL predicate may differ from Python's; the Python matcher
+   is retained as authoritative, so the predicate can only narrow.
+6. **`connector.search` has no cursor continuation**; incompleteness is reported instead, which the
+   mandate permits for this slice.
+7. **No frontend changes** were required or made, so the frontend job is a no-op pass.
 
 ---
 
 ## K. Final recommendation
 
-**REVISE.**
+**REVISE — one item, then accept for owner merge review.**
 
-The functional core is sound and evidenced: silent omission is eliminated, coverage is truthful,
-authoritative scopes are exact, revocation and tenant isolation hold, and rollback is tested. The
-measured benefit is material (150 of 150 instead of 100 of 150, with recovered body-relevant
-evidence that legacy cannot reach at all).
+The engineering is substantially complete and evidenced: both silent-omission defects are fixed and
+measured, coverage is truthful and reaches the user-visible response, authoritative scopes are exact,
+the single-traversal property is proven at request level for Knowledge and Hybrid, and the 1.25x
+performance gate **passes on comparable work, confirmed by CI** rather than only by fixture runs. The
+regression CI caught was mine, is understood, and is repaired.
 
-It is not yet a release candidate because three acceptance gates remain open: the p95 margin on
-comparable work is thin and only fixture-measured, user-visible coverage is not yet wired through
-the HTTP response, and no live-stack retrieval verification exists. The realistic path to
-acceptance is bounded work in this order: complete the Phase 1B response propagation, optimize the
-duplicate SQL and per-candidate authorization overhead and re-measure the ratio, then obtain live
-DB-GPT/Chroma evidence on a non-production stack.
+The remaining item is not engineering: **live DB-GPT/Chroma verification is BLOCKED** on an
+environment I am not authorized to provision. Until that is either provided or explicitly waived by
+the owner, this package's acceptance rests on fixture evidence with that limitation recorded, and I do
+not describe the live gate as passed.
 
-A recommendation is not permission to merge, and nothing here is merged or activated.
+Secondary: confirm the re-run CI at `6d532eb` is green, and obtain a fresh CI run on the CA2-A head.
+
+**A recommendation is not permission to merge.** Nothing here is merged or activated.
