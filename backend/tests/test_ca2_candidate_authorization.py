@@ -543,6 +543,11 @@ async def test_exact_scope_requires_some_identity(file_db, connector, provider, 
             await ca.authorize_exact_candidates(
                 db, access=access_for(), resource_refs=[ca.CandidateRef("i", "e")], budget=0
             )
+        # An empty request is a caller bug for a pinned scope, not a satisfied one.
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(db, access=access_for(), resource_refs=[])
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(db, access=access_for(), document_ids=[])
 
 
 async def test_exact_scope_deduplicates_repeated_identities(
@@ -670,6 +675,12 @@ async def test_revocation_cannot_survive_into_an_authoritative_output(
     assert first_id not in current, "a revoked authorization survived into the output"
     assert current == with_revoked - {first_id}
     assert current != with_revoked
+
+    # And the authoritative accessor must refuse outright rather than emit the subset: a pinned
+    # report that requested every one of these sources must not silently drop the revoked one.
+    with pytest.raises(ca.StrictScopeError) as exc:
+        ca.require_strict_scope(revalidated)
+    assert exc.value.reason == ca.REASON_STRICT_DENIED
 
 
 async def test_a_resumable_traversal_is_never_authoritative(
@@ -1061,3 +1072,206 @@ async def test_budget_must_be_positive(file_db, connector, provider, knowledge):
             await ca.authorize_candidates(
                 db, access=access_for(), query="q", budget=1, max_scan_rows=0
             )
+
+
+# ================= strict exact-scope semantics: decisions versus authorization
+
+
+async def test_partially_revoked_pinned_scope_cannot_silently_exclude_the_revoked_source(
+    file_db, connector, provider, knowledge
+):
+    """Correction 1: a completed decision pass is not a satisfied pinned scope.
+
+    Every source is decided, so coverage is COMPLETE. Three sources are revoked, so the pinned
+    requirement is NOT met. Treating the two as the same thing is how an authoritative output
+    would silently emit 9 of the 12 requested sources.
+    """
+    instance_id = await seed_resources(file_db, provider, 12, name="c-strict-revoked")
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(12)]
+    for ext in ("m002", "m005", "m009"):
+        provider.access[("u1", ext)] = False
+
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=12
+        )
+
+    # Every requested source received a decision.
+    assert len(result.decisions) == 12
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.scope_kind is ca.ScopeKind.EXACT
+
+    # But the pinned scope is not satisfied, and the reason names the cause.
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_DENIED
+
+    # The permissive accessor would have returned 9 and dropped 3 without saying so.
+    assert len(ca.currently_authorized(result)) == 9
+
+    # The authoritative accessor refuses instead of emitting the subset.
+    with pytest.raises(ca.StrictScopeError) as exc:
+        ca.require_strict_scope(result)
+    assert exc.value.reason == ca.REASON_STRICT_DENIED
+
+
+async def test_a_fully_authorized_pinned_scope_is_strict(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 12, name="c-strict-ok")
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(12)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=12
+        )
+    assert result.strict_scope_satisfied is True
+    assert result.strict_exclusion_reason == ""
+    assert len(ca.require_strict_scope(result)) == 12
+
+
+async def test_strict_scope_fails_on_a_locally_restricted_source(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 6, name="c-strict-restricted")
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m003")
+        doc = (
+            await db.execute(select(Document).where(Document.id == row.document_id))
+        ).scalars().first()
+        doc.classification = "highly_restricted"
+        doc.tenant_visible = False
+        await db.commit()
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(6)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=6
+        )
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_LOCAL_POLICY
+    with pytest.raises(ca.StrictScopeError) as exc:
+        ca.require_strict_scope(result)
+    assert exc.value.reason == ca.REASON_STRICT_LOCAL_POLICY
+
+
+async def test_strict_scope_fails_on_an_unresolved_reference(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 4, name="c-strict-missing")
+    refs = [
+        ca.CandidateRef(instance_id, "m000"),
+        ca.CandidateRef(instance_id, "not-a-real-source"),
+    ]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=4
+        )
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_UNAVAILABLE
+    with pytest.raises(ca.StrictScopeError) as exc:
+        ca.require_strict_scope(result)
+    assert exc.value.reason == ca.REASON_STRICT_UNAVAILABLE
+
+
+async def test_strict_scope_fails_when_the_budget_leaves_sources_undecided(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 10, name="c-strict-budget")
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(10)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=4
+        )
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_BUDGET
+    with pytest.raises(ca.StrictScopeError):
+        ca.require_strict_scope(result)
+
+
+# ================= correction 2: finite exact-source provider budgets
+
+
+async def test_an_omitted_budget_is_finite_and_covers_the_existing_report_shapes(
+    file_db, connector, provider, knowledge
+):
+    """65 to 100 source reports must keep working with no explicit budget."""
+    instance_id = await seed_resources(file_db, provider, 100, name="c-budget-default")
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(100)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(db, access=access_for(), resource_refs=refs)
+
+    assert ca.DEFAULT_EXACT_BUDGET >= 100, "the default must cover a 100 source report"
+    assert ca.DEFAULT_EXACT_BUDGET < 10_000, "the default must be finite, not effectively open"
+    assert result.provider_checks == 100
+    assert result.provider_checks <= ca.DEFAULT_EXACT_BUDGET
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.strict_scope_satisfied is True
+
+
+async def test_an_oversized_exact_budget_is_refused_rather_than_clamped(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-budget-oversize")
+    refs = [ca.CandidateRef(instance_id, "m000")]
+    async with file_db() as db:
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(
+                db, access=access_for(), resource_refs=refs, budget=ca.MAX_EXACT_BUDGET + 1
+            )
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(
+                db, access=access_for(), resource_refs=refs, budget=1_000_000
+            )
+
+
+async def test_a_request_larger_than_the_default_budget_stays_bounded_and_not_strict(
+    file_db, connector, provider, knowledge
+):
+    """Correction 2: provider calls stay bounded even when the request is larger."""
+    total = ca.DEFAULT_EXACT_BUDGET + 40
+    instance_id = await seed_resources(file_db, provider, total, name="c-budget-bounded")
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(total)]
+
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(db, access=access_for(), resource_refs=refs)
+
+    assert result.provider_checks == ca.DEFAULT_EXACT_BUDGET, "provider calls must be bounded"
+    assert result.provider_checks < total
+    assert result.coverage is ca.CoverageStatus.PARTIAL
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_BUDGET
+    with pytest.raises(ca.StrictScopeError):
+        ca.require_strict_scope(result)
+
+
+# ================= correction 3: traversal is never strict pinned-report authorization
+
+
+async def test_a_single_page_traversal_is_never_strict(file_db, connector, provider, knowledge):
+    """A completed traversal, even in one page, is not pinned-report authorization."""
+    await seed_resources(file_db, provider, 5, name="c-strict-traversal")
+    async with file_db() as db:
+        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=10)
+
+    # Complete, and authoritative at the traversal level.
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.authoritative is True
+    assert result.snapshot_consistent is True
+
+    # But never strict, because it has no requested source set to cover.
+    assert result.scope_kind is ca.ScopeKind.TRAVERSAL
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_NOT_APPLICABLE
+
+    with pytest.raises(ca.StrictScopeError) as exc:
+        ca.require_strict_scope(result)
+    assert exc.value.reason == ca.REASON_STRICT_NOT_APPLICABLE
+
+
+async def test_a_resumable_traversal_is_also_never_strict(
+    file_db, connector, provider, knowledge
+):
+    await seed_resources(file_db, provider, 12, name="c-strict-traversal-resumable")
+    async with file_db() as db:
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=5)
+    assert first.scope_kind is ca.ScopeKind.TRAVERSAL
+    assert first.strict_scope_satisfied is False
+    with pytest.raises(ca.StrictScopeError):
+        ca.require_strict_scope(first)

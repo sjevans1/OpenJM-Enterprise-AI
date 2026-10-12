@@ -75,6 +75,29 @@ Two fields keep that honest:
 Authoritative consumers additionally call :func:`revalidate_document_ids` immediately before
 use, which closes the window in which an already-authorized candidate can be revoked.
 
+Strict pinned-report authorization versus traversal
+--------------------------------------------------
+Coverage and strict success answer different questions, and conflating them is how an
+authoritative output would silently drop a source:
+
+* ``coverage`` asks whether every requested source was **decided**.
+* ``strict_scope_satisfied`` asks whether every requested source was **authorized**.
+
+A pinned report that requested 65 sources, received a COMPLETE decision pass containing three
+denials, and emitted 62 sources has silently excluded three. It must fail loudly instead, which
+is what :func:`require_strict_scope` does: it returns the authorized set only when the scope is
+EXACT and strictly satisfied, and raises :class:`StrictScopeError` otherwise.
+
+``ScopeKind`` makes that distinction checkable rather than inferable. A catalog **traversal**
+never satisfies a strict requirement, even when it completes in a single page and even though
+``authoritative`` is true for it, because ``authoritative`` describes best-effort traversal
+completeness and is not sufficient for a pinned scope. Only an EXACT result can be strict.
+
+Exact-source budgets are always finite: an omitted budget falls back to
+``DEFAULT_EXACT_BUDGET``, and a budget above ``MAX_EXACT_BUDGET`` is refused rather than
+clamped. No exact-source call can therefore produce unbounded provider calls, and none quietly
+checks fewer sources than it was asked to check.
+
 No durable authorization cache and no per-principal scan-position record exists. Continuation
 is stateless, and authorization is revalidated on every page.
 """
@@ -120,6 +143,12 @@ DEFAULT_PAGE_BUDGET = 32
 DEFAULT_MAX_SCAN_ROWS = 512
 DEFAULT_CURSOR_TTL_SECONDS = 900
 
+# Exact-source budgets are ALWAYS finite, so an omitted or oversized budget can never turn
+# into unbounded provider calls. The default covers the existing 65 to 100 source report
+# shapes with headroom; the maximum is a hard refusal point, not a silent clamp.
+DEFAULT_EXACT_BUDGET = 128
+MAX_EXACT_BUDGET = 256
+
 # A page fetches at most this multiple of its provider budget, so a small budget does not drag
 # a large window out of the database. This can only affect how many pages a traversal takes:
 # the cursor advances only past handled rows, so shrinking the window never skips a locally
@@ -135,6 +164,14 @@ REASON_UNAVAILABLE = "authorization_unavailable"
 REASON_CORPUS_CHANGED = "corpus_changed"
 REASON_REFERENCE_UNRESOLVED = "reference_unresolved"
 REASON_REFERENCE_EXCLUDED = "reference_excluded_locally"
+
+# Strict exact-scope failure reasons. Precedence is budget, unavailable, denied, then local
+# policy, so the most structurally important cause is reported first.
+REASON_STRICT_BUDGET = "strict_budget_incomplete"
+REASON_STRICT_UNAVAILABLE = "strict_unavailable"
+REASON_STRICT_DENIED = "strict_denied"
+REASON_STRICT_LOCAL_POLICY = "strict_local_policy_excluded"
+REASON_STRICT_NOT_APPLICABLE = "strict_not_applicable_to_traversal"
 
 
 class CandidateState(str, Enum):
@@ -153,6 +190,30 @@ class CandidateState(str, Enum):
 class CoverageStatus(str, Enum):
     COMPLETE = "complete"
     PARTIAL = "partial"
+
+
+class ScopeKind(str, Enum):
+    """How the candidate set was determined. It decides which success condition applies."""
+
+    # A catalog traversal: bounded, resumable, and a best-effort view of a scope. It can be
+    # complete, but it never carries a caller-supplied list of sources, so it can never satisfy
+    # a strict pinned-report requirement.
+    TRAVERSAL = "traversal"
+    # An exact-source operation: the caller named the sources. Only this kind can be strict.
+    EXACT = "exact"
+
+
+class StrictScopeError(Exception):
+    """A strict exact-scope requirement was not met.
+
+    Raised rather than returning a subset, so an authoritative output cannot silently exclude
+    a denied, missing or locally restricted source.
+    """
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+        self.detail = detail
 
 
 class CursorError(Exception):
@@ -214,6 +275,9 @@ class CandidateAuthorizationResult:
     sql_reads: int = 0
     unresolved: bool = False
     snapshot_consistent: bool = False
+    scope_kind: ScopeKind = ScopeKind.TRAVERSAL
+    strict_scope_satisfied: bool = False
+    strict_exclusion_reason: str = ""
 
     @property
     def authorized_document_ids(self) -> frozenset[str]:
@@ -242,11 +306,15 @@ class CandidateAuthorizationResult:
 
     @property
     def authoritative(self) -> bool:
-        """Safe to consume as complete, currently-valid authorization.
+        """Traversal-level completeness. NOT sufficient for a pinned report.
 
         Requires COMPLETE coverage, a single-read candidate set, and nothing unresolved. A
-        resumable traversal always fails this, which is the point: an authoritative consumer
-        must not mistake a best-effort walk for complete authorization.
+        resumable traversal always fails this, which is the point: a best-effort walk must not
+        be mistaken for complete authorization.
+
+        This is deliberately weaker than ``strict_scope_satisfied``. It describes whether a
+        candidate set was fully walked, not whether a caller's requested sources were all
+        authorized, so authoritative outputs must gate on :func:`require_strict_scope` instead.
         """
         return (
             self.coverage is CoverageStatus.COMPLETE
@@ -682,6 +750,12 @@ async def authorize_candidates(
         sql_reads=digest_reads + 1,
         unresolved=unresolved,
         snapshot_consistent=snapshot_consistent,
+        # A traversal is never a strict exact-source result, even when it finishes in a single
+        # page. It has no caller-supplied list of sources, so it cannot satisfy a pinned-report
+        # requirement, and saying so explicitly is what stops one qualifying by accident.
+        scope_kind=ScopeKind.TRAVERSAL,
+        strict_scope_satisfied=False,
+        strict_exclusion_reason=REASON_STRICT_NOT_APPLICABLE,
     )
 
 
@@ -708,11 +782,30 @@ async def authorize_exact_candidates(
     cannot cover the request, the result is PARTIAL with no cursor: exact-scope authorization
     does not paginate, and an authoritative consumer must treat an incomplete exact result as a
     failure rather than a partial answer.
+
+    Two independent conditions are reported. ``coverage`` says every requested source was
+    decided. ``strict_scope_satisfied`` says every requested source was actually **authorized**,
+    which is the condition a pinned report needs and which a denial, an unresolved reference, a
+    locally restricted source or an exhausted budget all fail. Authoritative consumers read the
+    result through :func:`require_strict_scope`, never through a subset.
+
+    The provider budget is always finite. An omitted budget uses ``DEFAULT_EXACT_BUDGET`` and a
+    budget above ``MAX_EXACT_BUDGET`` raises, so a caller cannot request an unbounded number of
+    provider calls by omission or by passing a large number.
     """
     if resource_refs is None and document_ids is None:
         raise ValueError("provide resource_refs or document_ids")
     if budget is not None and budget <= 0:
         raise ValueError("budget must be positive")
+    # A finite provider budget in every case. An omitted budget falls back to a default and an
+    # oversized budget is refused rather than clamped, because quietly checking fewer sources
+    # than requested would be exactly the silent exclusion this contract exists to prevent.
+    if budget is not None and budget > MAX_EXACT_BUDGET:
+        raise ValueError(
+            f"budget {budget} exceeds MAX_EXACT_BUDGET {MAX_EXACT_BUDGET}; "
+            "exact-source authorization is bounded by design"
+        )
+    effective_budget = budget if budget is not None else DEFAULT_EXACT_BUDGET
 
     refs: list[CandidateRef] = list(resource_refs or [])
     ids: list[str] = []
@@ -726,9 +819,7 @@ async def authorize_exact_candidates(
     doc_keys = sorted(set(ids))
     requested = len(ref_keys) + len(doc_keys)
     if requested == 0:
-        return CandidateAuthorizationResult(
-            coverage=CoverageStatus.COMPLETE, snapshot_consistent=True
-        )
+        raise ValueError("no candidate identities provided")
 
     rows: list[ExternalResource] = []
     reads = 0
@@ -772,7 +863,6 @@ async def authorize_exact_candidates(
         if key in ref_keys or (row.document_id and row.document_id in set(doc_keys)):
             resolved.setdefault(key, row)
 
-    effective_budget = budget if budget is not None else max(requested, 1)
     decisions: list[CandidateDecision] = []
     checks = 0
     unavailable = False
@@ -859,6 +949,28 @@ async def authorize_exact_candidates(
     else:
         coverage, reason = CoverageStatus.COMPLETE, ""
 
+    # STRICT success is a different and stronger question than coverage. Coverage asks whether
+    # every requested source was *decided*; strict asks whether every requested source was
+    # actually AUTHORIZED. A complete set of decisions containing a denial, an unresolved
+    # reference or a locally restricted source is a successful decision pass and a failed
+    # pinned-report requirement, and conflating the two is how an authoritative output would
+    # silently drop a source. Precedence puts the most structural cause first.
+    tally = {s.value: 0 for s in CandidateState}
+    for decision in decisions:
+        tally[decision.state.value] += 1
+    if undecided > 0:
+        strict_satisfied, strict_reason = False, REASON_STRICT_BUDGET
+    elif tally[CandidateState.UNAVAILABLE.value]:
+        strict_satisfied, strict_reason = False, REASON_STRICT_UNAVAILABLE
+    elif tally[CandidateState.DENIED.value]:
+        strict_satisfied, strict_reason = False, REASON_STRICT_DENIED
+    elif tally[CandidateState.LOCAL_POLICY_EXCLUDED.value]:
+        strict_satisfied, strict_reason = False, REASON_STRICT_LOCAL_POLICY
+    elif tally[CandidateState.AUTHORIZED.value] == requested:
+        strict_satisfied, strict_reason = True, ""
+    else:
+        strict_satisfied, strict_reason = False, REASON_STRICT_BUDGET
+
     return CandidateAuthorizationResult(
         decisions=tuple(decisions),
         coverage=coverage,
@@ -872,6 +984,9 @@ async def authorize_exact_candidates(
         # One read per identity class, over a caller-supplied fixed set: there is no
         # enumeration to drift.
         snapshot_consistent=reads <= 2 and undecided == 0,
+        scope_kind=ScopeKind.EXACT,
+        strict_scope_satisfied=strict_satisfied,
+        strict_exclusion_reason=strict_reason,
     )
 
 
@@ -900,11 +1015,41 @@ async def revalidate_document_ids(
 
 
 def currently_authorized(result: CandidateAuthorizationResult) -> frozenset[str]:
-    """The ids safe to use from a revalidation result.
+    """The currently authorized subset. PERMISSIVE, and not an authoritative output.
 
-    Returns nothing unless the result is authoritative: an incomplete or unresolved
-    revalidation must not silently degrade into a partial answer.
+    Returns nothing unless the result is ``authoritative``, so an incomplete or unresolved
+    evaluation cannot silently degrade into a partial answer. It nonetheless returns a
+    *subset* when some requested source was denied or restricted, which is fine for an
+    exploratory consumer that will surface partial coverage, and wrong for a pinned report,
+    report snapshot, export or exact-source output.
+
+    Authoritative consumers must use :func:`require_strict_scope` instead.
     """
     if not result.authoritative:
         return frozenset()
+    return result.authorized_document_ids
+
+
+def require_strict_scope(result: CandidateAuthorizationResult) -> frozenset[str]:
+    """The only accessor for authoritative outputs. Raises rather than returning a subset.
+
+    A pinned report, report snapshot, export or exact-source output must call this and emit
+    only what it returns. It raises :class:`StrictScopeError` when ANY requested source was
+    denied, missing, locally restricted, left undecided by the budget, or unproven, so such an
+    output cannot silently exclude a source.
+
+    A catalog traversal also raises, because traversal is not exact-source authorization: it
+    has no requested set, so it cannot fail to cover one, and treating it as strict would let a
+    best-effort walk stand in for a pinned scope.
+    """
+    if result.scope_kind is not ScopeKind.EXACT:
+        raise StrictScopeError(
+            REASON_STRICT_NOT_APPLICABLE,
+            "a catalog traversal is not exact-source authorization",
+        )
+    if not result.strict_scope_satisfied:
+        raise StrictScopeError(
+            result.strict_exclusion_reason or "strict_scope_unsatisfied",
+            "not every requested source is currently authorized",
+        )
     return result.authorized_document_ids
