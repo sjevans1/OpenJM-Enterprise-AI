@@ -1,5 +1,11 @@
 # REL1-B4 host-acceptance evidence
 
+This document holds two qualifications. The **original REL1-B4 record**
+artifact source `44ceb0c7` is retained below as history. The **current-main host
+qualification** (2026-10-11, source `7e859f2801bee1d6b5d52688b633709e5e9ed27d`)
+is recorded in its own section and is the operative status; the historical tables
+must not be read as current-artifact evidence.
+
 REL1-B4 closes the REL1 offline-release train: the production application-wheel
 install (removing the offline editable-install blocker), a deterministic release
 archive (B4-F), tamper-negative and path-traversal coverage (B4-D),
@@ -32,6 +38,148 @@ equivalent was executed on the acceptance host it is stated under the row.
 | Backend runtime | Python 3.11 |
 | Frontend build runtime | Node.js 22 |
 | Production install | excludes Python `[dev]` extras |
+
+## Current-main host qualification (2026-10-11)
+
+Restamped to the accepted product baseline
+`main@7e859f2801bee1d6b5d52688b633709e5e9ed27d` (QA1, QA2, QA3 and OPS1 accepted
+and merged). Rows below are the current status; the earlier tables are history.
+
+### Environment inventory (Phase 1)
+
+| Env | Requirement | Present | Classification |
+| --- | --- | --- | --- |
+| A | native/separate clean Linux host, development | no | **NOT RUN** |
+| B | native/separate clean Linux host, production (PostgreSQL, production paths) | no | **NOT RUN** |
+| C | Windows host with WSL2 | yes | executed (see below) |
+
+Why A/B are NOT RUN, exactly:
+
+- no separate Linux machine is attached, and no virtualization tooling is
+  installed (multipass, libvirt/virt-install, qemu-system-x86_64, vagrant,
+  VirtualBox and lxc are all absent);
+- the WSL2 distro is excluded by the acceptance rule as a clean Linux host, and a
+  Docker container is likewise not a host;
+- provisioning one would require root; `sudo` here requires a password, so no
+  non-interactive apt/qemu/systemd/PostgreSQL provisioning is possible;
+- paid or remote cloud infrastructure was not used (not authorised).
+
+`/dev/kvm` is present, so a VM is physically conceivable, but qemu cannot be
+installed without root and no authorised external host was available.
+
+### Reference identity (current artifact)
+
+| Field | Value |
+| --- | --- |
+| Source Git SHA | `7e859f2801bee1d6b5d52688b633709e5e9ed27d` |
+| Product version / train | `0.2.0` / `REL1` |
+| Production lock sha256 | `90afebf3c719b1db838cbf77a3799477c8ac312d16817aca7fab670b34fde72b` (unchanged from the accepted lock) |
+| Development lock sha256 | `fa23810518e9a3646c570f1c54a94e6dadecfef49d0b82f0c4ed7279d40f7bd0` (unchanged) |
+| Application wheel | `openjm_enterprise_ai_backend-0.2.0-py3-none-any.whl` |
+| Application wheel sha256 | `106bc5513f5ac73026b3c678f8498526ca2a0603cfc386da13470931b319250b` |
+| Production wheelhouse | 182 distributions, 3.1 GB |
+| Bundle payload files | 916 |
+| Bundle size | 3.1 GB |
+| npm offline cache digest | `ea249931ecd51bf628e075f0c6062e0996c3ba4f405c99c99d5bbb527703fc2e` |
+| `RELEASE-MANIFEST.json` sha256 | `fb97c0bf1ddd30703eaab94e46531e62cdf371da4ffc5e8fdd315acac59c9702` |
+| Release archive | `openjm-rel1-0.2.0.tar.gz` |
+| Archive bytes | `3243305430` |
+| Archive sha256 | `ff707eb540ff6395da7a36433b6c98d3bc9d8a9222dccba871ed36c74a35a6bd` |
+
+The application wheel digest differs from the `44ceb0c7` artifact because the
+product code changed (QA2/QA3 corrections and OPS1). The production and
+development locks are unchanged, so lock-level evidence remains valid.
+
+### Bundle toolchain note (not a product defect)
+
+The first local bundle build failed with `aiohttp==3.8.4` unresolvable under
+pip 26.1.2. Rebuilding with the CI-equivalent pip 24.0 succeeded. The accepted
+lock-drift gate builds the same production wheelhouse from the same lock and
+passes on this SHA in CI, so this is a resolver-toolchain difference in the local
+environment; the bundle must be built with the pinned resolver toolchain.
+
+### Current status (every B4 row)
+
+| # | Item | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Clean Linux **development** install | **NOT RUN** | no clean Linux host (inventory A) |
+| 2 | Clean Linux **production** install (PostgreSQL + production paths) | **NOT RUN** | no clean Linux host, no root, no PostgreSQL (inventory B) |
+| 3 | Offline committed-lock install of the **current** artifact | **PASS** (subset) | user-space venv: `pip install --no-index --find-links python/wheelhouse --require-hashes -r python/requirements.lock` then `pip install --no-deps python/app/*.whl`; `app` imported from `site-packages`, `pip show` 0.2.0, dev extras present 0. Not a clean-host row. |
+| 4 | Trusted-digest verification | **PASS** | `release-integrity.py verify <bundle> --expected-manifest-sha256 fb97c0bf...` -> `verified release payload: 916 files` |
+| 5 | Tamper-negative (bounded, practical) | **PASS** | on a disposable hardlink copy, mutating one payload (`app/README.md`) was refused (`ERROR: size mismatch`); the canonical bundle re-verified clean at 916 files |
+| 6 | Deterministic release archive | **PARTIAL** | the current artifact was archived once (`ff707eb5...`, `3243305430` bytes). A byte-identical second build was not re-run; the deterministic property is a property of `build-rel1-archive.sh` and the previous two-build equality belongs to the `44ceb0c7` artifact. |
+| 7 | Windows/WSL2 **runtime** install | **NOT RUN** | supported path executed from Windows PowerShell (see below) but the clean runtime could not complete the install |
+| 8 | Windows/WSL2 **contract** (scripts) | **PASS** | `backend/tests/test_rel1b_windows_contract.py`, unchanged and green on this SHA in CI |
+| 9 | Migration to head | **PASS** (CI, current SHA) | full backend suite green on `7e859f28` (run 38186244075); host-level migration NOT RUN |
+| 10 | `/api/ready` / `/api/health` | **PASS** (CI/prior host) | prior accepted host evidence plus CI; not re-run on a clean host |
+| 11 | Frontend production build | **PASS** | CI Frontend / Node 22 green on `7e859f28` (run 38186244075) |
+| 12 | Browser / persona journey on a production install | **NOT RUN** | no clean production host to serve it |
+
+### Windows + WSL2 supported path (row 7 detail)
+
+Executed from Windows PowerShell against a fresh, separate WSL2 distribution so
+the supported path was exercised from a clean runtime:
+
+| Field | Value |
+| --- | --- |
+| Windows | Windows 11 Pro, build 26200 (10.0.26200) |
+| PowerShell | 5.1.26100.9444 |
+| WSL | 2.6.3.0, kernel 6.6.87.2, WSLg 1.0.71 |
+| Repository | `C:\rel1b4\OpenJM-Enterprise-AI` at `7e859f2801bee1d6b5d52688b633709e5e9ed27d` |
+| Target distro | `openjm-rel1b4` (fresh, imported; separate from the user's existing `Ubuntu-24.04` and `Ubuntu`, which were left untouched) |
+| Distro runtime | Ubuntu 24.04.5 LTS, WSL2 kernel, no Python, no Node |
+
+Observed behaviour of `scripts/install-wsl2.ps1`:
+
+- distribution detection: PASS (`Detected distribution 'openjm-rel1b4'`);
+- Windows to WSL repository mapping: PASS
+  (`C:\rel1b4\...` -> `/mnt/c/rel1b4/...`);
+- prerequisite check and delegation: PASS (it attempted prerequisites, then
+  invoked `bash scripts/install-linux.sh --profile development`);
+- the canonical installer ran and failed fast and correctly with
+  `ERROR: Python 3.11 is required`;
+- the PowerShell bootstrap propagated the failure and exited non-zero.
+
+It could not complete because the fresh runtime had no Python 3.11 and the
+bootstrap's own prerequisite step needs `sudo`, which the imported root-only
+distribution does not provide. Recorded as **NOT RUN**, not PASS.
+
+### Follow-on recommendation: bounded REL1-B4 installer hardening
+
+None of the following is fixed, and none may be treated as resolved merely
+because `-RepoPath` was supplied or because the test runtime happened to lack
+`sudo`. They are open release-tooling concerns for the supported Windows/WSL2
+path and are recommended for a separate bounded package BEFORE the next
+Windows/WSL2 runtime attempt.
+
+1. **Python 3.11 acquisition on a stock Ubuntu 24.04 (Noble).** The supported
+   bootstrap contains `sudo apt-get install ... python3.11 ...`. Ubuntu 24.04's
+   default Python line is 3.12, so `python3.11` is not available from the stock
+   Noble archive. On the fresh Noble runtime exercised here the install did not
+   succeed (`python3.11: command not found` afterwards). The bootstrap therefore
+   needs either a pinned, explicitly documented source for Python 3.11 (for
+   example a PPA added by the script), a documented prerequisite that the
+   operator supplies 3.11, or a supported alternative to acquiring it. Relying on
+   `apt-get install python3.11` on a stock fresh Noble environment is not a valid
+   bootstrap path as written.
+2. **`$PSScriptRoot` empty in the `param()` default.** `install-wsl2.ps1` fails
+   with `Join-Path : Cannot bind argument to parameter 'Path' because it is an
+   empty string` when PowerShell reports an empty `$PSScriptRoot` at parameter
+   binding time. Passing `-RepoPath` explicitly works around it, but the default
+   remains broken; a defensive fallback (for example to
+   `$MyInvocation.MyCommand.Path`) would make the script robust.
+3. **Root-only / no-`sudo` runtime is not detected.** The prerequisite step
+   assumes a `sudo`-capable non-root user. A root-only distribution reports
+   `sudo: command not found`, after which the canonical installer fails further
+   downstream on the missing Python 3.11 rather than surfacing the real cause.
+   Detecting the runtime user model (or using a no-`sudo` path when already root)
+   would make the bootstrap fail early and clearly.
+
+Recommended bounded follow-on package: **REL1-B4 installer hardening**, covering
+the three items above with focused tests on the bootstrap's detection,
+prerequisite acquisition and failure reporting, no change to
+`install-linux.sh` semantics, and no weakening of the Python 3.11 / Node 22
+requirement (DB-GPT pins `aiohttp==3.8.4`, which does not build on 3.12).
 
 ## Committed-lock release artifacts (built on the acceptance host)
 

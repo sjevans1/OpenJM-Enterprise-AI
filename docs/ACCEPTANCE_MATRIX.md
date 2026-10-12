@@ -4,7 +4,7 @@ Living acceptance matrix for the Hardening & Business Value Realization phase
 (Issue #45). It maps the global phase-acceptance statements to current
 implementation evidence and the remaining manual/runtime qualification.
 
-- **Observed at `ecb7b69969a189a80aece6302836a4cd8d723a4f`** on **2026-10-11** (current integrated `main`; QA1, QA2 and QA3 accepted and merged).
+- **Observed at `7e859f2801bee1d6b5d52688b633709e5e9ed27d`** on **2026-10-11** (current integrated `main`; QA1, QA2, QA3 and OPS1 accepted and merged).
 - **Live qualification product heads:** `4479d82ba773affab926d81bffbc1a9d272fdbef` for QA3 (authoritative/vector-RAG qualification, see `docs/qa/QA3_ACCEPTANCE.md`) and `ecb7b69969a189a80aece6302836a4cd8d723a4f` for OPS1 (OpenJM Operations Control Center, see `docs/qa/OPS1_ACCEPTANCE.md`).
 - Current accepted code includes BV1-BV6, M1-M3, INF1-A/B/C, E1-E3, REL1-A and
   REL1-B1..B4, on the accepted VS1-VS8 foundation.
@@ -110,7 +110,7 @@ Security automated capability: **6/6 PASS**.
 | Metering / entitlements (M1/M2/M3) | accepted | **PASS** |
 | Admission / capacity (INF1-A/B/C) | registry/admission/capacity telemetry accepted | **PASS** |
 | Backup / recovery (E1/E2/E3 + VS8) | accepted automated recovery evidence | **PASS** |
-| Installer / productization (REL1) | REL1-A + REL1-B1..B4 accepted (reproducible install, committed hash-pinned locks, lock drift gate, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged-wheel production install); full PostgreSQL production-profile acceptance executed 2026-10-10 | **PASS** (automated + PostgreSQL production profile + live browser persona journey at QA2); clean dev host and Windows/WSL2 runtime remain compatibility coverage |
+| Installer / productization (REL1) | implementation and package capability accepted: reproducible install, committed hash-pinned locks with a drift gate, production wheelhouse, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged application wheel, CI release gates, and the prior PostgreSQL production-profile qualification (2026-10-10) | **PASS** for implementation/package capability; **NOT RUN / OPEN** for final clean-host qualification under Issue #79 (clean Linux development host; clean Linux production host with PostgreSQL and production-safe paths; supported Windows/WSL2 runtime; browser/persona journey on the production-installed artifact). See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Rahkia qualification | intentionally not integrated during current product build | **DEFERRED** |
 
 ## Remaining completion gates
@@ -118,22 +118,29 @@ Security automated capability: **6/6 PASS**.
 The feature gap list is now short. The remaining work is primarily productization
 and final integrated qualification, not another broad business-feature wave.
 
-1. **REL1 productization is accepted.** REL1-A and REL1-B1..B4 delivered the
-   reproducible install, committed hash-pinned locks with a drift gate, the
-   offline bundle with registry-blocked acceptance, the deterministic
-   manifest/archive, and the packaged-wheel production install. The full
-   PostgreSQL production-profile acceptance was executed 2026-10-10, and a
-   production-like acceptance environment (PostgreSQL production profile, live
-   Keycloak OIDC, seeded tenants and personas, governed Knowledge/Data fixtures,
-   live vector/RAG, approved model path) was qualified at QA1, QA2 and QA3 (see
-   "Live/deployment qualification" below).
-2. **Final manual/browser journey is PASS.** The end-user, data-steward,
-   client-admin and OpenJM-operator golden journeys were executed live through
-   real Keycloak OIDC at QA2, and the authoritative candidate path was
-   re-exercised live at QA3.
-3. **Live environment qualifications are now executed.** QA2 ran live
-   OIDC/Keycloak and a live PostgreSQL delegated-support walkthrough; QA3 ran a
-   real vector-engine/RAG path for authoritative candidates.
+1. **REL1 implementation and packaging: PASS.** REL1-A and REL1-B1..B4 delivered
+   the reproducible install, committed hash-pinned locks with a drift gate, the
+   production wheelhouse, the offline bundle with registry-blocked acceptance,
+   the deterministic manifest/archive, the packaged application wheel and the CI
+   release gates, and the prior PostgreSQL production-profile qualification ran
+   on 2026-10-10. This is implementation/package capability, and it is the only
+   part of REL1 that is complete.
+2. **REL1-B4 final host/runtime qualification: NOT RUN / OPEN under Issue #79.**
+   The mandatory release-acceptance rows that remain outstanding are the clean
+   Linux **development** host, the clean Linux **production** host with
+   PostgreSQL and production-safe paths, the supported **Windows/WSL2** runtime,
+   and the final **browser/persona journey on the production-installed
+   artifact**. Issue #79 makes these part of the release acceptance contract, so
+   they are NOT optional compatibility coverage, and none of them is satisfied
+   by CI, by prior WSL evidence, by the prior PostgreSQL qualification or by
+   contract tests. Current status for the current artifact is recorded in
+   `docs/REL1_B4_ACCEPTANCE.md`.
+3. **Product journey acceptance on the controlled QA environment: PASS, and
+   distinct from host qualification.** QA2 executed the real OIDC persona and
+   delegated-support journeys, QA3 executed the live vector/RAG
+   authoritative-candidate path, and OPS1 executed the operator-plane journey.
+   That is product acceptance on a production-like environment, not the
+   REL1-B4 clean-host row, which remains NOT RUN.
 4. **Rahkia cutover is DEFERRED by design.** Do not connect the application to
    Rahkia during the remaining product build. The specialist integration phase
    later verifies call paths, M1/M2/M3 attribution, hardware/security/performance
@@ -142,7 +149,12 @@ and final integrated qualification, not another broad business-feature wave.
    Source-level classification plus authorized-object narrowing remains the v1
    contract unless an unsplittable mixed-sensitivity source creates a proven need.
 
-## Live/deployment qualification (2026-10-10, qualified product head `7ca41149`; current `main` `23ea4845` differs only by CI workflow modernization)
+## Live/deployment qualification
+
+Two qualification sets are recorded here: the automated/controlled-environment
+qualification performed 2026-10-10, and the host rows restamped for current `main`
+(`7e859f2801bee1d6b5d52688b633709e5e9ed27d`) on 2026-10-11. Host rows carry their own
+date; do not read an older row as current-artifact host evidence.
 
 | Gate | Environment | Status | Evidence |
 | --- | --- | --- | --- |
@@ -152,14 +164,18 @@ and final integrated qualification, not another broad business-feature wave.
 | Final browser/persona journey (end user, data steward, client admin, OpenJM operator) | live QA env: PostgreSQL production profile, Keycloak 26.7.4 OIDC, seeded personas | **PASS** | QA2 (2026-10-11) live Chrome journeys for all four personas through real OIDC authorization-code + PKCE |
 | Live delegated-support / OIDC walkthrough | live Keycloak 26.7.4 + PostgreSQL 16 | **PASS** | QA2 delegated-support grant, consumption, ceiling, audit, revocation and expiry exercised live; residual delegation revoked at handoff |
 | Live authoritative-candidate / vector-RAG journey (BV6-B) | DB-GPT knowledge engine + Chroma, `glm-5.3-flash` | **PASS** | QA3 (2026-10-11) 50 PASS: ordinary retrieval, curation lifecycle, two-person rule, additive candidate, non-authoritative negatives, relevance gate, revocation/regrant, unauthorized and cross-tenant negatives, authorization-before-context, withdrawal. See `docs/qa/QA3_ACCEPTANCE.md` |
-| Clean Linux development host install | none | **NOT RUN** | no separate clean host; compatibility coverage, not an Issue #45 deployment gate |
-| Real Windows/WSL2 runtime install | none | **DEFERRED** | no real Windows host; non-blocking compatibility qualification, machine-testable contract PASS only. Full Windows support is not claimed |
+| Clean Linux development host install | none | **NOT RUN** | no separate clean Linux host is attached and no virtualization tooling is installed; `sudo` needs a password and paid cloud is not authorised. See `docs/REL1_B4_ACCEPTANCE.md` (inventory A). |
+| Real Windows/WSL2 runtime install | Windows 11 Pro build 26200, WSL 2.6.3.0, fresh `openjm-rel1b4` distro | **NOT RUN** | the supported path was executed from Windows PowerShell (detection PASS, Windows to WSL mapping PASS, canonical-installer delegation PASS, correct fail-fast), but the clean runtime had no Python 3.11 and no `sudo`, so the install did not complete. Partial-path evidence only; not a PASS. See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Rahkia production cutover | n/a | **DEFERRED** | deliberate product decision |
 
 The PostgreSQL production profile, the frontend production build, the live OIDC
 persona/delegated-support journeys and the live vector/RAG authoritative-candidate
-journey all pass. The remaining NOT RUN/DEFERRED items are compatibility coverage
-on hosts not available here, not Issue #45 deployment gates.
+journey all pass. The clean-host rows above (clean Linux development, clean Linux
+production with PostgreSQL and production-safe paths, supported Windows/WSL2
+runtime, and the production-installed browser/persona journey) remain **NOT RUN**
+and **OPEN under Issue #79**. They are mandatory release-acceptance rows, not
+optional compatibility coverage, and they must not be upgraded from CI, prior WSL
+evidence, the prior PostgreSQL qualification or contract tests.
 
 ## How this matrix is maintained
 
@@ -168,3 +184,15 @@ productization package lands. Link exact-head acceptance evidence. Do not turn a
 manual/live gate into PASS merely because automated CI is green. The companion
 `backend/tests/test_acceptance_matrix.py` protects the document's required
 persona and feature-area structure.
+
+## REL1-B4 host qualification (current artifact)
+
+The current-main REL1-B4 host qualification is recorded in `docs/REL1_B4_ACCEPTANCE.md`.
+Re-verified on the current release artifact built from
+`7e859f2801bee1d6b5d52688b633709e5e9ed27d`: trusted-digest verification PASS
+(`fb97c0bf...`, 916 files), bounded tamper-negative PASS, and offline
+committed-lock install of the current artifact PASS (bundled wheelhouse with
+`--no-index --require-hashes`, application wheel with `--no-deps`, no dev extras).
+The clean Linux development and production host rows, the Windows/WSL2 runtime
+install and the on-host browser/persona journey remain **NOT RUN** for want of a
+clean Linux host and a fully provisioned clean WSL2 runtime.
