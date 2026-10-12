@@ -537,3 +537,115 @@ def test_get_documents_keeps_its_list_contract_and_pagination_is_additive():
     # The additive surface is a superset shape, not a replacement.
     fields = set(knowledge_api.DocumentCatalogPageOut.model_fields)
     assert {"items", "mode", "coverage", "partial", "notice"} <= fields
+
+
+# ============================================================ request-context lifecycle over HTTP
+#
+# The notice is request-scoped state, so the reset at request entry is what stops one request's
+# notice being reported on another request's answer. The only honest way to check that is two
+# SEQUENTIAL HTTP requests through the real router and services. An earlier test invoked the reset
+# helper directly, which proves the helper works but not that the handler calls it.
+
+
+class _AnsweringGateway:
+    """Minimal stand-in for the model gateway, so a general answer can be produced offline."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.calls = 0
+
+    async def chat(self, messages, **kwargs):
+        self.calls += 1
+        return self.answer
+
+
+async def test_a_partial_knowledge_notice_cannot_leak_into_the_next_http_request(
+    client, file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """Two sequential HTTP requests on one client, through the real router.
+
+    Request 1 is a real Knowledge request whose connector authorization cannot be proven because the
+    provider is failing, so coverage is partial, the server publishes a notice, and the response
+    carries it. Request 2 is a real general Chat request, which publishes no notice of its own, so a
+    notice on its response could only have been inherited from request 1.
+
+    Only answer composition is stubbed. The orchestrator, the exploratory candidate traversal, the
+    notice publication, the request context and the response assembly are all the real code.
+    """
+    from app.api import deps as api_deps
+    from app.core.identity import Principal
+    from app.core.permissions import permissions_for_role
+    from app.main import app
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    mode(rc.MODE_CANDIDATE)
+    await seed(file_db, provider, 30, name="c2b-http-notice")
+    monkeypatch.setattr("app.api.chat.model_gateway", _AnsweringGateway("An answer."))
+
+    # The route resolves its own principal, so the corpus seeded for the fixture tenant is only
+    # reachable if the request is that tenant's principal. Overriding get_principal is the stable
+    # hook for that; the context is published as well because the governed-document gate reads the
+    # request context rather than the dependency.
+    principal = Principal(
+        principal_id=PRINCIPAL_A,
+        tenant_id=TENANT_A,
+        subject="ca2b-http",
+        role="owner",
+        membership_id="ca2b-http-membership",
+        auth_method="local-dev",
+        permissions=permissions_for_role("owner"),
+    )
+    app.dependency_overrides[api_deps.get_principal] = lambda: principal
+
+    with request_context():
+        # Request 1: the provider does not answer, so no candidate's authorization can be proven.
+        provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+        first = await client.post(
+            "/api/chat",
+            json={"message": "what is the reforestation levy policy?", "mode": "knowledge"},
+        )
+        assert first.status_code == 200, first.text
+        first_body = first.json()
+        assert first_body["coverage_notice"] is not None, (
+            "request 1 must be partial and must say so, otherwise this test cannot prove anything; "
+            f"execution_class={first_body.get('execution_class')!r} answer={first_body.get('answer')!r}"
+        )
+        assert first_body["coverage_notice"]["reason"] == "authorization_unavailable"
+
+        # Request 2: a different mode, a healthy provider, and no notice of its own.
+        provider.access_error = None
+        second = await client.post("/api/chat", json={"message": "hello there", "mode": "chat"})
+    assert second.status_code == 200, second.text
+    assert second.json()["coverage_notice"] is None, (
+        "a request that produced no notice of its own must not inherit the previous request's, or a "
+        "complete answer would be reported to the user as incomplete"
+    )
+
+
+async def test_a_stale_notice_in_the_ambient_context_is_cleared_before_the_request_runs(
+    client, file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """The reset at request entry is load-bearing, and this is where that can be observed.
+
+    An HTTP request runs in a task that COPIES the ambient context, so a notice already sitting in
+    that context is visible inside the request. Only the reset clears it. Verified by falsification:
+    with the reset call removed from the handler this test fails, and the sequential test above still
+    passes, because two independent requests are also isolated from each other by the async runtime.
+    """
+    from app.core.context import set_coverage_notice
+
+    monkeypatch.setattr("app.api.chat.model_gateway", _AnsweringGateway("A general answer."))
+    set_coverage_notice(
+        {
+            "code": "partial_coverage",
+            "coverage": "partial",
+            "reason": "budget_exhausted",
+            "message": "A notice left over from an earlier request on this context.",
+        }
+    )
+    response = await client.post("/api/chat", json={"message": "hello there", "mode": "chat"})
+    assert response.status_code == 200, response.text
+    assert response.json()["coverage_notice"] is None, (
+        "a notice already present in the ambient context must be cleared at request entry; otherwise "
+        "an unrelated earlier value would be reported against this request's answer"
+    )

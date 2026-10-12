@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Bot,
   BrainCircuit,
   ChevronDown,
@@ -605,6 +606,9 @@ export default function App() {
         requested_mode: response.mode,
         evidence: response.evidence,
         artifacts: response.artifacts ?? [],
+        // Carried per message, not as view state: a later complete answer must not clear or inherit
+        // an earlier one, and reopening a conversation has to show what that answer actually said.
+        coverage_notice: response.coverage_notice ?? null,
         created_at: new Date().toISOString(),
       }
       setMessages((current) => [...current, assistant])
@@ -1347,6 +1351,12 @@ export default function App() {
                           )}
                         </div>
                         <div className="message-content">{message.content}</div>
+                        {message.role === 'assistant' && message.coverage_notice?.message && (
+                          <div className="coverage-notice" role="status" data-coverage-notice>
+                            <AlertTriangle size={14} aria-hidden="true" />
+                            <span>{message.coverage_notice.message}</span>
+                          </div>
+                        )}
                         {message.role === 'assistant' && (
                           <EvidencePanel evidence={message.evidence || []} />
                         )}

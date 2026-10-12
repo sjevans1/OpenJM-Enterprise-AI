@@ -24,6 +24,7 @@ export type Message = {
   requested_mode?: ExecutionMode | null
   evidence: Evidence[]
   artifacts?: ChatArtifact[]
+  coverage_notice?: CoverageNotice | null
   created_at: string
 }
 
@@ -68,6 +69,21 @@ export type ChatResponse = {
   mode: ExecutionMode
   evidence: Evidence[]
   artifacts?: ChatArtifact[]
+  coverage_notice?: CoverageNotice | null
+}
+
+/**
+ * The server-written coverage warning for a partial source check.
+ *
+ * It is attached when the server could not examine every source the user is authorized to read, so
+ * an answer must not be read as complete. `message` is fixed prose written by the server, never
+ * built from source data, which is why the UI can render it as it stands.
+ */
+export type CoverageNotice = {
+  code: string
+  coverage: string
+  reason?: string
+  message?: string
 }
 
 export type DocumentRecord = {

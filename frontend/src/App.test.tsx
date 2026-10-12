@@ -990,3 +990,63 @@ test('a principal holding reports:write is offered Save as report', async () => 
   await askOneGroundedQuestion()
   expect(await screen.findByRole('button', { name: /save as report/i })).toBeTruthy()
 })
+
+// ---------------------------------------------------------------------------
+// CA2-B: the partial-coverage warning must reach the USER, not just the JSON.
+//
+// The server attaches coverage_notice when it could not examine every source the principal is
+// authorized to read. A field on the response that no component reads is not a warning, so these
+// assert what is actually rendered.
+// ---------------------------------------------------------------------------
+
+const PARTIAL_COVERAGE_NOTICE = {
+  code: 'partial_coverage',
+  coverage: 'partial',
+  reason: 'provider_cap_reached',
+  message:
+    'This request reached its authorization budget before every connector source could be checked, ' +
+    'so this answer may not include every source you are authorized to read. Ask a narrower ' +
+    'question, or ask again to continue checking.',
+}
+
+function stubChatWithCoverage(coverage: unknown) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method || 'GET'
+      if (url === '/api/auth/config') return jsonResponse(OIDC_AUTH_CONFIG)
+      if (url === '/api/auth/me') {
+        return jsonResponse(principalContext({ permissions: ['chat:use'] }))
+      }
+      if (url === '/api/chat' && method === 'POST') {
+        return jsonResponse({ ...EVIDENCE_ANSWER, coverage_notice: coverage })
+      }
+      return jsonResponse([])
+    }),
+  )
+}
+
+test('a partial answer shows the coverage warning to the user', async () => {
+  storeAuthenticatedSession()
+  stubChatWithCoverage(PARTIAL_COVERAGE_NOTICE)
+  const { container } = render(<App />)
+
+  await askOneGroundedQuestion()
+
+  const notice = container.querySelector('[data-coverage-notice]')
+  expect(notice).toBeTruthy()
+  expect(notice?.textContent).toMatch(/may not include every source you are authorized to read/i)
+  // The server's whole sentence, verbatim: the UI must not paraphrase or downgrade it.
+  expect(notice?.textContent).toContain(PARTIAL_COVERAGE_NOTICE.message)
+})
+
+test('a complete answer carries no coverage warning', async () => {
+  storeAuthenticatedSession()
+  stubChatWithCoverage(null)
+  const { container } = render(<App />)
+
+  await askOneGroundedQuestion()
+
+  expect(container.querySelector('[data-coverage-notice]')).toBeNull()
+})

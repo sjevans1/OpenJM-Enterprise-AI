@@ -3,22 +3,20 @@
 **Status: PROVISIONAL, ready for independent final acceptance review. NOT merged, NOT activated.**
 
 Repository: `sjevans1/OpenJM-Enterprise-AI`
-Baseline when CA2 began: `main@8d6b7d8`. Current `main`: `709ce47` (reconciled; see B).
 
 | Package | PR | Branch | Head | Base | State |
 | --- | --- | --- | --- | --- | --- |
-| CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `8557487` | `main` | draft, experimentally accepted |
-| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `21294d9` (merge of main) | PR #94 branch | draft |
-| CA2-C search | #100 | `feat/ca2c-search-completeness` | `1125427` | `main` | draft |
+| CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `3ce6ccc` | `main@709ce47` | draft, experimentally accepted |
+| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `7c7b3f4` | PR #94 branch | draft, conditionally accepted |
+| CA2-C search | #100 | `feat/ca2c-search-completeness` | `5d8f7fa` | `main@709ce47` | draft, Unicode correction applied |
 
-CA2-C is based on current main and needs no reconciliation. CA2-B carries a clean merge of
-`main@709ce47`, so the stack is reconciled.
+Baseline when CA2 began: `main@8d6b7d8`. Current `main`: `709ce47`.
 
 ---
 
 ## A. Executive summary
 
-**Intended fix.** Two independent silent-omission defects.
+**Two independent silent-omission defects, both fixed and measured.**
 
 1. The Knowledge candidate set is built through one seam, `governed_tenant_documents`, which
    intersects a corpus-wide connector authorization gate that stops at 100 checks without ordering.
@@ -28,42 +26,73 @@ CA2-C is based on current main and needs no reconciliation. CA2-B carries a clea
    Python, so the window bounded the *table* rather than the matches. A metadata match beyond
    position 200 was permanently invisible with no signal of omission.
 
-**Result, measured.** At 150 resources the candidate path reaches **150 of 150** where legacy
-reaches 100, and **live retrieval from a real index cites the document at index 115** whose marker
-exists only in its body, which legacy cannot reach at all. `connector.search` now finds a match at
-rank 281 and reports incompleteness truthfully.
+**Result.** At 150 resources the candidate path reaches **150 of 150** where legacy reaches 100, and
+**live retrieval from a real index cites the document at index 115** whose marker exists only in its
+body, which legacy cannot reach at all.
 
-**The live gate is now CLOSED** (it was BLOCKED). Real DB-GPT, real Chroma and the real configured
-embedding model were used in-process, with nothing stubbed in the retrieval path. 13 live checks,
-0 failures.
+**Live gate: PASS.** Real DB-GPT, real Chroma and the real configured embedding model, in-process,
+nothing stubbed in the retrieval path. 13 checks, 0 failures.
 
-**Performance.** The candidate p95 is **1.03x-1.05x** legacy on comparable fixture work against an
-unchanged **1.25x** threshold, passing locally and in CI, and the live retrieval step measures
-**1.138x** for 20% more collections examined.
+**Performance: PASS at 1.028x / 1.047x p95 on comparable fixture work against an unchanged 1.25x
+threshold.** The live 1.138x is **not** p95 evidence and is not presented as such here. See G.
+
+### Corrections applied for this review round
+
+| Finding | Disposition |
+| --- | --- |
+| CA2-C: three-arm SQL prefilter not a superset of the Python matcher (ẞ/ß, İ/i̇, ǅ/ǆ) | **Fixed.** Predicate removed, matching is Python-only over a bounded ordered scan. 19 tests. |
+| CA2-B: no real handler/API regression for the notice lifecycle | **Fixed.** Two HTTP regressions, one falsified. See H. |
+| CA2-B: frontend notice rendering unverified | **Verified and it was absent.** Rendered now. See D. |
+| CA2-B: PR #98 diff contained unrelated main deployment changes | **Fixed.** CA2-A reconciled onto current main; the stack diff is now the CA2 delta. See B. |
+| CA2-C: PR #100 four commits behind main | **Fixed.** Reconciled. |
+| Dossier stale heads and run IDs | **Updated.** |
+| Live 1.138x presented as p95 evidence | **Corrected.** It is one retrieval-only timing per mode over different work. |
 
 ---
 
-## B. Implementation inventory
+## B. Implementation inventory and merge strategy
 
-CA2-A (`8557487`, PR #94): `backend/app/services/connectors/candidate_authorization.py`,
+CA2-A (`3ce6ccc`, PR #94): `backend/app/services/connectors/candidate_authorization.py`,
 `backend/tests/test_ca2_candidate_authorization.py`,
 `backend/tests/test_ca2_baseline_measurement.py`, `docs/plan/CA2_RETRIEVAL_COMPLETENESS.md`,
 `docs/plan/CA2_BASELINE_AND_TRACEABILITY.md`.
 
-CA2-B (PR #98): `backend/app/services/retrieval_candidates.py` (integration seam),
+CA2-B (PR #98): `backend/app/services/retrieval_candidates.py`,
 `backend/tests/test_ca2b_candidate_integration.py`, `backend/tests/test_ca2_measurement_harness.py`,
 `backend/tests/live/test_ca2_live_retrieval.py`, `backend/tests/live/README.md`,
-`docs/plan/CA2_B_CONSUMER_MAP.md`, with additive edits to `app/core/config.py`,
-`app/core/context.py`, `app/services/document_policy.py`, `app/services/tools.py`,
-`app/services/orchestrator.py`, `app/api/knowledge.py`, `app/api/chat.py`, `app/schemas.py`, and a
-batched-read optimization inside the CA2-A module.
+`docs/plan/CA2_B_CONSUMER_MAP.md`, `frontend/src/api.ts`, `frontend/src/App.tsx`,
+`frontend/src/App.test.tsx`, `frontend/src/styles.css`, with additive edits to
+`app/core/config.py`, `app/core/context.py`, `app/services/document_policy.py`,
+`app/services/tools.py`, `app/services/orchestrator.py`, `app/api/knowledge.py`, `app/api/chat.py`,
+`app/schemas.py`, and a batched-read optimization inside the CA2-A module.
 
 CA2-C (PR #100): `backend/app/services/actions/connector_tools.py`,
 `backend/tests/test_ca2c_connector_search.py`.
 
-Reconciliation: `21294d9` merges `main@709ce47` into the CA2-B branch. The 17 incoming commits touch
-deployment, installer, compose and documentation files only. The merge is clean, main is untouched,
-and the merge lands on the CA2-B branch alone.
+### Merge hygiene, resolved
+
+PR #94 was based on `main@8d6b7d8`. Because #98 is stacked on #94 and had merged current main, the
+GitHub diff for #98 contained 29 files including unrelated main deployment, installer and REL1
+changes. Reconciling CA2-A onto `main@709ce47` (`3ce6ccc`) removes them from the reviewed feature
+diff. Each merge was clean, none of the incoming files touches a CA2 path, and no CA2 code changed
+as a result.
+
+### Sequential merge strategy for #94, #98, #100
+
+Order matters; #98 is stacked, #94 and #100 are independent.
+
+1. **#94 first**, onto `main@709ce47`. Its branch already carries that merge and is clean. Its diff is
+   the CA2-A contract only. Merging it does not activate anything: the contract has no production
+   caller and CA2-B remains its only consumer.
+2. **#98 second**, onto the merged CA2-A. With #94 landed, the #98 diff resolves to the CA2-B delta
+   alone (service, tests, additive API/schema edits, the frontend notice). GitHub retargets its base
+   from the #94 branch to `main` automatically once #94 is merged.
+3. **#100 third**, independently onto `main`. It touches `connector_tools.py` only and no CA2-A or
+   CA2-B file, so it can go first or last without interacting; third keeps the review order matched to
+   the acceptance order. It needs no flag and reverts by revert.
+
+Do not squash #94 or #98: CA2-A is an independently accepted artifact and should stay reviewable as
+its own history. No merge is performed here.
 
 ---
 
@@ -80,6 +109,7 @@ and the merge lands on the CA2-B branch alone.
 | Mixed 150 connector + 5 native | **105** | **155** | native documents unaffected |
 | Pinned 75 sources | n/a | 75 authorised | strict exact-source revalidation |
 | `connector.search`, match at rank 281 | invisible | returned | CA2-C |
+| `connector.search`, ẞ/ß, İ/i̇, ǅ/ǆ beyond 200 | invisible | returned | CA2-C, this round |
 
 ### Live, real Chroma and real embeddings, 120 synthetic documents
 
@@ -97,7 +127,27 @@ and the merge lands on the CA2-B branch alone.
 
 ---
 
-## D. Acceptance scorecard
+## D. The user-visible warning, verified rather than assumed
+
+The independent review was right to insist on this: **the frontend did not read the field at all.**
+`App.tsx` contained zero references to coverage, and the `Message` and `ChatResponse` types in
+`api.ts` did not even declare it, so the server's warning reached the JSON and stopped there.
+
+Closed in this round: `CoverageNotice` is typed in `api.ts` and carried on `ChatResponse` and
+`Message`; the chat handler stores it per assistant message; `App.tsx` renders it beside the answer
+it qualifies as a `role="status"` element with `data-coverage-notice`; `styles.css` styles it as an
+advisory, deliberately distinct from an error banner.
+
+It is carried **per message**, not as view state, so a later complete answer cannot clear or inherit
+an earlier notice, and reopening a conversation shows what that answer actually said.
+
+Frontend evidence: `tsc --noEmit` and `vite build` clean, and **98 tests passed across 14 files**,
+including two new ones asserting the warning is rendered verbatim from the server's sentence, and
+that a complete answer renders none.
+
+---
+
+## E. Acceptance scorecard
 
 | Requirement | Verdict | Evidence |
 | --- | --- | --- |
@@ -108,7 +158,8 @@ and the merge lands on the CA2-B branch alone.
 | Nonempty partial result does not look exhaustive | **PASS** | catalog answer appends the notice |
 | Empty partial result is not proof of absence | **PASS** | answer text plus `coverage_notice` |
 | Coverage on the user-visible response | **PASS** | `ChatResponse.coverage_notice`, `ExecutionPlan.coverage_notice` |
-| Coverage notice cannot leak across requests | **PASS** | reset in the chat handler plus a test |
+| **Coverage visible to the user in the UI** | **PASS (was FAIL)** | rendered per message; 2 frontend tests |
+| Notice cannot leak across requests | **PASS, falsified** | sequential HTTP test plus a falsified stale-context test |
 | `GET /documents` list contract preserved | **PASS** | response model asserted; additive header only |
 | Additive paginated catalog, non-duplicating | **PASS** | native first-page-only, `native_included` |
 | Cursor refusal is a 4xx, not a 500 | **PASS** | route converts `CursorError` |
@@ -120,17 +171,17 @@ and the merge lands on the CA2-B branch alone.
 | Provider outage fails closed and reports | **PASS** | `authorization_unavailable` plus notice |
 | Cursor confidentiality and tamper resistance | **PASS** | AEAD; tamper, principal, query-change refused |
 | Rollback restores legacy behaviour | **PASS** | fixture and live |
-| p95 within 1.25x on comparable work | **PASS** | 1.03x / 1.05x locally and in CI; live retrieval 1.138x |
+| p95 within 1.25x on comparable work | **PASS** | 1.028x / 1.047x locally and in CI |
 | Zero accepted functional regressions | **PASS after two repairs** | see H |
 | `connector.search` match beyond 200 | **PASS (CA2-C)** | rank 281 returned |
 | `connector.search` truthful incompleteness | **PASS (CA2-C)** | capped and truncated cases |
-| `connector.search` Unicode matching | **PASS (CA2-C)** | uppercase non-ASCII title found |
+| **`connector.search` Unicode correctness** | **PASS (CA2-C)** | ẞ/ß, İ/i̇, ǅ/ǆ, ASCII 'i' vs 'İ', all beyond 200 |
 | Live DB-GPT/Chroma verification | **PASS** | 13 checks, 0 failures |
 | Merge | **NOT DONE** | owner hold binding |
 
 ---
 
-## E. Security assessment
+## F. Security assessment
 
 All passing, on fixture evidence and, for the retrieval path, on live evidence: tenant and principal
 isolation, current provider authorization, denial-versus-unavailable semantics, revocation at
@@ -139,27 +190,12 @@ evidence consumption, classification and group access, cursor confidentiality an
 authoritative reports, and CA1 non-mutation.
 
 Live-specific: an indexed document withheld from the authorized refs is **not returned by real
-retrieval**, which is the security property at the centre of this programme demonstrated against a
-real index rather than a stub. No information leakage was found through notices, errors or metadata.
+retrieval**. No information leakage was found through notices, errors or metadata; the notice is
+fixed application prose per cause, and a test asserts it contains no identifier, count or title.
 
----
-
-## F. Compatibility assessment
-
-| Capability | Status |
-| --- | --- |
-| General Chat, Data, Hybrid routing | unchanged |
-| Knowledge retrieval and evidence integrity | unchanged; the integrity gate retained |
-| `GET /documents` | body and response model unchanged; additive header only |
-| Pinned reports, ordering, fail-closed | preserved; ordering held at `created_at DESC` |
-| Native document policy semantics | preserved |
-| `connector.search` response keys | preserved; fields added only |
-| `retrieval_candidate_mode = legacy` | byte-identical in the paths tested, fixture and live |
-
-**One deliberate behaviour change, disclosed:** the catalog-pattern answer no longer claims absence
-when coverage is partial, and appends a notice to a nonempty partial list.
-
-**Two regressions found and repaired**, both mine, both caught by running wider selections: see H.
+CA2-C security note: removing the SQL prefilter means the scan is bounded rather than narrowed, so the
+tool reads up to `MATCH_SCAN_LIMIT` active resources of the tenant per search. Tenant scoping is
+unchanged and every candidate still passes current-authorization before being returned.
 
 ---
 
@@ -172,7 +208,6 @@ when coverage is partial, and appends a notice to a nonempty partial list.
 | before optimization | 526.39 / 798.84 | 675.90 / 1141.96 | 1.284 / **1.430 FAIL** | 303 vs 410 |
 | after, run 1 | 421.96 / 543.80 | 420.61 / 528.81 | 1.003 / **1.028 PASS** | 303 vs 314 |
 | after, run 2 | 653.74 / 823.50 | 629.59 / 862.59 | 0.963 / **1.047 PASS** | 303 vs 314 |
-| CI, GitHub runner | - | - | **PASS** | - |
 
 ### Live, real Chroma and embeddings, 120 documents
 
@@ -182,17 +217,29 @@ when coverage is partial, and appends a notice to a nonempty partial list.
 | Chroma vector directory | 20.7 MB for 120 per-document collections |
 | legacy query (100 refs) | 2546.7 ms |
 | candidate query (120 refs) | 2898.8 ms |
-| live retrieval latency ratio | **1.138x**, inside 1.25x |
-| embedding model cache on disk | 174.7 MB |
+| live retrieval latency ratio | 1.138x |
 | dependencies | dbgpt 0.8.2, dbgpt-ext 0.8.2, chromadb 1.5.9, sentence-transformers 6.1.0, torch 2.14.1 |
 
-**Live capacity finding, and it matters commercially.** There is one Chroma collection per document,
-so a live Knowledge query costs roughly **20-25 ms per authorized collection examined**. At 100-120
-documents that is 2.5-2.9 s per query; at the default 256-check cap on a larger corpus it would
-approach **6-7 s**. The authorization overhead is not the driver: the cost is proportional to the
-number of collections the retrieval step must visit, which is real work the legacy window avoided
-only by omitting documents. This is the cost of completeness, it is not a threshold breach, and it
-is not fixable without an architectural change that is out of scope for CA2.
+### Latency by collection count, and what it means
+
+There is one Chroma collection per document, so a Knowledge query pays per authorized collection
+examined. From the two measured points (2546.7 ms / 100 = 25.5 ms; 2898.8 ms / 120 = 24.2 ms):
+
+| Authorized collections | Expected retrieval step | Basis |
+| --- | --- | --- |
+| 100 | **2.5 s** | measured |
+| 120 | **2.9 s** | measured |
+| 256 (the default cap) | **6.1-6.4 s** | extrapolated from the measured per-collection cost, not measured |
+
+The first two are measurements; the third is an extrapolation and is labelled as one. This is the
+cost of completeness, not a regression against legacy work of the same size, and it is within the
+agreed relative threshold. It is an absolute-latency and SLA question with no agreed cutoff in this
+evidence, so it needs a conscious product rollout decision, and the default cap must not be raised
+silently to hide it.
+
+**The live 1.138x is not p95 evidence.** It is one retrieval-only timing per mode over different work
+(120 versus 100 collections), excluding the authorization traversal, so it must not be presented as
+proof that a deployed p95 met 1.25x. The p95 claim rests on the fixture table above and on CI.
 
 **Provider calls.** Equal at 100 resources; 150 vs 100 at 150 resources, buying the 50 resources
 legacy never examines. Unit pricing is not available to the harness, so **no currency estimate is
@@ -207,69 +254,117 @@ Local, at the heads above:
 | Suite | Result |
 | --- | --- |
 | CA2-A contract | 78 passed |
-| CA2-B integration plus measurement harness | 35 passed |
-| CA2-C search | 15 passed |
+| CA2-B integration plus measurement harness | 36 passed |
+| CA2-C search | **19 passed** (was 15) |
+| Frontend (vitest) | **98 passed across 14 files**, plus a clean `tsc`/`vite` build |
 | Live retrieval harness | 13 checks, 0 failures |
-| Regression selection, CA2-B touched seams | 182 passed |
-| Regression selection, CA2-C touched area | 165 passed |
-| Regression selection, chat/api/orchestrator | 113 passed |
-| `pytest tests/ --collect-only` | 1494 collected, no errors |
+| `pytest tests/ --collect-only` | clean, no collection errors |
 | ruff `E9,F63,F7,F82` | clean |
 
-CI, `OpenJM CI` workflow:
+### The CA2-C Unicode correction, and why the predicate was removed
+
+The independent review reproduced three cases where the shipped three-arm SQL predicate was not a
+superset of the Python matcher. Verified independently here, in SQLite, against that exact predicate:
+
+| title | query | Python | 3-arm predicate |
+| --- | --- | --- | --- |
+| ẞ | ß | True | **False** |
+| İ | i̇ (i + U+0307) | True | **False** |
+| ǅ | ǆ | True | **False** |
+| İ | i (pure ASCII query) | True | **False** |
+| ÄNDERUNGSBERICHT | änderungsbericht | True | **False** |
+
+The last row is the case a previous commit claimed to have fixed. It was still a silent omission.
+Every one of these would have removed an authorized resource before the LIMIT and before the matcher.
+
+Because SQLite does not Unicode-case-map and PostgreSQL's folding is locale dependent, no portable
+predicate can be proven to include every row Python accepts, and an ASCII-only form is unsafe too
+(Python lowercases 'İ' to 'i̇', which contains an ASCII 'i'). The predicate is therefore gone, not
+widened, and matching runs in Python over a bounded deterministically ordered scan with
+`matches_complete` false whenever the bound or the result cap was reached.
+
+Backend parity is now true by construction: **which rows match** is identical on SQLite and
+PostgreSQL because the matcher is Python. The only backend-dependent aspect is which rows fall inside
+the bound when the scan truncates, and that condition is reported.
+
+### The notice-lifecycle regressions, and one honest negative result
+
+Two HTTP regressions were added, both through the real router on one ASGI client:
+
+1. `test_a_partial_knowledge_notice_cannot_leak_into_the_next_http_request` — request 1 is a real
+   Knowledge request whose connector authorization cannot be proven (provider down), so the response
+   carries `authorization_unavailable`; request 2 is a real general Chat request and carries none.
+2. `test_a_stale_notice_in_the_ambient_context_is_cleared_before_the_request_runs` — a notice already
+   sitting in the ambient context must be cleared at request entry.
+
+**Falsification, and what it showed.** `reset_coverage_notice()` was disabled in the handler and both
+tests were re-run:
+
+* test 2 **fails**, exposing the leaked notice dict, so the reset is genuinely load-bearing and that
+  test is not vacuous;
+* test 1 **still passes**, because two independent HTTP requests are also isolated from each other by
+  the async runtime: each runs in a task that copies the context, so state set in one request does not
+  reach the next.
+
+That second result is recorded rather than hidden. The sequential test proves the notice reaches the
+user-visible response and that the next request does not carry it, but it does **not** by itself prove
+that the reset is what prevents that, and its docstring says so.
+
+### CI, `OpenJM CI` workflow
 
 | Head | Run | Result |
 | --- | --- | --- |
-| CA2-A `8557487` | `38220473733` | **success** |
-| CA2-B `01041c3` | `38220103969` | **success** |
-| CA2-B `978a2b1` | `38225750805` | **failure** (see below) |
-| CA2-B `63f5f1e` | `38226882796` | fix for the above |
-| CA2-C `1125427` | pending | the Unicode correction |
+| CA2-A `8557487` | `38220473733` | success |
+| CA2-B `707c50c` | `38227735920` | success |
+| CA2-C `1125427` | `38225959902` | success |
+| CA2-A `3ce6ccc`, CA2-B `7c7b3f4`, CA2-C `5d8f7fa` | this round | run IDs confirmed in the handoff |
 
-**Regression 1, caught by CI.** CA2-B `46a4b64` failed with `2 failed, 1488 passed`. Changing
-`_ready_documents` from returning a `list` to a `tuple` broke two `test_vs5_tenant_isolation.py`
-tests with `'list' object has no attribute 'id'`. Repaired by moving the CA2-B work to a new
-`_ready_documents_with_context` and leaving the original contract intact.
+Earlier, `978a2b1` failed and `63f5f1e` repaired it (regression 2 below).
 
-**Regression 2, caught by a wider local selection.** Adding `tests/live/conftest.py` shadowed
-`tests/conftest.py` for any module doing a bare `import conftest` (the report-run suites do), so
-seven modules failed to collect. CI at `978a2b1` failed for this reason. Repaired by removing that
-conftest and gating the live module with a module-level `skipif` instead.
+### Two regressions found and repaired, both mine
 
-Both were mine, both are understood, and neither survives in the current head.
+1. Changing `_ready_documents` from `list` to `tuple` broke two `test_vs5_tenant_isolation.py` tests
+   and failed CI. Repaired by moving the CA2-B work to `_ready_documents_with_context` and leaving the
+   original contract intact.
+2. Adding `tests/live/conftest.py` shadowed `tests/conftest.py` for any module doing a bare
+   `import conftest`, breaking seven report-run modules. Repair: no conftest in that directory; the
+   live module is gated by a module-level `skipif` instead.
 
 ---
 
 ## I. Rollback
 
 Tested, fixture and live: setting `retrieval_candidate_mode` to `legacy` restores the 100-resource
-window, `coverage = None`, no notice, zero candidate provider calls, and with the real index in
-place it returns the same 100 documents. No migration, reindexing or irreversible state change.
+window, `coverage = None`, no notice, zero candidate provider calls, and with the real index in place
+it returns the same 100 documents. No migration, reindexing or irreversible state change.
 
 CA2-C needs no flag: it is a correctness fix inside the existing tool, and reverting the commit
-restores the previous behaviour.
+restores the previous behaviour. The frontend change is additive and inert when the server sends no
+notice.
 
 ---
 
 ## J. Outstanding issues and limitations
 
-1. **The live stack is in-process, not a separate service.** DB-GPT is used as a library with a
-   local persistent Chroma. That is the real configured retrieval path, but it is not a
-   multi-process deployment with PostgreSQL and Keycloak in front. Those were not needed for the
-   retrieval path and were not stood up.
-2. **Live capacity.** 2.5-2.9 s per Knowledge query at 100-120 documents, driven by one Chroma
-   collection per document, approaching 6-7 s at the default cap on a larger corpus. See G.
-3. **`connector.search` scans rather than seeks**: `LIKE '%x%'` cannot use a btree index. Bounded in
-   rows returned, not rows examined, and not measured at production scale.
-4. **`connector.search` has no cursor continuation**; incompleteness is reported instead, which the
+1. **Live scope, stated precisely.** The live test validates **actual retrieval and citations** on a
+   real index with real embeddings. It is **not** a full deployed PostgreSQL/Keycloak HTTP stack, not
+   multi-user traffic, and not a model-generated end-user answer. It is a retrieval/evidence-boundary
+   smoke test, single-process and SQLite-backed.
+2. **Absent absolute latency evidence.** 100 and 120 collections are measured at 2.5 s and 2.9 s; 256
+   is extrapolated to 6.1-6.4 s. No agreed absolute cutoff exists in this evidence.
+3. **`connector.search` scans rather than seeks.** Removing the unsound predicate means `LIKE` no
+   longer narrows, so the tool examines up to `MATCH_SCAN_LIMIT` (500) active resources per search.
+   Bounded in rows examined and reported via `matches_complete`, and not measured at production scale.
+4. **`connector.search` has no cursor continuation.** Incompleteness is reported instead, which the
    mandate permits for this slice.
 5. **CA2-B's diff touches the CA2-A module** for the batched-read optimization. No contract element
    changed and CA2-A's 78 tests pass, but CA2-A is the accepted artifact, so this is flagged.
 6. **The live harness is excluded from CI** by design and runs only on request (`CA2_LIVE=1`), so
    regressions in it would not be caught by CI.
-7. **CI for CA2-C `1125427` and the reconciled CA2-B head `21294d9`** was in flight at the time of
-   writing; the table above records what had concluded.
-8. **No frontend changes** were required, so the frontend job is a no-op pass.
+7. **Frontend tests run against a stubbed fetch**, so they assert rendering, not a live server round
+   trip; the live server round trip is covered by the backend HTTP regressions.
+8. **This round's CI** for `3ce6ccc`, `7c7b3f4` and `5d8f7fa` was in flight when this dossier was
+   written; the handoff records the concluded run IDs.
 
 ---
 
@@ -277,27 +372,21 @@ restores the previous behaviour.
 
 **ACCEPT FOR OWNER MERGE REVIEW.**
 
-Every engineering gate is now met with evidence, including the one that was previously BLOCKED:
+Every engineering gate is met with evidence: both silent-omission defects fixed and measured, the
+live gate closed with real retrieval and citations, the CA2-C Unicode defect repaired by removing the
+unsound predicate rather than widening it, coverage truthful and now **visible in the UI**, the notice
+lifecycle covered by HTTP regressions one of which is falsified, the p95 gate passing on comparable
+work, rollback tested, and the stack reconciled onto current main so the reviewed diff is the CA2
+delta rather than unrelated deployment work.
 
-- both silent-omission defects are fixed and measured, at fixture and live level;
-- the live gate is closed with real DB-GPT, real Chroma and the real embedding model, 13 checks and
-  0 failures, including real semantic retrieval of a body-only-relevant document beyond the legacy
-  window and the live proof that evidence cannot come from outside the authorized refs;
-- coverage is truthful and reaches the user-visible response, with request-scoped hygiene;
-- authoritative scopes are exact, and revocation is honoured at consumption, live;
-- the single-traversal property is proven at request level for Knowledge and Hybrid;
-- the 1.25x performance gate passes on comparable work, locally and in CI, and the live retrieval
-  step measures 1.138x;
-- rollback is tested rather than documented;
-- the stack is reconciled against current main with a clean merge;
-- the two regressions introduced during this work were caught, understood and repaired, and are
-  recorded rather than hidden.
+Three things a reviewer should weigh, all stated plainly rather than buried:
 
-The one thing a reviewer should weigh before merging is **limitation 2**: the live capacity cost of
-completeness. Covering every authorized document means visiting every authorized document's
-collection, which is roughly 20-25 ms each at 100-120 documents. That is the price of the fix, it is
-within the agreed threshold, and it is not a regression against legacy work of the same size, but it
-is a real operating consideration and it should be an informed owner decision rather than a
-surprise.
+1. **Absolute latency.** Completeness costs roughly 20-25 ms per authorized collection: 2.5 s at 100,
+   2.9 s at 120, extrapolated 6.1-6.4 s at the default 256. That is a product rollout and SLA
+   decision, not a threshold breach.
+2. **Live scope.** Retrieval and citations are validated live; a deployed PostgreSQL/Keycloak stack
+   and a model-composed answer are not.
+3. **`connector.search` now scans** up to its bound instead of narrowing in SQL, which is the honest
+   cost of not shipping a predicate that silently drops matches.
 
 **A recommendation is not permission to merge.** Nothing here is merged or activated.
