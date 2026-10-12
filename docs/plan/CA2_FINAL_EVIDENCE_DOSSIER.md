@@ -7,7 +7,7 @@ Repository: `sjevans1/OpenJM-Enterprise-AI`
 | Package | PR | Branch | Head | Base | State |
 | --- | --- | --- | --- | --- | --- |
 | CA2-A contract | #94 | `plan/ca2-retrieval-completeness` | `3ce6ccc` | `main@709ce47` | draft, experimentally accepted |
-| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `048ad1b` | PR #94 branch | draft, conditionally accepted |
+| CA2-B integration | #98 | `feat/ca2-b-candidate-integration` | `2e6a56e` | PR #94 branch | draft, conditionally accepted |
 | CA2-C search | #100 | `feat/ca2c-search-completeness` | `fc9a65e` | `main@709ce47` | draft, conditionally accepted |
 
 Baseline when CA2 began: `main@8d6b7d8`. Current `main`: `709ce47`.
@@ -220,6 +220,7 @@ qualification.
 | Empty partial result is not proof of absence | **PASS** | answer text plus `coverage_notice` |
 | Coverage on the user-visible response | **PASS** | `ChatResponse.coverage_notice`, `ExecutionPlan.coverage_notice` |
 | **Coverage visible to the user in the UI** | **PASS (was FAIL)** | rendered per message; 3 frontend tests |
+| **Coverage shown exactly once on a reopened answer** | **PASS (was FAIL)** | displayed text strip plus banner; falsified regression |
 | **History replay keeps the qualification** | **PASS** | persisted with the turn, replayed via `MessageOut`; HTTP tests |
 | Notice cannot leak across requests | **PASS, falsified** | sequential HTTP test plus a falsified stale-context test |
 | `GET /documents` list contract preserved | **PASS** | response model asserted; additive header only |
@@ -391,17 +392,19 @@ content again, which fails with `expected 2 to be 1` and identifies the duplicat
 | Head | Run | Result |
 | --- | --- | --- |
 | CA2-A `3ce6ccc` (current) | `38230734152` | **success** |
-| CA2-B `048ad1b` (current) | `38235921216` | **success** |
+| CA2-B `2e6a56e` (current) | `38237828602` | **success** |
 | CA2-C `fc9a65e` (current) | `38235360668` | **success** |
-| CA2-B `28cbf62` (previous tip) | `38233304499` | success, concluded |
+| CA2-B `048ad1b` | `38235921216` | success |
+| CA2-B `28cbf62` | `38233304499` | success |
 | CA2-B `6d30b6b` | `38232317447` | success |
 | CA2-B `707c50c` | `38227735920` | success |
 | CA2-C `5d8f7fa` | `38231163795` | success |
 | CA2-A `8557487` | `38220473733` | success |
 
 All three current heads passed the full workflow, including the Backend/Python 3.11 job and the
-Frontend/Node 22 job that covers the coverage-notice rendering and the replay test. The previous
-CA2-B tip `28cbf62`, reported as still running in the last review, has since concluded successfully.
+Frontend/Node 22 job that covers the coverage-notice rendering, the replay test and the
+displayed-once regression. The previous CA2-B tip `e373e7a` (dossier markdown only) was superseded by
+a later push and its run shows cancelled rather than failed; the code head `048ad1b` under it passed.
 
 The commit carrying this dossier is docs-only and is the CA2-B branch tip; its own run repeats the
 same jobs over an identical code tree plus markdown.
