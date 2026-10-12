@@ -1096,6 +1096,26 @@ function stubReloadedPartialConversation() {
         coverage_notice: RELOADED_PARTIAL_NOTICE,
         created_at: '2026-01-02T03:04:06Z',
       },
+      {
+        id: 'message-user-later',
+        role: 'user',
+        content: 'and the levy rate?',
+        evidence: [],
+        artifacts: [],
+        created_at: '2026-01-02T03:05:05Z',
+      },
+      {
+        id: 'message-assistant-later',
+        role: 'assistant',
+        // A later COMPLETE turn: clean text, and no structured notice to render.
+        content: 'The levy rate is 0.4 percent.',
+        execution_class: 'knowledge',
+        requested_mode: 'knowledge',
+        evidence: [],
+        artifacts: [],
+        coverage_notice: null,
+        created_at: '2026-01-02T03:05:06Z',
+      },
     ],
   }
   vi.stubGlobal(
@@ -1113,7 +1133,7 @@ function stubReloadedPartialConversation() {
   )
 }
 
-test('reopening a partial conversation still shows the qualification', async () => {
+test('reopening a partial conversation shows the warning exactly once', async () => {
   storeAuthenticatedSession()
   stubReloadedPartialConversation()
   const { container } = render(<App />)
@@ -1121,14 +1141,36 @@ test('reopening a partial conversation still shows the qualification', async () 
   fireEvent.click(await screen.findByRole('button', { name: /Levy policy question/ }))
   await screen.findAllByText(/An answer\./)
 
-  // Queried by node rather than by text, because the app renders more than one layout of the same
-  // conversation and a text query would be ambiguous.
-  const qualified = Array.from(container.querySelectorAll('.message-content')).filter((node) =>
+  // The WHOLE displayed assistant answer, status banner included. The previous version of this test
+  // only inspected .message-content, so it passed while the reopened conversation actually showed the
+  // warning twice: once as prose carried in the persisted text, once as the styled notice beside it.
+  const assistantMessages = Array.from(container.querySelectorAll('.assistant-message'))
+  expect(assistantMessages.length).toBeGreaterThan(0)
+
+  const partial = assistantMessages.filter((node) =>
     (node.textContent || '').includes(RELOADED_PARTIAL_NOTICE.message),
   )
-  expect(qualified.length).toBeGreaterThan(0)
-  for (const node of qualified) {
-    // Exactly once per rendered answer: the qualification must not be doubled by a second path.
-    expect((node.textContent || '').split(RELOADED_PARTIAL_NOTICE.message)).toHaveLength(2)
+  const complete = assistantMessages.filter(
+    (node) => !(node.textContent || '').includes(RELOADED_PARTIAL_NOTICE.message),
+  )
+  expect(partial.length).toBeGreaterThan(0)
+  expect(complete.length).toBeGreaterThan(0)
+
+  for (const node of partial) {
+    const occurrences = (node.textContent || '').split(RELOADED_PARTIAL_NOTICE.message).length - 1
+    const banners = node.querySelectorAll('[data-coverage-notice]').length
+    expect(banners).toBe(1)
+    // Exactly one warning, and it is the banner: the answer text no longer repeats it.
+    expect(occurrences).toBe(1)
+    expect(node.querySelector('.message-content')?.textContent || '').not.toContain(
+      RELOADED_PARTIAL_NOTICE.message,
+    )
+    // The answer itself is still shown, only without the qualification sentence.
+    expect(node.querySelector('.message-content')?.textContent || '').toContain('An answer.')
+  }
+
+  for (const node of complete) {
+    expect(node.querySelectorAll('[data-coverage-notice]')).toHaveLength(0)
+    expect(node.textContent || '').not.toContain(RELOADED_PARTIAL_NOTICE.message)
   }
 })

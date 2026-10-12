@@ -40,6 +40,7 @@ threshold.** The live 1.138x is **not** p95 evidence and is not presented as suc
 
 | Finding | Disposition |
 | --- | --- |
+| CA2-B: reopened history showed the warning twice (prose plus banner) | **Fixed.** Exact suffix stripped from the displayed text only; persisted content untouched. See D. |
 | CA2-B: coverage warning lost when a conversation is reopened | **Fixed.** Persisted with the turn and replayed through `MessageOut`, no migration. See D2. |
 | CA2-C: incomplete-scan note asserted that unseen matches exist | **Fixed.** Per-cause non-asserting wording, with a regression. See H. |
 | CA2-C: three-arm SQL prefilter not a superset of the Python matcher (ẞ/ß, İ/i̇, ǅ/ǆ) | **Fixed.** Predicate removed, matching is Python-only over a bounded ordered scan. 20 tests. |
@@ -152,11 +153,20 @@ it qualifies as a `role="status"` element with `data-coverage-notice`; `styles.c
 advisory, deliberately distinct from an error banner.
 
 It is carried **per message**, not as view state, so a later complete answer cannot clear or inherit
-an earlier notice, and reopening a conversation shows what that answer actually said.
+an earlier notice.
+
+**Rendered exactly once.** A historical turn carries the qualification inside its persisted text
+(see D2), and it also arrives as structured metadata, so the two would otherwise both be shown. The
+UI therefore strips the **exact** server-written trailing suffix from the *displayed* text when the
+structured notice matches it and renders the styled `role="status"` notice in its place. The
+persisted content is never changed, so older clients and the stored record keep the sentence, and
+unrecognised or non-matching text is displayed untouched.
 
 Frontend evidence: `tsc --noEmit` and `vite build` clean, and **99 tests passed across 14 files**,
 including three that assert the warning is rendered verbatim from the server's sentence, that a
-complete answer renders none, and that **reopening a partial conversation still shows it**.
+complete answer renders none, and that **reopening a partial conversation shows it exactly once
+across the entire displayed assistant answer**, banner included, while the later complete answer
+shows none.
 
 ---
 
@@ -361,7 +371,20 @@ tests were re-run:
 
 That second result is recorded rather than hidden. The sequential test proves the notice reaches the
 user-visible response and that the next request does not carry it, but it does **not** by itself prove
-that the reset is what prevents that, and its docstring says so.
+the reset is what prevents that, and its docstring says so.
+
+### The reopened-history display, and a test that had been passing falsely
+
+Reopened history showed the warning **twice**: once as the sentence carried in the persisted text and
+once as the styled banner beside it. The previous round's frontend test asserted only that each
+`.message-content` node contained the sentence once, and never looked at the sibling
+`.coverage-notice` node, so it asserted the right-sounding claim while the defect sat outside the
+element it inspected. The independent source review found what the test could not.
+
+The corrected regression counts occurrences across the **whole displayed assistant message**,
+banner included, and requires exactly one, with the banner present and the answer text free of the
+repeated sentence; the later complete turn must show none. It was falsified by rendering the raw
+content again, which fails with `expected 2 to be 1` and identifies the duplicate precisely.
 
 ### CI, `OpenJM CI` workflow
 
@@ -429,9 +452,10 @@ notice.
    trip; the live server round trip is covered by the backend HTTP regressions.
 8. **The negative case is deliberate.** If a client ignores `MessageOut.coverage_notice`, it still
    sees the qualification in the persisted text; that is why the text carries it rather than the
-   field alone. The trade-off is that history shows the qualification as prose rather than as a
-   styled notice. This is the smallest implementation that survives a reload without a migration, and
-   the review's own guidance permitted it.
+   field alone. This application's UI does the opposite of ignoring it: it shows the styled notice
+   once and strips the duplicated sentence from the *displayed* text, leaving the stored content
+   intact. This is the smallest implementation that survives a reload without a migration, and the
+   review's own guidance permitted it.
 
 ---
 

@@ -362,6 +362,22 @@ export function ExportControls({
   )
 }
 
+// CA2-B: a historical assistant turn carries its coverage qualification INSIDE the persisted answer
+// text, because a stored turn has no separate metadata channel (see PERSISTED_COVERAGE_LEAD in the
+// backend). When the same qualification also arrives as structured metadata, the displayed text
+// strips that exact trailing suffix so the user sees the warning once, as the styled notice, instead
+// of once as prose and once as a banner. Nothing here changes what is stored: the persisted content
+// is untouched for older clients and for the record itself, and unrecognised text is left alone.
+const PERSISTED_COVERAGE_LEAD = '\n\nCoverage note: '
+
+function displayMessageContent(message: Message): string {
+  const notice = message.coverage_notice?.message
+  if (!notice) return message.content
+  const suffix = `${PERSISTED_COVERAGE_LEAD}${notice}`
+  if (!message.content.endsWith(suffix)) return message.content
+  return message.content.slice(0, message.content.length - suffix.length)
+}
+
 export default function App() {
   const [view, setView] = useState<View>('chat')
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -1350,7 +1366,7 @@ export default function App() {
                             </span>
                           )}
                         </div>
-                        <div className="message-content">{message.content}</div>
+                        <div className="message-content">{displayMessageContent(message)}</div>
                         {message.role === 'assistant' && message.coverage_notice?.message && (
                           <div className="coverage-notice" role="status" data-coverage-notice>
                             <AlertTriangle size={14} aria-hidden="true" />
