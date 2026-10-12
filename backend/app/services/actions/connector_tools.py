@@ -52,6 +52,30 @@ from app.services.connectors.service import (
 )
 
 
+# CA2-C: bounds for connector search.
+#
+# Before this change the search read an arbitrary 200-row window of the tenant's resources and only
+# then tested each row's title and external id in Python, so a resource that matched but sat beyond
+# position 200 was permanently invisible.
+#
+# The match test is now performed ENTIRELY in Python, over a bounded deterministically ordered scan
+# of the tenant's active resources. The absence of any SQL narrowing is deliberate and load-bearing:
+#
+#   A SQL case-folding predicate cannot be made a provable superset of Python's
+#   `query in (title or "").lower()` on either supported backend. SQLite's lower()/upper() do not
+#   Unicode-case-map, so `title="ẞ"` does not match `query="ß"`, `title="İ"` does not match
+#   `query="i̇"` (i + combining dot above), and `title="ǅ"` does not match `query="ǆ"`, all three of
+#   which Python accepts. Nor is an ASCII-only form safe: Python lowercases "İ" to "i̇", which
+#   CONTAINS an ASCII "i", so the query "i" is accepted by Python and rejected by the database's
+#   lower(title). A predicate that can drop a row the matcher accepts reintroduces exactly the
+#   silent omission this change exists to remove.
+#
+# So the scan is bounded instead of narrowed, and truncation is reported rather than hidden: see
+# matches_complete below. The bound is a scale limit, not a correctness claim.
+MATCH_SCAN_LIMIT = 500
+MAX_MATCHES = 25
+
+
 def _refuse(category: str, detail: str = "") -> dict:
     return {"ok": False, "failure_category": category, "detail": redact(detail, limit=300)}
 
@@ -130,17 +154,39 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
     statement = select(ExternalResource).where(
         ExternalResource.tenant_id == principal.tenant_id,
         ExternalResource.lifecycle_state == EXTERNAL_STATE_ACTIVE,
+        # No match predicate here, on purpose. See the MATCH_SCAN_LIMIT comment: no SQL case-folding
+        # form is a provable superset of the Python matcher, so a predicate here could silently drop
+        # a legitimate match before the matcher ever sees it. The bound below limits the work, and
+        # matches_complete reports when that bound was reached. Body content is deliberately not
+        # matched here: connector search matches provider metadata, and a body predicate would
+        # hard-filter resources whose relevance is only in their content, which is the Knowledge
+        # path's job.
     )
     connector_id = arguments.get("connector_id")
     if connector_id:
         statement = statement.where(ExternalResource.connector_instance_id == str(connector_id))
-    result = await db.execute(statement.limit(200))
-    candidates = list(result.scalars().all())
+    # Deterministic order over the resource identity, so a bounded scan is reproducible rather than
+    # depending on row order, and so a match beyond the old 200-row window is reached in a stable
+    # position. Whichever rows fall inside the bound is backend-dependent; WHICH ROWS MATCH is not,
+    # because the matcher is Python and runs over the scanned rows identically on SQLite and
+    # PostgreSQL. Truncation is reported, so a backend-dependent bound can never be mistaken for a
+    # complete answer.
+    statement = statement.order_by(
+        ExternalResource.connector_instance_id,
+        ExternalResource.resource_namespace,
+        ExternalResource.external_id,
+    )
+    result = await db.execute(statement.limit(MATCH_SCAN_LIMIT + 1))
+    scanned = list(result.scalars().all())
+    scan_truncated = len(scanned) > MATCH_SCAN_LIMIT
+    candidates = scanned[:MATCH_SCAN_LIMIT]
 
     matches = []
     denied = 0
     for resource in candidates:
         title = (resource.title or "").lower()
+        # The authoritative matcher, and the only one. It runs in Python over every scanned row
+        # precisely so the result cannot depend on a database's case-folding behaviour.
         if query not in title and query not in (resource.external_id or "").lower():
             continue
         outcome = await authorize_resource(
@@ -164,15 +210,38 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
                 "provenance": sync_engine.provenance_for(resource),
             }
         )
-        if len(matches) >= 25:
+        if len(matches) >= MAX_MATCHES:
             break
+
+    # Truthful completeness. False when the scan hit its bound, or when the match list was capped.
+    # A caller is therefore never told that an incomplete search was exhaustive. The WORDING matters
+    # as much as the flag: a truncated scan proves that resources were left UNCHECKED, not that
+    # further matching resources exist. Claiming more matches exist would assert something about rows
+    # this request never read, so each cause gets its own non-asserting sentence.
+    scan_capped = scan_truncated
+    matches_capped = len(matches) >= MAX_MATCHES
+    matches_complete = not scan_capped and not matches_capped
+    note = "Only resources whose current user authorization was proven are returned."
+    if scan_capped:
+        note += (
+            " This search may be incomplete: the scan reached its limit before every candidate could"
+            " be checked, so a further matching resource may exist beyond that point. narrow the"
+            " query or use connector.fetch for a specific resource."
+        )
+    elif matches_capped:
+        note += (
+            " More matches may exist than are listed here: the result list reached its limit."
+            " narrow the query or use connector.fetch for a specific resource."
+        )
 
     return {
         "ok": True,
         "query": query,
         "matches": matches,
         "denied_count": denied,
-        "note": "Only resources whose current user authorization was proven are returned.",
+        "matches_complete": matches_complete,
+        "match_scan_limit": MATCH_SCAN_LIMIT,
+        "note": note,
     }
 
 
