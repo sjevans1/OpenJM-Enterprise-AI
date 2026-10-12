@@ -144,6 +144,41 @@ It could not complete because the fresh runtime had no Python 3.11 and the
 bootstrap's own prerequisite step needs `sudo`, which the imported root-only
 distribution does not provide. Recorded as **NOT RUN**, not PASS.
 
+### REL1-B4H installer hardening (2026-10-12)
+
+The follow-on hardening above landed in REL1-B4H and was verified on the real
+Windows host.
+
+| Item | Result |
+| --- | --- |
+| RepoPath default resolution (H1) | fixed: body-scope resolution, explicit wins, `$PSCommandPath` then `$MyInvocation`, cwd never used, `ProviderPath` for UNC, precise failure when unresolvable |
+| Privilege detection (H2) | fixed: root / sudo-capable / no-sudo classified before any install; root uses apt directly, sudo uses `sudo -n`, no-sudo fails with the required message |
+| Python 3.11 strategy (H3) | Option A selected: explicit operator prerequisite. The invalid `apt-get install python3.11` path is removed; a pinned third-party source was rejected to avoid widening the release supply chain |
+| Node 22 (H4) | preserved as required-and-never-auto-installed; wrong major and absent Node both reported precisely |
+| Reporting (H5) | six precise failure categories, each non-zero exit; the old cascading `sudo: command not found` then `Python 3.11 is required` is gone |
+| Delegation (H6) | unchanged: `bash scripts/install-linux.sh --profile <profile>` with `-SkipFrontend`; no dependency resolution in the PowerShell layer |
+
+Behavioural evidence (bounded harness, stub `wsl`, no real distribution created):
+
+- previous revision: **7 passed, 10 failed**;
+- hardened revision: **17 passed, 0 failed**.
+
+Real-runtime evidence on the disposable distro `openjm-rel1b4` (Ubuntu 24.04.5,
+uid 0, no sudo, no Python 3.11):
+
+- hardened: `Repository: C:\rel1b4\OpenJM-Enterprise-AI`, `WSL path:
+  /mnt/c/rel1b4/OpenJM-Enterprise-AI`, `user state = root (uid 0)`, then the
+  precise Python 3.11 prerequisite failure;
+- previous revision on the same runtime: `Installing Linux prerequisites inside
+  WSL...`, `bash: line 1: sudo: command not found`, then the misleading
+  `Linux installer failed inside WSL (exit 1)`.
+
+Row 7 (Windows/WSL2 runtime install) remains **NOT RUN**. The hardening removes
+the reporting and abstraction defects; it does not remove the Python 3.11
+prerequisite, which must still be provisioned in the target distribution before
+the install can complete. The full development install, backend start,
+`/api/health`, `/api/ready` and the migration remain NOT RUN for that reason.
+
 ### Follow-on recommendation: bounded REL1-B4 installer hardening
 
 None of the following is fixed, and none may be treated as resolved merely

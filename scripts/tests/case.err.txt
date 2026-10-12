@@ -1,0 +1,7 @@
+Fail : WSL is not installed. Run 'wsl --install' in an elevated shell, reboot, and re-run.
+At \\wsl.localhost\Ubuntu-24.04\home\sjeva\openjm-enterprise-ai\scripts\install-wsl2.ps1:93 char:46
++ ... l } catch { Fail "WSL is not installed. Run 'wsl --install' in an ele ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,Fail
+ 
