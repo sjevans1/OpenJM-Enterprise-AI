@@ -217,16 +217,23 @@ async def test_wildcards_in_the_query_are_treated_literally(
     assert result["matches"] == [], "a literal % must not match everything"
 
 
-async def test_unicode_metadata_beyond_position_200_is_not_dropped_by_the_narrowing(
-    file_db, connector, provider, knowledge
-):
-    """The SQL narrowing must not drop a row the authoritative matcher accepts.
+# Each pair below is a case where Python's str.lower() accepts the match and a database
+# case-folding predicate does not. They are the concrete counterexamples that make "narrow in SQL"
+# unsound, and each one would have silently dropped an authorized resource before the Python matcher
+# ever saw it. None of them can pass by a coincidence of an upper()/lower() round trip.
+UNICODE_CASE_PAIRS = [
+    pytest.param("ẞ", "ß", id="capital-sharp-s-vs-sharp-s"),
+    pytest.param("İ", "i̇", id="dotted-capital-i-vs-i-combining-dot"),
+    pytest.param("ǅ", "ǆ", id="titlecase-dz-vs-lowercase-dz"),
+]
 
-    Python's ``lower()`` folds 'Ä' to 'ä'; SQLite's ``lower()`` does not fold non-ASCII at all. So a
-    single ``lower(col) LIKE %lower(q)%`` form missed an uppercase non-ASCII title entirely, while
-    the Python matcher would have accepted it. The upper-folded form is what closes this.
-    """
-    instance_id = await seed_titled(file_db, provider, 300, name="c2c-unicode")
+
+@pytest.mark.parametrize(("title", "query"), UNICODE_CASE_PAIRS)
+async def test_case_folded_non_ascii_metadata_beyond_200_is_matched(
+    file_db, connector, provider, knowledge, title, query
+):
+    """A case-folded non-ASCII match must be found, not dropped and not reported complete-empty."""
+    instance_id = await seed_titled(file_db, provider, 300, name=f"c2c-fold-{ord(title)}")
     async with file_db() as db:
         row = (
             await db.execute(
@@ -236,24 +243,91 @@ async def test_unicode_metadata_beyond_position_200_is_not_dropped_by_the_narrow
                 )
             )
         ).scalars().first()
-        row.title = "ÄNDERUNGSBERICHT-280"
+        row.title = title
+        await db.commit()
+
+    before = await rows_before(file_db, instance_id, "m280")
+    assert before > 200, (
+        "the target must sit beyond the old 200-row window, otherwise this proves nothing"
+    )
+
+    with request_context():
+        result = await search(file_db, query=query)
+
+    assert "m280" in {match["external_id"] for match in result["matches"]}, (
+        f"a resource titled {title!r} must match the query {query!r} because Python's case folding "
+        "accepts it; no database-side predicate may drop it, and an empty result must not be "
+        "reported as complete"
+    )
+    assert result["matches_complete"] is True
+
+
+async def test_an_ascii_query_still_needs_python_case_folding(
+    file_db, connector, provider, knowledge
+):
+    """Even a pure-ASCII query is unsafe to narrow in SQL.
+
+    Python lowercases 'İ' to 'i̇', which CONTAINS an ASCII 'i'. So the query 'i' must match a resource
+    titled 'İ', while the database's lower(title) leaves 'İ' unfolded and would not find it. This is
+    why the narrowing was removed outright rather than retained for ASCII.
+    """
+    instance_id = await seed_titled(file_db, provider, 300, name="c2c-ascii-fold")
+    async with file_db() as db:
+        row = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m280",
+                )
+            )
+        ).scalars().first()
+        row.title = "İ"
         await db.commit()
 
     with request_context():
-        result = await search(file_db, query="änderungsbericht-280")
+        result = await search(file_db, query="i")
 
-    returned = {match["external_id"] for match in result["matches"]}
-    assert "m280" in returned, (
-        "a non-ASCII metadata match beyond position 200 was dropped by the SQL narrowing even though "
-        "the case-insensitive matcher accepts it"
+    assert "m280" in {match["external_id"] for match in result["matches"]}, (
+        "the ASCII query 'i' is accepted by Python against a title of 'İ'; a database lower() does "
+        "not fold it, so SQL narrowing would have dropped this authorized resource"
     )
 
 
-async def test_ascii_matching_is_unchanged_by_the_unicode_widening(
+async def test_a_non_ascii_match_beyond_the_scan_bound_is_reported_incomplete(
+    file_db, connector, provider, knowledge, monkeypatch
+):
+    """The bound must never be presented as a complete absence, including for non-ASCII matches."""
+    from app.services.actions import connector_tools as module
+
+    instance_id = await seed_titled(file_db, provider, 40, name="c2c-fold-bound")
+    async with file_db() as db:
+        row = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m039",
+                )
+            )
+        ).scalars().first()
+        row.title = "ẞ"
+        await db.commit()
+
+    monkeypatch.setattr(module, "MATCH_SCAN_LIMIT", 5)
+    with request_context():
+        result = await search(file_db, query="ß")
+
+    assert result["matches"] == []
+    assert result["matches_complete"] is False, (
+        "a match outside the scan bound must be reported as incomplete examination, never as a "
+        "complete empty result"
+    )
+
+
+async def test_matching_does_not_become_a_match_everything_filter(
     file_db, connector, provider, knowledge
 ):
-    """Widening the predicate must not turn it into a match-everything filter."""
-    instance_id = await seed_titled(file_db, provider, 40, name="c2c-narrow-still")
+    """Removing the narrowing must not make the tool return resources that do not match."""
+    instance_id = await seed_titled(file_db, provider, 40, name="c2c-not-everything")
     with request_context():
         result = await search(file_db, query="quarterly-report-007")
     assert [match["external_id"] for match in result["matches"]] == ["m007"]

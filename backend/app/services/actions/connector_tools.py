@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import current_principal
@@ -54,44 +54,26 @@ from app.services.connectors.service import (
 
 # CA2-C: bounds for connector search.
 #
-# The match predicate is applied in the DATABASE before any candidate window, and the window now
-# bounds MATCHES rather than bounding the table. Before this change the search read an arbitrary
-# 200-row window of the tenant's resources and only then tested each row's title and external id in
-# Python, so a resource that matched but sat beyond position 200 was permanently invisible.
+# Before this change the search read an arbitrary 200-row window of the tenant's resources and only
+# then tested each row's title and external id in Python, so a resource that matched but sat beyond
+# position 200 was permanently invisible.
+#
+# The match test is now performed ENTIRELY in Python, over a bounded deterministically ordered scan
+# of the tenant's active resources. The absence of any SQL narrowing is deliberate and load-bearing:
+#
+#   A SQL case-folding predicate cannot be made a provable superset of Python's
+#   `query in (title or "").lower()` on either supported backend. SQLite's lower()/upper() do not
+#   Unicode-case-map, so `title="ẞ"` does not match `query="ß"`, `title="İ"` does not match
+#   `query="i̇"` (i + combining dot above), and `title="ǅ"` does not match `query="ǆ"`, all three of
+#   which Python accepts. Nor is an ASCII-only form safe: Python lowercases "İ" to "i̇", which
+#   CONTAINS an ASCII "i", so the query "i" is accepted by Python and rejected by the database's
+#   lower(title). A predicate that can drop a row the matcher accepts reintroduces exactly the
+#   silent omission this change exists to remove.
+#
+# So the scan is bounded instead of narrowed, and truncation is reported rather than hidden: see
+# matches_complete below. The bound is a scale limit, not a correctness claim.
 MATCH_SCAN_LIMIT = 500
 MAX_MATCHES = 25
-
-
-def _like_pattern(value: str) -> str:
-    """A LIKE pattern for a LITERAL substring, with wildcards in the input escaped.
-
-    Without escaping, a caller's query containing % or _ would act as a wildcard and could widen the
-    match beyond what was asked for.
-    """
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
-def _metadata_match(column, query: str):
-    """A SUPERSET predicate for the in-Python substring test.
-
-    Python's ``str.lower()`` and the database's ``lower()`` do not fold every non-ASCII character
-    the same way, so a single ``lower(col) LIKE %lower(q)%`` can exclude a row that the
-    authoritative Python matcher would have accepted. Three forms are unioned instead:
-
-    * the ASCII case-insensitive form, which matches the previous Python behaviour for ASCII
-    * the exact-case form
-    * the upper-folded form, which catches a query typed in upper case against lower-folded content
-      and vice versa for characters the database will not case-fold
-
-    The Python check in the caller remains the authoritative matcher, so these forms can only ever
-    widen the candidate set, never narrow it below what the matcher accepts.
-    """
-    return or_(
-        func.lower(column).like(_like_pattern(query.lower()), escape="\\"),
-        column.like(_like_pattern(query), escape="\\"),
-        func.upper(column).like(_like_pattern(query.upper()), escape="\\"),
-    )
 
 
 def _refuse(category: str, detail: str = "") -> dict:
@@ -172,21 +154,23 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
     statement = select(ExternalResource).where(
         ExternalResource.tenant_id == principal.tenant_id,
         ExternalResource.lifecycle_state == EXTERNAL_STATE_ACTIVE,
-        # Matching, not permission. This is the SAME substring test the loop below performs, moved
-        # into SQL so the window bounds matches instead of bounding the table, and widened to three
-        # forms per column so it cannot exclude a row the Python matcher would accept (see
-        # _metadata_match). Body content is deliberately not matched here: connector search matches
-        # provider metadata, and pushing a body predicate into this query would hard-filter
-        # resources whose relevance is only in their content, which is the Knowledge path's job.
-        or_(
-            _metadata_match(ExternalResource.title, query),
-            _metadata_match(ExternalResource.external_id, query),
-        ),
+        # No match predicate here, on purpose. See the MATCH_SCAN_LIMIT comment: no SQL case-folding
+        # form is a provable superset of the Python matcher, so a predicate here could silently drop
+        # a legitimate match before the matcher ever sees it. The bound below limits the work, and
+        # matches_complete reports when that bound was reached. Body content is deliberately not
+        # matched here: connector search matches provider metadata, and a body predicate would
+        # hard-filter resources whose relevance is only in their content, which is the Knowledge
+        # path's job.
     )
     connector_id = arguments.get("connector_id")
     if connector_id:
         statement = statement.where(ExternalResource.connector_instance_id == str(connector_id))
-    # Deterministic order, so a bounded scan is reproducible rather than depending on row order.
+    # Deterministic order over the resource identity, so a bounded scan is reproducible rather than
+    # depending on row order, and so a match beyond the old 200-row window is reached in a stable
+    # position. Whichever rows fall inside the bound is backend-dependent; WHICH ROWS MATCH is not,
+    # because the matcher is Python and runs over the scanned rows identically on SQLite and
+    # PostgreSQL. Truncation is reported, so a backend-dependent bound can never be mistaken for a
+    # complete answer.
     statement = statement.order_by(
         ExternalResource.connector_instance_id,
         ExternalResource.resource_namespace,
@@ -201,7 +185,8 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
     denied = 0
     for resource in candidates:
         title = (resource.title or "").lower()
-        # Retained as the authoritative matcher: the SQL predicate only narrows the candidate set.
+        # The authoritative matcher, and the only one. It runs in Python over every scanned row
+        # precisely so the result cannot depend on a database's case-folding behaviour.
         if query not in title and query not in (resource.external_id or "").lower():
             continue
         outcome = await authorize_resource(
