@@ -152,7 +152,8 @@ Windows host.
 | Item | Result |
 | --- | --- |
 | RepoPath default resolution (H1) | fixed: body-scope resolution, explicit wins, `$PSCommandPath` then `$MyInvocation`, cwd never used, `ProviderPath` for UNC, precise failure when unresolvable |
-| Privilege detection (H2) | fixed: root / sudo-capable / no-sudo classified before any install; root uses apt directly, sudo uses `sudo -n`, no-sudo fails with the required message |
+| Privilege detection (H2) | fixed: root / sudo-capable / no-sudo classified before any install; root uses apt directly, sudo uses `sudo -n`, no-sudo fails with the required message. **Review correction:** sudo capability now means USABLE non-interactive sudo (`command -v sudo && sudo -n true`); a sudo binary that still demands a password is classified as no usable sudo |
+| RepoPath contract (H1) | **Review correction:** the supported source is a Windows drive-letter path mapped to `/mnt/<drive>/...`; a UNC or provider path fails closed with an actionable message instead of being mapped |
 | Python 3.11 strategy (H3) | Option A selected: explicit operator prerequisite. The invalid `apt-get install python3.11` path is removed; a pinned third-party source was rejected to avoid widening the release supply chain |
 | Node 22 (H4) | preserved as required-and-never-auto-installed; wrong major and absent Node both reported precisely |
 | Reporting (H5) | six precise failure categories, each non-zero exit; the old cascading `sudo: command not found` then `Python 3.11 is required` is gone |
@@ -161,7 +162,8 @@ Windows host.
 Behavioural evidence (bounded harness, stub `wsl`, no real distribution created):
 
 - previous revision: **7 passed, 10 failed**;
-- hardened revision: **17 passed, 0 failed**.
+- hardened revision: **17 passed, 0 failed**;
+- after the two review corrections: **25 passed, 0 failed**, and **21 passed / 4 failed** against the pre-correction candidate `ded54e8` (three UNC cases plus the unusable-sudo case).
 
 Real-runtime evidence on the disposable distro `openjm-rel1b4` (Ubuntu 24.04.5,
 uid 0, no sudo, no Python 3.11):

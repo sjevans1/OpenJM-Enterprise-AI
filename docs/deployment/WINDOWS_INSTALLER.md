@@ -94,11 +94,32 @@ Order, deterministic and diagnostic:
 
 Two PowerShell details this relies on:
 
-- the path is taken from `Resolve-Path ... .ProviderPath`, not `.Path`, because
-  `.Path` returns a PowerShell provider prefix for a UNC location;
+- `Resolve-Path ... .ProviderPath` is used rather than `.Path`, which returns a
+  PowerShell provider prefix for a provider-qualified location. This does **not**
+  make a UNC location usable: see the supported contract below;
 - the resolution happens in the script body, never in a `param()` default, because
   an empty `$PSScriptRoot` in a parameter default throws during parameter binding
   before any diagnostic can be printed.
+
+### Supported repository source path
+
+The supported repository source is a **Windows drive-letter filesystem path**,
+for example `C:\rel1b4\OpenJM-Enterprise-AI`. It is the only shape this
+bootstrap maps into WSL, and it maps as `/mnt/<drive>/...`.
+
+- an explicit `-RepoPath` always wins;
+- script-location auto-resolution works when the script lives on a supported
+  Windows drive path;
+- a UNC or provider path (for example
+  `\\wsl.localhost\<distro>\home\...\OpenJM-Enterprise-AI`) is **not**
+  supported and fails closed:
+  `Unsupported repository path '<path>': this bootstrap maps a Windows
+  drive-letter path into WSL as /mnt/<drive>/... . ... Re-run with -RepoPath
+  C:\path\to\OpenJM-Enterprise-AI.`
+
+A location inside another WSL distribution is never assumed to exist in the
+target distribution, and the bootstrap never falls back to the current working
+directory. The same guard applies to an explicit UNC `-RepoPath`.
 
 ### Privilege detection
 
@@ -107,8 +128,11 @@ of three states: `root (uid 0)`, `non-root with sudo (uid N)`, or
 `non-root without sudo (uid N)`.
 
 - **root:** base packages are installed with `apt-get` directly, never through `sudo`;
-- **non-root with usable sudo:** base packages use `sudo -n` (non-interactive; the
-  script never prompts for or automates a password);
+- **non-root with usable sudo:** `sudo` must be usable *without interaction*.
+  The probe is `command -v sudo ... && sudo -n true ...`, so an account that has a
+  sudo binary but still requires a password is classified as having no usable
+  sudo, not as sudo-capable. Base packages then use `sudo -n`; the script never
+  prompts for or automates a password;
 - **non-root without usable sudo:** the bootstrap fails immediately with
   `Required prerequisites are missing and this user cannot elevate privileges ...
   Provision Python 3.11 / required packages or use a sudo-capable account.`

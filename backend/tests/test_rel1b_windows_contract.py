@@ -215,3 +215,53 @@ def test_focused_behavioural_harness_exists_and_is_bounded() -> None:
         "installer exit propagated",
     ):
         assert case in text, case
+
+
+# ---------------------------------------------------------------------------
+# REL1-B4H human-review corrections
+# ---------------------------------------------------------------------------
+
+
+def test_usable_sudo_is_detected_not_merely_present() -> None:
+    """Finding 1: a sudo BINARY is not usable non-interactive sudo."""
+    ps1 = _ps1()
+    # The probe must prove sudo works without interaction. A binary-only account
+    # would otherwise be classified as sudo-capable and the real failure would
+    # surface later at package installation.
+    assert "sudo -n true" in ps1
+    assert "command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1" in ps1
+    # Still non-interactive: no password prompting or credential automation.
+    assert "sudo -S" not in ps1
+    assert "sudo -v" not in ps1
+    assert "Read-Host" not in ps1
+    assert "ConvertTo-SecureString" not in ps1
+    # The no-usable-sudo branch keeps its actionable message.
+    assert "cannot elevate privileges" in ps1
+
+
+def test_repo_path_contract_requires_a_windows_drive_letter() -> None:
+    """Finding 2: only a drive-letter path maps unambiguously into WSL."""
+    ps1 = _ps1()
+    assert "Unsupported repository path" in ps1
+    # The shape guard exists and rejects a UNC/provider path.
+    assert "if ($RepoPath -notmatch" in ps1
+    assert "-RepoPath C:\\path\\to\\OpenJM-Enterprise-AI" in ps1
+    # The guard runs before the drive-letter to /mnt mapping.
+    assert ps1.index("Unsupported repository path") < ps1.index("$wslPath = \"/mnt/$drive$rest\"")
+    # It never falls back to the current working directory.
+    assert "(Get-Location)" not in ps1
+
+
+def test_harness_proves_the_mapped_wsl_path() -> None:
+    """The stub echoes what it received, so a bad path cannot hide."""
+    harness = ROOT / "scripts" / "tests" / "wsl2_bootstrap_harness.ps1"
+    text = harness.read_text(encoding="utf-8")
+    assert "PROBEPAYLOAD=" in text
+    assert "ExpectPayload" in text
+    for case in ("F2-1 drive C maps", "F2-2 drive D maps", "F2-3 UNC script location refused",
+                 "F2-4 explicit drive overrides UNC", "F2-5 explicit UNC refused",
+                 "F1-1 sudo present but not usable", "F1-2 usable sudo reported",
+                 "F1-3 root reported"):
+        assert case in text, case
+    assert "/mnt/c/rel1b4/OpenJM-Enterprise-AI" in text
+    assert "/mnt/d/OpenJM-Enterprise-AI" in text

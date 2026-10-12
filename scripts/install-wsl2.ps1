@@ -88,6 +88,18 @@ function Resolve-RepoRoot {
 }
 
 $RepoPath = Resolve-RepoRoot -ExplicitPath $RepoPath
+
+# The supported repository source is a Windows DRIVE-LETTER path, because that is
+# what maps unambiguously into WSL as /mnt/<drive>/... . A UNC or provider path
+# cannot be mapped here, and a path inside another WSL distribution must not be
+# assumed to exist in the target distribution.
+if ($RepoPath -notmatch '^[A-Za-z]:[\\/]') {
+  Fail ("Unsupported repository path '$RepoPath': this bootstrap maps a Windows " +
+        "drive-letter path into WSL as /mnt/<drive>/... . A UNC or provider path " +
+        "cannot be mapped unambiguously, and a location inside another WSL " +
+        "distribution is not assumed to exist in the target distribution. Re-run " +
+        "with -RepoPath C:\path\to\OpenJM-Enterprise-AI.")
+}
 Write-Host "Repository: $RepoPath"
 
 # --- 1. Confirm WSL2 is available -------------------------------------------
@@ -143,12 +155,15 @@ Write-Host "WSL path:     $wslPath"
 
 # --- 4. Inspect the WSL runtime before changing anything --------------------
 # One read-only probe reports the repository visibility, the effective user, the
-# privilege state and the presence of each required prerequisite, so the script
+# privilege state and the presence of each required prerequisite. "Has sudo"
+# means sudo is USABLE WITHOUT INTERACTION (`sudo -n true`), not merely present: a
+# normal account can carry a sudo binary that still demands a password, and
+# treating that as usable would defer the real error to package installation. so the script
 # can name the exact missing category instead of failing later with a misleading
 # downstream error such as "Python 3.11 is required".
 function Invoke-WslProbe {
   $probe = "id -u; " +
-    "(command -v sudo >/dev/null 2>&1 && echo PRIV=SUDO || echo PRIV=NO_SUDO); " +
+    "(command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 && echo PRIV=SUDO || echo PRIV=NO_SUDO); " +
     "(command -v git >/dev/null 2>&1 && echo GIT=YES || echo GIT=NO); " +
     "(command -v curl >/dev/null 2>&1 && echo CURL=YES || echo CURL=NO); " +
     "(command -v python3.11 >/dev/null 2>&1 && echo PY311=YES || echo PY311=NO); " +
