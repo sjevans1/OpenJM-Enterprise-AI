@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,29 +88,54 @@ class DocumentCatalogPageOut(BaseModel):
     coverage: str | None
     partial: bool
     notice: dict[str, Any] | None
+    next_cursor: str | None = None
 
 
 @router.get("/documents/page", response_model=DocumentCatalogPageOut)
 async def list_documents_page(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require(Permission.KNOWLEDGE_READ)),
+    cursor: str | None = Query(
+        default=None,
+        description=(
+            "Continuation cursor from a previous page. Repeat the request with this value to "
+            "continue; omit it to start. A cursor is bound to this principal, this tenant and "
+            "this scope, and an invalid or expired one is refused."
+        ),
+    ),
+    check_cap: int = Query(
+        default=256,
+        ge=1,
+        description="Provider authorization checks permitted for this page.",
+    ),
 ):
-    """CA2-B prototype: the catalog with truthful coverage, on an additive surface.
+    """CA2-B prototype: the catalog with truthful coverage and real continuation.
 
     ``GET /documents`` is deliberately untouched so existing clients keep their exact contract,
-    including its ``list[DocumentOut]`` response model. This surface exists because coverage
-    cannot be expressed inside a bare list: a caller that wants to know whether the catalog was
-    fully checked has nowhere to read that today.
+    including its ``list[DocumentOut]`` response model. This surface exists because coverage and
+    continuation cannot be expressed inside a bare list.
+
+    Continuation is real: pass ``next_cursor`` back to continue where this page stopped, so a
+    source beyond any single page is reachable through this workflow. A request without a cursor
+    starts a fresh walk, which is the correct meaning of a new request, and ``next_cursor`` is
+    only present when work actually remains.
     """
     from app.services.retrieval_candidates import governed_candidates
 
-    candidate_set = await governed_candidates(db, access_from_principal(principal), query="")
+    candidate_set = await governed_candidates(
+        db,
+        access_from_principal(principal),
+        query="",
+        check_cap=check_cap,
+        cursor=cursor,
+    )
     return DocumentCatalogPageOut(
         items=[_document_out(document) for document in candidate_set.documents],
         mode=candidate_set.mode,
         coverage=candidate_set.coverage.value if candidate_set.coverage is not None else None,
         partial=candidate_set.is_partial,
         notice=candidate_set.notice_for_user(),
+        next_cursor=candidate_set.cursor,
     )
 
 

@@ -39,7 +39,7 @@ from app.services.tools import (
 )
 from app.services.report_runs import BudgetExceeded, ReportRunBudget
 
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 settings = get_settings()
 
@@ -193,19 +193,50 @@ class OpenJMOrchestrator:
         user_id: str,
         scope: ReportSourceScope | None = None,
         access: DocumentAccess | None = None,
-    ) -> list[Document]:
+    ) -> tuple[list[Document], "Any | None"]:
         # Governed, tenant-wide retrieval (resolved product decision): a native
         # public/internal source with tenant_visible is available to every active
         # member of the tenant; connector content additionally needs the current
         # connector authorization gate. See app.services.document_policy.
         if access is not None:
-            documents = await governed_tenant_documents(db, access)
+            from app.services.connectors.candidate_authorization import StrictScopeError
+            from app.services.retrieval_candidates import (
+                candidate_mode_enabled,
+                governed_candidates,
+                strict_pinned_documents,
+            )
+
+            if scope is not None and candidate_mode_enabled():
+                # CA2-B B2: an authoritative pinned scope is resolved by exact current-source
+                # authorization, never from an exploratory traversal whose window could omit a
+                # pinned source. Fail-closed behaviour is preserved (a denied, revoked,
+                # unresolved or restricted source raises) and the ordering matches the governed
+                # ordering a scoped run already produced.
+                try:
+                    documents = await strict_pinned_documents(
+                        db, access, document_ids=sorted(set(scope.document_ids))
+                    )
+                except StrictScopeError as exc:
+                    raise ReportScopeError(
+                        "Pinned Knowledge document is no longer available"
+                    ) from exc
+                return documents, None
+
+            if candidate_mode_enabled():
+                # CA2-B B3: produced once for this logical request and handed to the tool below, so
+                # the connector scope is not traversed twice for one user request.
+                candidate_set = await governed_candidates(db, access, query="")
+                documents = list(candidate_set.documents)
+            else:
+                candidate_set = None
+                documents = await governed_tenant_documents(db, access)
+
             if scope is not None:
                 pinned = set(scope.document_ids)
                 documents = [item for item in documents if item.id in pinned]
                 if {item.id for item in documents} != pinned:
                     raise ReportScopeError("Pinned Knowledge document is no longer available")
-            return documents
+            return documents, candidate_set
 
         # Legacy owner/connector path for internal callers that supply no
         # request identity (direct service/test use; never the HTTP path).
@@ -241,7 +272,7 @@ class OpenJMOrchestrator:
         documents = visible_documents(access, documents)
         if scope is not None and {item.id for item in documents} != scope.document_ids:
             raise ReportScopeError("Pinned Knowledge document is no longer available")
-        return documents
+        return documents, None
 
     async def _structured_sources(
         self,
@@ -451,7 +482,9 @@ class OpenJMOrchestrator:
         direct_answer (no vector search). Otherwise runs the governed
         knowledge.search tool.
         """
-        documents = await self._ready_documents(db, user_id, scope=scope, access=access)
+        documents, candidate_set = await self._ready_documents(
+            db, user_id, scope=scope, access=access
+        )
         lowered = message.lower().strip()
 
         if any(pattern in lowered for pattern in CATALOG_PATTERNS):
@@ -470,6 +503,14 @@ class OpenJMOrchestrator:
             if documents:
                 names = "\n".join(f"- {doc.original_name}" for doc in documents)
                 answer = f"I currently have access to these indexed documents:\n{names}"
+            elif candidate_set is not None and candidate_set.is_partial:
+                # CA2-B B1: an empty list produced by incomplete searching must never be
+                # presented as a confirmed absence of documents.
+                notice = candidate_set.notice_for_user() or {}
+                answer = (
+                    "I could not check every source in this request, so I cannot confirm whether "
+                    "you have indexed documents available. " + notice.get("message", "")
+                ).strip()
             else:
                 answer = "There are currently no indexed documents available to you."
             return evidence, answer, []

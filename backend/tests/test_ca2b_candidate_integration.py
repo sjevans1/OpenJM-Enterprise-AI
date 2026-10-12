@@ -323,7 +323,8 @@ async def test_partial_coverage_is_reported_and_the_notice_leaks_nothing(
     assert notice is not None
     assert notice["code"] == rc.COVERAGE_NOTICE_CODE
     assert notice["coverage"] == "partial"
-    assert notice["message"] == rc.COVERAGE_NOTICE_TEXT
+    assert notice["reason"] in rc.COVERAGE_NOTICE_MESSAGES
+    assert notice["message"] == rc.COVERAGE_NOTICE_MESSAGES[notice["reason"]]
 
     # The notice is application-generated boilerplate and must contain no identifier, count or
     # title from the data it describes: no document ids, no external ids, no namespace prefixes,
@@ -445,7 +446,80 @@ async def test_a_pinned_scope_over_native_documents_keeps_local_policy_semantics
     assert classified_name
 
 
-# ============================================ catalog compatibility
+# ============================================ B5: the cap is exact across a whole request
+
+
+async def test_the_request_cap_is_never_overshot_with_a_non_divisible_page_budget(
+    file_db, connector, provider, knowledge, mode
+):
+    """B5: a 100 check cap with a 32 check page budget must spend exactly 100, not 128."""
+    await seed(file_db, provider, 150, name="b5-cap")
+    mode(rc.MODE_CANDIDATE)
+
+    async with file_db() as db:
+        result = await rc.governed_candidates(
+            db, access_for(), query="policy", check_cap=100, page_budget=32
+        )
+
+    assert result.provider_checks == 100, (
+        f"the request cap must be exact, spent {result.provider_checks} of 100"
+    )
+    assert result.is_partial is True
+    assert result.reason == rc.REASON_PROVIDER_CAP
+    notice = result.notice_for_user()
+    assert notice is not None
+    assert notice["reason"] == rc.REASON_PROVIDER_CAP
+    assert notice["message"] == rc.COVERAGE_NOTICE_MESSAGES[rc.REASON_PROVIDER_CAP]
+
+    # A cap that exactly covers the corpus is complete, and says nothing.
+    async with file_db() as db:
+        complete = await rc.governed_candidates(
+            db, access_for(), query="policy", check_cap=1024, page_budget=7
+        )
+    assert complete.provider_checks == 150
+    assert complete.coverage.value == "complete"
+    assert complete.notice_for_user() is None
+
+
+async def test_a_source_beyond_position_256_is_reachable_through_real_continuation(
+    file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """B4: continuation must be real, so a source past any single page is still reachable."""
+    total = 300
+    instance_id = await seed(file_db, provider, total, name="b4-continuation")
+    mode(rc.MODE_CANDIDATE)
+    access = access_for()
+    beyond = await document_id_for(file_db, instance_id, f"m{total - 1:03d}")
+
+    seen: set[str] = set()
+    cursor = None
+    pages = 0
+    pages_totalling_under_256 = 0
+    for _ in range(40):
+        async with file_db() as db:
+            page = await rc.governed_candidates(
+                db, access, query="", check_cap=64, page_budget=32, cursor=cursor
+            )
+        seen |= {document.id for document in page.documents}
+        pages += 1
+        pages_totalling_under_256 += page.provider_checks
+        cursor = page.cursor
+        if cursor is None:
+            break
+
+    assert pages >= 5, "the walk must take several pages, so continuation is exercised"
+    assert beyond in seen, "a source beyond position 256 must be reachable by continuing"
+    assert len(seen) == total, f"reached {len(seen)} of {total} by continuing"
+    assert pages_totalling_under_256 >= total
+
+    # Repeating WITHOUT the cursor is a fresh request, not a silent restart of a promised
+    # continuation, and it says so by returning work still outstanding.
+    async with file_db() as db:
+        restarted = await rc.governed_candidates(
+            db, access, query="", check_cap=64, page_budget=32
+        )
+    assert restarted.is_partial is True
+    assert restarted.cursor is not None, "an unfinished walk must advertise more work"
 
 
 def test_get_documents_keeps_its_list_contract_and_pagination_is_additive():

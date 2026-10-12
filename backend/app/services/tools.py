@@ -86,6 +86,12 @@ class ToolContext:
     # BV1-B: the request principal's data-side scopes. When present, the
     # Knowledge tool removes unauthorized documents before vector retrieval.
     access: "DocumentAccess | None" = None
+    # CA2-B: the candidate set already produced for this logical request. When present the tool
+    # reuses it instead of traversing the connector scope a second time. The evidence integrity
+    # gate below is unchanged and still refuses anything outside this set.
+    candidate_documents: "list[Document] | None" = None
+    # CA2-B: the application-generated coverage notice for that candidate set, if it was partial.
+    coverage_notice: "dict[str, Any] | None" = None
 
 
 @dataclass
@@ -270,7 +276,7 @@ class KnowledgeSearchTool:
 
         # CA2-B: an application-generated partial-coverage notice, present only in the candidate
         # mode when coverage is genuinely partial. The legacy path leaves it None.
-        coverage_notice: dict[str, Any] | None = None
+        coverage_notice: dict[str, Any] | None = context.coverage_notice
 
         # Connector-owned documents enter this selection only through the
         # current authorization gate, which revalidates the mapped user's
@@ -322,6 +328,12 @@ class KnowledgeSearchTool:
                         raise ToolPermissionError(
                             "Pinned Knowledge document is no longer authorized"
                         )
+            elif context.candidate_documents is not None:
+                # CA2-B: reuse the candidate set the orchestrator already produced for this
+                # logical request, rather than traversing the connector scope again. Saves a
+                # duplicate authorization traversal without weakening the integrity gate below.
+                documents = list(context.candidate_documents)
+                coverage_notice = context.coverage_notice
             elif candidate_mode_enabled():
                 # Exploratory: a bounded candidate set that reports partial coverage truthfully
                 # instead of dropping authorized documents silently.

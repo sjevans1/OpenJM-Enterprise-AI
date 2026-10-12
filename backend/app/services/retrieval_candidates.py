@@ -76,12 +76,38 @@ DEFAULT_REQUEST_CHECK_CAP = 256
 MAX_TRAVERSAL_PAGES = 64
 
 COVERAGE_NOTICE_CODE = "partial_coverage"
-# Application-generated. No counts, no identifiers, no titles, no provider detail: a caller can
-# surface this to a user without leaking protected metadata.
-COVERAGE_NOTICE_TEXT = (
-    "Some connector sources could not be checked within this request's authorization budget, so "
-    "this answer may not include every source you are authorized to read. Ask a narrower "
-    "question, or ask again to continue checking."
+
+# One fixed, application-generated message per cause. Fixed prose on purpose: a notice built from
+# data would risk disclosing counts, identifiers or titles, and it must be surfaceable to a user
+# as it stands.
+REASON_PROVIDER_CAP = "provider_cap_reached"
+COVERAGE_NOTICE_MESSAGES = {
+    "budget_exhausted": (
+        "Some connector sources were not reached within this request's authorization budget, so "
+        "this answer may not include every source you are authorized to read."
+    ),
+    REASON_PROVIDER_CAP: (
+        "This request reached its authorization budget before every connector source could be "
+        "checked, so this answer may not include every source you are authorized to read. Ask a "
+        "narrower question, or ask again to continue checking."
+    ),
+    "scan_bound_reached": (
+        "Only part of the source set could be checked in this request, so this answer may not "
+        "include every source you are authorized to read. Ask again to continue checking."
+    ),
+    "authorization_unavailable": (
+        "Some connector sources could not be verified because the provider did not answer, so "
+        "this answer may not include every source you are authorized to read. Try again shortly."
+    ),
+    "corpus_changed": (
+        "The source set changed while it was being checked, so this answer may not include every "
+        "source you are authorized to read. Ask again to search the current set."
+    ),
+}
+
+COVERAGE_NOTICE_FALLBACK = (
+    "Some sources could not be checked in this request, so this answer may not include every "
+    "source you are authorized to read."
 )
 
 
@@ -111,6 +137,8 @@ class CandidateSet:
     provider_checks: int
     sql_reads: int
     cursor: str | None
+    # The typed cause behind a partial coverage verdict, from the contract. Empty when complete.
+    reason: str = ""
 
     @property
     def is_partial(self) -> bool:
@@ -121,11 +149,13 @@ class CandidateSet:
         return self.notice
 
 
-def _partial_notice() -> dict[str, Any]:
+def _partial_notice(reason: str) -> dict[str, Any]:
+    """The coverage notice. Fixed prose per cause, and never any data about the sources."""
     return {
         "code": COVERAGE_NOTICE_CODE,
         "coverage": CoverageStatus.PARTIAL.value,
-        "message": COVERAGE_NOTICE_TEXT,
+        "reason": reason,
+        "message": COVERAGE_NOTICE_MESSAGES.get(reason, COVERAGE_NOTICE_FALLBACK),
     }
 
 
@@ -164,6 +194,7 @@ async def governed_candidates(
     check_cap: int = DEFAULT_REQUEST_CHECK_CAP,
     page_budget: int = DEFAULT_PAGE_BUDGET,
     connector_instance_ids: Sequence[str] | None = None,
+    cursor: str | None = None,
 ) -> CandidateSet:
     """The governed candidate set for an exploratory request.
 
@@ -189,36 +220,56 @@ async def governed_candidates(
             cursor=None,
         )
 
+    if check_cap <= 0:
+        raise ValueError("check_cap must be positive; the provider budget is always finite")
+    if page_budget <= 0:
+        raise ValueError("page_budget must be positive")
+
     local_visible = await _visible_tenant_documents(db, access)
     connector_origin = await connector_origin_document_ids(db, tenant_id=access.tenant_id)
 
     allowed_connector_documents: set[str] = set()
     provider_checks = 0
     sql_reads = 0
-    cursor: str | None = None
     coverage = CoverageStatus.PARTIAL
+    reason = REASON_PROVIDER_CAP
+    # Continuation continues where a previous page stopped, in this request or in an earlier one.
+    # The cursor is tenant, principal, query and scope bound and AEAD sealed, so it cannot be
+    # replayed across principals or steered at another scope.
+    page_cursor: str | None = cursor
 
     for _ in range(MAX_TRAVERSAL_PAGES):
+        # The cap is enforced BEFORE the page is issued, so the total can never overshoot it, even
+        # when the cap is not a multiple of the page budget: a 100 check cap with a 32 check page
+        # budget issues 32, 32, 32, then 4, and stops at exactly 100.
+        remaining = check_cap - provider_checks
+        if remaining <= 0:
+            coverage, reason = CoverageStatus.PARTIAL, REASON_PROVIDER_CAP
+            break
         result = await authorize_candidates(
             db,
             access=access,
             query=query,
-            budget=page_budget,
-            cursor=cursor,
+            budget=min(page_budget, remaining),
+            cursor=page_cursor,
             connector_instance_ids=connector_instance_ids,
         )
         provider_checks += result.provider_checks
         sql_reads += result.sql_reads
         allowed_connector_documents |= set(result.authorized_document_ids)
-        cursor = result.cursor
-        if cursor is None:
+        page_cursor = result.cursor
+        if page_cursor is None:
             # The scope was fully walked, so the page's own coverage verdict stands, including a
             # PARTIAL verdict caused by an unresolved authorization on the final page.
             coverage = result.coverage
+            reason = result.coverage_reason or REASON_PROVIDER_CAP
             break
         if provider_checks >= check_cap:
-            coverage = CoverageStatus.PARTIAL
+            coverage, reason = CoverageStatus.PARTIAL, REASON_PROVIDER_CAP
             break
+    else:
+        # The page bound was reached with work still outstanding.
+        coverage, reason = CoverageStatus.PARTIAL, REASON_PROVIDER_CAP
 
     # The same intersection rule as the legacy gate: native sources pass on local policy alone,
     # connector-origin sources need both gates. Ordering is preserved from the legacy ordering.
@@ -235,10 +286,11 @@ async def governed_candidates(
         mode=mode,
         scope_kind=ScopeKind.TRAVERSAL,
         coverage=coverage,
-        notice=_partial_notice() if partial else None,
+        reason=reason,
+        notice=_partial_notice(reason) if partial else None,
         provider_checks=provider_checks,
         sql_reads=sql_reads,
-        cursor=cursor,
+        cursor=page_cursor,
     )
 
 
@@ -299,4 +351,7 @@ async def strict_pinned_documents(
             "pinned_source_not_readable",
             "a pinned source is not currently readable under policy",
         )
-    return [visible[document_id] for document_id in sorted(requested)]
+    # Ordered the same way the governed candidate set is (created_at DESC), so a scoped report run
+    # keeps the ordering its output contract already had.
+    ordered = sorted(visible.values(), key=lambda document: document.created_at, reverse=True)
+    return [document for document in ordered if document.id in requested]
