@@ -62,3 +62,31 @@ def test_alembic_uses_current_path_separator_setting() -> None:
     config = (ROOT / "backend" / "alembic.ini").read_text(encoding="utf-8")
     assert "path_separator = os" in config
     assert "version_path_separator" not in config
+
+
+def test_production_proxy_frontend_builder_uses_node_22() -> None:
+    """The production Compose proxy image must build the frontend on Node 22.
+
+    Issue #79 requires production to remain Python 3.11 / Node 22, and the
+    accepted installer/toolchain contract enforces Node 22. The Compose proxy
+    image builds the frontend that production actually ships, so a Node 20
+    builder stage there would ship a frontend built on an unsupported toolchain
+    while every other gate reported Node 22.
+
+    Semantically scoped: any Node 22 major tag is accepted (for example
+    ``node:22`` or ``node:22-bookworm-slim``); no exact minor or patch is pinned,
+    because the production contract requires the major version only.
+    """
+    dockerfile = (ROOT / "deploy" / "compose" / "Dockerfile.proxy").read_text()
+
+    frontend_stages = re.findall(
+        r"^FROM\s+node:(\S+)\s+AS\s+frontend\s*$", dockerfile, re.MULTILINE
+    )
+    assert frontend_stages, "expected a frontend build stage: FROM node:<tag> AS frontend"
+    for tag in frontend_stages:
+        assert tag.startswith("22"), f"frontend builder must be Node 22, found node:{tag}"
+
+    # Node 20 must not build the shipped frontend in any stage.
+    assert not re.search(
+        r"^FROM\s+node:20\S*\s+AS\s+frontend\s*$", dockerfile, re.MULTILINE
+    ), "the frontend builder must not use Node 20"

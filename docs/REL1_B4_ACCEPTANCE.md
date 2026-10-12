@@ -377,14 +377,25 @@ remains NOT RUN, and production was not executed. It establishes that Docker Clo
 production-host candidate. Production-host eligibility is therefore **INCONCLUSIVE** pending the
 real production run, not FAIL.
 
-### PRODUCTION TOOLING FINDING (recorded, not fixed here)
+### PRODUCTION TOOLING FINDING: RESOLVED (2026-10-12)
 
-`deploy/compose/Dockerfile.proxy` in the accepted baseline contains:
+`deploy/compose/Dockerfile.proxy` previously built the shipped frontend on
+`node:20-bookworm-slim`, while Issue #79 requires production to remain Node 22 and the accepted
+installer/toolchain contract enforces Node 22. The production proxy image is the image that
+actually ships the SPA, so production would have served a frontend built on an unsupported
+toolchain even though every other gate reported Node 22.
 
-```
-FROM node:20-bookworm-slim AS frontend
-```
+**Corrected and proven**, on the branch `rel1-node22-proxy-correction` from
+`main@390b3454f46c933cbcf34daa79e91476cadec165`:
 
-Issue #79 requires production to remain Node 22, and the accepted frontend/installer contract
-uses Node 22. This must be reconciled by a separate bounded REL1 correction before final
-production-host acceptance if it is still present. It does not affect the development row.
+| Step | Evidence |
+| --- | --- |
+| RED | New contract test `test_production_proxy_frontend_builder_uses_node_22` failed on the accepted baseline: `AssertionError: frontend builder must be Node 22, found node:20-bookworm-slim` |
+| Change | `FROM node:20-bookworm-slim AS frontend` -> `FROM node:22-bookworm-slim AS frontend` (Caddy runtime stage untouched) |
+| GREEN | Focused test passes; the whole `test_rel1a_reproducible_deployment.py` contract file passes 6/6 |
+| Image build | `docker build -f deploy/compose/Dockerfile.proxy -t openjm-rel1-proxy-node22:local .` from a clean copy of the repository root (excluding host `node_modules`/`dist`/venv, since the Dockerfile does `COPY frontend/` and there is no `.dockerignore`): **exit 0**; `22-bookworm-slim: Pulling from library/node`; `npm ci` -> `added 138 packages`; `npm run build` -> `tsc --noEmit && vite build` -> `built in 3.07s` with `dist/index.html` and `dist/assets/` emitted; `COPY --from=frontend /app/dist /srv/openjm/frontend`; image `openjm-rel1-proxy-node22:local` id `6b920f7c9cb3`, 93.3 MB |
+| Runtime smoke | Disposable container on `127.0.0.1:18091` with `OPENJM_SITE_ADDRESS=:80`: Caddy `server running` / `serving initial configuration`; `GET /` -> **HTTP 200**, 455 bytes returning the built SPA (`<title>OpenJM Enterprise AI</title>`, `/assets/index-B7FImGXs.js`); referenced asset -> **HTTP 200**, 278901 bytes; container stopped and removed afterward |
+
+This resolves the tooling finding. It does **not** change any #79 host row: the clean Linux
+production/PostgreSQL host remains **NOT RUN** and the production-installed browser/persona
+journey remains **NOT RUN**. The production-host qualification itself is still outstanding.
