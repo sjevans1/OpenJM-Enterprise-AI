@@ -153,7 +153,7 @@ and final integrated qualification, not another broad business-feature wave.
    Rahkia during the remaining product build. The specialist integration phase
    later verifies call paths, M1/M2/M3 attribution, hardware/security/performance
    and supported deployment topologies.
-5. **Per-object/table classification remains deliberately deferred for v1.**
+6. **Per-object/table classification remains deliberately deferred for v1.**
    Source-level classification plus authorized-object narrowing remains the v1
    contract unless an unsplittable mixed-sensitivity source creates a proven need.
 

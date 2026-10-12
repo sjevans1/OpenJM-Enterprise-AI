@@ -2,7 +2,7 @@
 
 A handoff for the REL1 packaging and deployment work. It records what this
 documentation lane produced, what is grounded in existing code versus proposed
-for REL1, what was not executed, and the next steps. This revision replays the original REL1 preparation documents onto accepted main `a047a991cc8882f3f8c0f444387ea190acb689d4` and refreshes deployment facts after BV5, INF1-C, BV6-A/B and delegated support acceptance. It remains preparation, not proof that REL1 is complete.
+for REL1, what was not executed, and the next steps. This revision replays the original REL1 preparation documents onto accepted main `a047a991cc8882f3f8c0f444387ea190acb689d4` and refreshes deployment facts after BV5, INF1-C, BV6-A/B and delegated support acceptance. **Status update:** the REL1 release train is now accepted and COMPLETE. The gaps below were the preparation state at the time of writing; the two substantive ones (version drift and the air-gapped installer gap) are resolved and annotated inline. See `HANDOFF_READINESS.md`, `docs/ACCEPTANCE_MATRIX.md` and `docs/ZTK1_ACCEPTANCE.md`.
 
 ## Lane
 
@@ -10,7 +10,7 @@ for REL1, what was not executed, and the next steps. This revision replays the o
 | --- | --- |
 | Lane | REL1 preparation (documentation and design foundation) |
 | Branch | `replay/pr63` |
-| Base | `eafce8f3ded930511785eed72eec9c1fbc165627` (`origin/main`) |
+| Base | `eafce8f3ded930511785eed72eec9c1fbc165627` (then-current `origin/main`; historical) |
 | Scope | docs only under `docs/deployment/`, `docs/operations/`, `docs/handoff/` |
 | Product code changed | none |
 
@@ -85,17 +85,15 @@ The implemented operator CLI today is exactly: `backup`, `verify`, `restore`,
 
 ## Findings the REL1 work must address
 
-1. **Version drift.** `backend/app/version.py` sets `PRODUCT_VERSION = "0.2.0"`,
-   but `backend/pyproject.toml` and `frontend/package.json` both declare
-   `0.1.0`. The version module's comment says the three should stay in step, and
-   `docs/RELEASE.md` names `backend/app/version.py` as the single source of
-   truth. `backend/app/version.py` `PRODUCT_VERSION` is the recommended canonical
-   source; the minimal normalization is to set the two package manifests to
-   `0.2.0`. See
-   [../deployment/RELEASE_MANIFEST.md](../deployment/RELEASE_MANIFEST.md#a-drift-to-resolve-before-rel1).
-2. **Air-gapped installer gap.** `scripts/install-linux.sh` currently assumes
-   network access to PyPI and the npm registry and pulls container base images.
-   No offline source is accepted. See
+1. **Version drift. RESOLVED.** `backend/app/version.py`,
+   `backend/pyproject.toml` and `frontend/package.json` are all normalized to
+   `0.2.0`, with `backend/app/version.py` as the single source of truth. See
+   [../deployment/RELEASE_MANIFEST.md](../deployment/RELEASE_MANIFEST.md).
+2. **Air-gapped installer gap. RESOLVED.** The offline bundle and the installer's
+   ability to consume it are implemented: the production install resolves
+   dependencies from the bundled wheelhouse with `--no-index --find-links` under
+   `--require-hashes`, and installs the bundled application wheel `--no-deps`.
+   See [OFFLINE_BUNDLE.md](../deployment/OFFLINE_BUNDLE.md) and
    [CONNECTED_VS_AIRGAPPED.md](../deployment/CONNECTED_VS_AIRGAPPED.md).
 
 ## What was NOT run

@@ -54,7 +54,7 @@ report run is disabled by default:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `OPENJM_REPORT_RUNS_ENABLED` | `false` | when false, `POST /api/reports/{id}/runs` returns **424** and no run executes |
+| `OPENJM_REPORT_RUNS_ENABLED` | `false` | when false, `POST /api/reports/{report_id}/definitions/{version}/runs` returns **424** and no run executes |
 
 This default is deliberate: running a governed report exercises the model and
 retrieval path and writes run history, so it is opt-in. An operator who wants

@@ -12,7 +12,7 @@
 | `GET /api/metrics` | Prometheus-style metrics (when enabled) | ops token |
 
 The detailed operational surface (`/api/ready/detail`, `/api/metrics`) requires
-the `OPENJM_OPS_TOKEN` bearer (`Authorization: Bearer <token>`). Without a token
+the `OPENJM_OPS_TOKEN` bearer (`Authorization: Bearer <ops-token>`). Without a token
 configured, those endpoints stay hidden (404) in a production profile; in
 development they stay open for local/CI convenience. This bounds an
 unauthenticated probe: the public `/api/ready` never runs the migration runner,
