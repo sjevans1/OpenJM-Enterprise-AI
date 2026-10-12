@@ -105,14 +105,29 @@ async def legacy_digest_inputs(db, access) -> tuple:
 
 def test_cursor_round_trips_and_binds_scope():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="a query", after=["inst", "ext"],
-        now=1000.0,
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="a query",
+        after=["inst", "ns", "ext"], now=1000.0,
     )
     payload = ca.decode_cursor(
         token, tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="a query", now=1001.0
     )
-    assert payload["k"] == ["inst", "ext"]
+    assert payload["k"] == ["inst", "ns", "ext"]
     assert payload["t"] == TENANT_ID
+
+
+def test_a_two_element_cursor_position_is_rejected():
+    """A truncated identity cannot address a namespaced candidate uniquely."""
+    token = ca.encode_cursor(
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=None, now=1000.0
+    )
+    body = ca._cursor_cipher().encrypt(
+        json.dumps({**json.loads(ca._cursor_cipher().decrypt(token.encode())), "k": ["i", "e"]}).encode()
+    ).decode()
+    with pytest.raises(ca.CursorError) as exc:
+        ca.decode_cursor(
+            body, tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", now=1001.0
+        )
+    assert exc.value.code == "cursor_invalid"
 
 
 def test_cursor_does_not_disclose_tenant_principal_or_resource_identities():
@@ -121,7 +136,7 @@ def test_cursor_does_not_disclose_tenant_principal_or_resource_identities():
         tenant_id=TENANT_ID,
         principal_id=PRINCIPAL_ID,
         query="a very distinctive query string",
-        after=["instance-identifier-abc", external_id],
+        after=["instance-identifier-abc", "namespace-identifier-def", external_id],
         now=1000.0,
     )
     raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
@@ -132,7 +147,7 @@ def test_cursor_does_not_disclose_tenant_principal_or_resource_identities():
 
 def test_cursor_is_not_a_readable_json_payload():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"], now=1000.0
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"], now=1000.0
     )
     raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
     with pytest.raises(Exception):
@@ -141,7 +156,7 @@ def test_cursor_is_not_a_readable_json_payload():
 
 def test_tampered_cursor_is_refused():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"], now=1000.0
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"], now=1000.0
     )
     forged = token[:-6] + ("AAAAAA" if not token.endswith("AAAAAA") else "BBBBBB")
     with pytest.raises(ca.CursorError) as exc:
@@ -161,7 +176,7 @@ def test_cursor_sealed_with_a_foreign_key_is_refused():
         "s": "irrelevant",
         "d": "",
         "u": False,
-        "k": ["i", "e"],
+        "k": ["i", "n", "e"],
         "iat": 1000,
         "exp": 2000,
     }
@@ -175,7 +190,7 @@ def test_cursor_sealed_with_a_foreign_key_is_refused():
 
 def test_expired_cursor_is_refused():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"],
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"],
         now=1000.0, ttl_seconds=60,
     )
     with pytest.raises(ca.CursorError) as exc:
@@ -187,7 +202,7 @@ def test_expired_cursor_is_refused():
 
 def test_cross_principal_reuse_is_refused():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"], now=1000.0
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"], now=1000.0
     )
     with pytest.raises(ca.CursorError) as exc:
         ca.decode_cursor(
@@ -199,7 +214,7 @@ def test_cross_principal_reuse_is_refused():
 
 def test_cross_tenant_reuse_is_refused():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"], now=1000.0
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"], now=1000.0
     )
     with pytest.raises(ca.CursorError) as exc:
         ca.decode_cursor(
@@ -211,7 +226,7 @@ def test_cross_tenant_reuse_is_refused():
 
 def test_query_change_is_refused():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="first question", after=["i", "e"],
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="first question", after=["i", "n", "e"],
         now=1000.0,
     )
     with pytest.raises(ca.CursorError) as exc:
@@ -224,7 +239,7 @@ def test_query_change_is_refused():
 
 def test_candidate_scope_change_is_refused():
     token = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"],
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"],
         connector_instance_ids=["instance-a", "instance-b"], now=1000.0,
     )
     with pytest.raises(ca.CursorError) as exc:
@@ -235,14 +250,14 @@ def test_candidate_scope_change_is_refused():
     assert exc.value.code == "cursor_scope_mismatch"
 
     reordered = ca.encode_cursor(
-        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"],
+        tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "n", "e"],
         connector_instance_ids=["instance-b", "instance-a"], now=1000.0,
     )
     payload = ca.decode_cursor(
         reordered, tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q",
         connector_instance_ids=["instance-a", "instance-b"], now=1001.0,
     )
-    assert payload["k"] == ["i", "e"]
+    assert payload["k"] == ["i", "n", "e"]
 
 
 def test_query_fingerprint_ignores_case_and_surrounding_space():
@@ -1275,3 +1290,238 @@ async def test_a_resumable_traversal_is_also_never_strict(
     assert first.strict_scope_satisfied is False
     with pytest.raises(ca.StrictScopeError):
         ca.require_strict_scope(first)
+
+
+# ============= candidate identity: resource_namespace is part of the schema uniqueness key
+
+
+class Twin:
+    """A row retagged so it shares an external_id with another row in a different namespace."""
+
+    def __init__(self, row_id: str, document_id: str, original_namespace: str, namespace: str):
+        self.row_id = row_id
+        self.document_id = document_id
+        self.original_namespace = original_namespace
+        self.namespace = namespace
+
+
+async def make_namespaced_twin(
+    db_factory, instance_id: str, *, source_ext: str, namespace: str, external_id: str
+) -> Twin:
+    """Retag one ingested row into another namespace with a chosen external_id.
+
+    ``uq_external_resource_identity`` is
+    ``(tenant_id, connector_instance_id, resource_namespace, external_id)``, so retagging a row
+    is a legal collision and creates exactly the case the identity model must keep distinct: two
+    rows in one connector instance that share an ``external_id`` and differ only by namespace.
+    """
+    async with db_factory() as db:
+        row = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == source_ext,
+                )
+            )
+        ).scalars().first()
+        assert row is not None
+        original_namespace = row.resource_namespace
+        twin = Twin(row.id, row.document_id, original_namespace, namespace)
+        row.resource_namespace = namespace
+        row.external_id = external_id
+        await db.commit()
+    return twin
+
+
+async def test_two_namespaces_sharing_an_external_id_are_distinct_in_a_traversal(
+    file_db, connector, provider, knowledge
+):
+    """The defect: keying on (instance, external_id) collapses two distinct rows into one."""
+    instance_id = await seed_resources(file_db, provider, 2, name="c-ns-distinct")
+    twin = await make_namespaced_twin(
+        file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
+        external_id="m000",
+    )
+
+    last, ids = await walk(file_db, access_for(), budget=10)
+
+    # Both rows are candidates and both documents are reachable.
+    assert len(ids) == 2, f"expected both namespaced rows, reached {len(ids)} of 2"
+    assert twin.document_id in ids
+
+    # And the result does not collapse them into a single decision.
+    twins = [d for d in last.decisions if d.external_id == "m000"]
+    assert len(twins) == 2, "two namespaced rows must produce two decisions"
+    assert {d.resource_namespace for d in twins} == {twin.original_namespace, twin.namespace}
+    assert len({d.document_id for d in twins}) == 2, "each twin keeps its own document"
+
+
+async def test_namespaced_twins_survive_a_continuation_page_boundary(
+    file_db, connector, provider, knowledge
+):
+    """A keyset on (instance, external_id) alone skips the second twin at the boundary."""
+    instance_id = await seed_resources(file_db, provider, 2, name="c-ns-boundary")
+    twin = await make_namespaced_twin(
+        file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
+        external_id="m000",
+    )
+
+    seen_identities: set[tuple[str, str, str]] = set()
+    seen_documents: set[str] = set()
+    cursor = None
+    pages = 0
+    for _ in range(20):
+        async with file_db() as db:
+            result = await ca.authorize_candidates(
+                db, access=access_for(), query="q", budget=1, cursor=cursor
+            )
+        for decision in result.decisions:
+            seen_identities.add(
+                (decision.connector_instance_id, decision.resource_namespace, decision.external_id)
+            )
+        seen_documents |= set(result.authorized_document_ids)
+        cursor = result.cursor
+        pages += 1
+        if cursor is None:
+            break
+
+    assert pages >= 2, "the page boundary must actually be crossed"
+    assert len(seen_documents) == 2, f"reached {len(seen_documents)} of 2 namespaced rows"
+    assert twin.document_id in seen_documents
+    assert len(seen_identities) == 2, "a twin was duplicated or lost across the boundary"
+
+
+async def test_a_bare_reference_matching_two_namespaces_fails_closed(
+    file_db, connector, provider, knowledge
+):
+    """An identity the caller did not disambiguate must not resolve to an arbitrary namespace."""
+    instance_id = await seed_resources(file_db, provider, 2, name="c-ns-ambiguous")
+    await make_namespaced_twin(
+        file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
+        external_id="m000",
+    )
+
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[ca.CandidateRef(instance_id, "m000")],
+            budget=5,
+        )
+
+    assert result.provider_checks == 0, "an ambiguous identity must not spend provider budget"
+    assert len(result.decisions) == 1, "the requested identity still receives a decision"
+    assert result.decisions[0].state is ca.CandidateState.UNAVAILABLE
+    assert result.decisions[0].reason == ca.REASON_REFERENCE_AMBIGUOUS
+    assert result.decisions[0].document_id is None
+    assert result.authorized_document_ids == frozenset()
+    assert result.strict_scope_satisfied is False
+    assert result.strict_exclusion_reason == ca.REASON_STRICT_AMBIGUOUS
+    with pytest.raises(ca.StrictScopeError) as exc:
+        ca.require_strict_scope(result)
+    assert exc.value.reason == ca.REASON_STRICT_AMBIGUOUS
+
+
+async def test_a_namespaced_reference_resolves_exactly_one_row(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 2, name="c-ns-exact")
+    twin = await make_namespaced_twin(
+        file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
+        external_id="m000",
+    )
+
+    async with file_db() as db:
+        for_ns = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[
+                ca.CandidateRef(instance_id, "m000", resource_namespace=twin.namespace)
+            ],
+            budget=5,
+        )
+    assert for_ns.provider_checks == 1
+    assert for_ns.decisions[0].state is ca.CandidateState.AUTHORIZED
+    assert for_ns.decisions[0].resource_namespace == twin.namespace
+    assert for_ns.decisions[0].document_id == twin.document_id
+    assert for_ns.strict_scope_satisfied is True
+
+    async with file_db() as db:
+        for_original = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[
+                ca.CandidateRef(instance_id, "m000", resource_namespace=twin.original_namespace)
+            ],
+            budget=5,
+        )
+    assert for_original.provider_checks == 1
+    assert for_original.decisions[0].resource_namespace == twin.original_namespace
+    assert for_original.decisions[0].document_id not in (None, twin.document_id)
+
+    # Both namespaced references together stay distinct and each is checked once.
+    async with file_db() as db:
+        both = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[
+                ca.CandidateRef(instance_id, "m000", resource_namespace=twin.namespace),
+                ca.CandidateRef(
+                    instance_id, "m000", resource_namespace=twin.original_namespace
+                ),
+            ],
+            budget=5,
+        )
+    assert both.provider_checks == 2, "two distinct rows cost two checks"
+    assert len(both.authorized_document_ids) == 2
+
+
+async def test_the_same_resource_by_reference_and_document_id_costs_one_provider_check(
+    file_db, connector, provider, knowledge
+):
+    """Reference and document id naming one row must not double the provider work."""
+    instance_id = await seed_resources(file_db, provider, 3, name="c-row-dedupe")
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m001")
+        target_document = row.document_id
+        namespace = row.resource_namespace
+
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[
+                ca.CandidateRef(instance_id, "m001", resource_namespace=namespace)
+            ],
+            document_ids=[target_document],
+            budget=5,
+        )
+
+    assert result.provider_checks == 1, "the same row must be authorized only once"
+    assert len(result.decisions) == 2, "but every requested identity still gets a decision"
+    assert all(d.state is ca.CandidateState.AUTHORIZED for d in result.decisions), [
+        (d.external_id, d.resource_namespace, d.state.value, d.reason) for d in result.decisions
+    ]
+    assert result.authorized_document_ids == frozenset({target_document})
+    assert result.strict_scope_satisfied is True
+
+
+async def test_exact_input_size_is_bounded(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-input-bound")
+
+    too_many = [ca.CandidateRef(instance_id, f"x{i}") for i in range(ca.MAX_EXACT_INPUTS + 1)]
+    async with file_db() as db:
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(
+                db, access=access_for(), resource_refs=too_many, budget=5
+            )
+
+    # Exactly at the bound is accepted, and unresolved identities cost no provider budget.
+    at_bound = [ca.CandidateRef(instance_id, f"y{i}") for i in range(ca.MAX_EXACT_INPUTS)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=at_bound, budget=5
+        )
+    assert result.provider_checks == 0
+    assert result.strict_scope_satisfied is False
+    assert ca.MAX_EXACT_INPUTS <= ca.MAX_EXACT_RESOLVED_ROWS

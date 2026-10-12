@@ -3,28 +3,48 @@
 Additive. This module does not change the production authorization path and no existing
 caller uses it yet; CA2-B migrates the callers after independent review.
 
+CANDIDATE IDENTITY
+------------------
+A candidate is identified by the same triple the schema uses in
+``uq_external_resource_identity``::
+
+    (connector_instance_id, resource_namespace, external_id)
+
+scoped by tenant. ``resource_namespace`` is part of that constraint and is NOT optional
+decoration: two distinct rows in the same connector instance may legitimately share an
+``external_id`` and differ only by namespace. Any code that keys on
+``(connector_instance_id, external_id)`` alone silently collapses those two rows into one,
+which is the defect this revision corrects.
+
+Consequently the namespace participates in every identity decision in this module:
+traversal ordering, the keyset predicate and cursor position, within-request
+deduplication, exact-resource lookup, and the decisions that are emitted. Where a caller
+supplies an identity without a namespace and more than one row matches, the request **fails
+closed** with ``reference_ambiguous`` rather than picking one, because choosing arbitrarily
+would answer a question the caller did not ask.
+
+Provider-level authorization is unaffected and stays correct: the provider knows its own
+``external_id``, so two namespaced rows share one provider answer while remaining distinct
+rows with distinct documents. Authorizing per row and emitting per row is what keeps that
+answer from collapsing two resources.
+
 Three operations, deliberately distinct
 ---------------------------------------
 1. :func:`authorize_candidates` — bounded, resumable **traversal** of a candidate scope.
    Best-effort and never authoritative on its own.
 2. :func:`authorize_exact_candidates` — **exact scope**. A caller-supplied set of resource or
    document identities, resolved by identity and not by enumeration, so unrelated connector
-   resources cannot consume the request's budget. This is the operation pinned reports,
-   report snapshots, exports and exact-source operations need.
-3. :func:`revalidate_document_ids` — **consumption-time revalidation**. Re-authorizes a set of
-   document ids at the moment an authoritative consumer is about to use them.
+   resources cannot consume the request's budget.
+3. :func:`revalidate_document_ids` — **consumption-time revalidation**.
 
 SCOPE OF THIS MODULE: authorization traversal is NOT semantic retrieval
 -----------------------------------------------------------------------
 This module answers exactly one question: **which documents may this principal be authorized
-for?** It does not rank, score, embed, rerank or select by relevance, and it is not a
-retrieval-quality mechanism.
-
-A "complete" coverage result means every candidate in scope was *considered* for
-authorization. It does not mean the right documents were chosen for an answer, and improving
-it will not improve answer quality. Under D4 there is no corpus-wide pre-retrieval relevance
-score (per-document Chroma collections), so the ordering here is stable identity and exists
-for determinism and coverage accounting, not relevance.
+for?** It does not rank, score, embed, rerank or select by relevance. A "complete" coverage
+result means every candidate in scope was *considered* for authorization. It does not mean the
+right documents were chosen for an answer. Under D4 there is no corpus-wide pre-retrieval
+relevance score (per-document Chroma collections), so ordering here is stable identity and
+exists for determinism and coverage accounting, not relevance.
 
 Why this exists
 ---------------
@@ -35,71 +55,51 @@ silently omits authorized documents. Measured on the frozen baseline (``main`` a
 documents unreachable, and **zero denials recorded for the 50**, because an unexamined
 candidate was indistinguishable from a denied one.
 
-This module rebuilds nothing. It composes the existing per-resource gate
-(:func:`authorize_resource`, including its CA1 semantics: authorization never mutates shared
-content) over an explicit candidate list.
-
-DENIED versus UNAVAILABLE: the reconciliation
----------------------------------------------
-CA1 classifies a refusal with a :class:`DenialScope`. The mapping onto candidate states is
-total and mechanical, pinned by a test rather than by prose::
+DENIED versus UNAVAILABLE
+-------------------------
+::
 
     allowed                     -> AUTHORIZED
-    scope == PRINCIPAL          -> DENIED       authorization is definitively refused for
-                                                THIS principal
+    scope == PRINCIPAL          -> DENIED       authorization is definitively refused
     scope == REQUEST            -> UNAVAILABLE  could not be proven on this request
-    scope == CONNECTOR          -> UNAVAILABLE  the connector cannot be proven for anyone
+    scope == CONNECTOR          -> UNAVAILABLE  cannot be proven for anyone
     scope == CONTENT            -> UNAVAILABLE  the content is not servable
 
-DENIED means *definitive, principal-specific refusal*. It does **not** assert that every
-denial came directly from the provider: an absent provider-user mapping is refused locally
-because the absence is definitive knowledge, not uncertainty, and it is reported as DENIED.
-Everything that leaves authorization unproven, including outages, timeouts, rate limits and
-contradictory provider responses, is UNAVAILABLE.
+DENIED means *definitive, principal-specific refusal*. It does **not** assert that every denial
+came directly from the provider: an absent provider-user mapping is refused locally because the
+absence is definitive knowledge, not uncertainty. Everything unproven, including outages,
+timeouts, rate limits and contradictory responses, is UNAVAILABLE.
 
 Traversal completeness is BEST EFFORT and is never authoritative on its own
 ----------------------------------------------------------------------------
-A resumable traversal can never prove that the candidate set did not change between its
-pages. :func:`_corpus_digest` detects many changes, but it cannot prove the absence of one,
-and an unchanged digest must never be read as proof of an unchanged corpus.
-
-Two fields keep that honest:
-
-* ``snapshot_consistent`` — True only when the candidate set came from a single database
-  read, so no drift between pages is possible. Any resumable traversal reports False.
-* ``authoritative`` — True only when ``coverage`` is COMPLETE, ``snapshot_consistent`` is
-  True, and ``unresolved`` is False. A resumable traversal therefore reports False, even
-  when it walked everything, and an authoritative consumer must not treat it as complete
-  authorization.
-
-Authoritative consumers additionally call :func:`revalidate_document_ids` immediately before
-use, which closes the window in which an already-authorized candidate can be revoked.
+* ``snapshot_consistent`` — True only when the candidate set came from a single database read,
+  so no drift between pages is possible. Any resumable traversal reports False.
+* ``authoritative`` — True only when coverage is COMPLETE, ``snapshot_consistent`` is True and
+  ``unresolved`` is False. It describes **traversal-level completeness** and is NOT sufficient
+  for a pinned report; authoritative outputs gate on :func:`require_strict_scope`.
 
 Strict pinned-report authorization versus traversal
---------------------------------------------------
-Coverage and strict success answer different questions, and conflating them is how an
-authoritative output would silently drop a source:
-
+---------------------------------------------------
 * ``coverage`` asks whether every requested source was **decided**.
 * ``strict_scope_satisfied`` asks whether every requested source was **authorized**.
 
 A pinned report that requested 65 sources, received a COMPLETE decision pass containing three
-denials, and emitted 62 sources has silently excluded three. It must fail loudly instead, which
-is what :func:`require_strict_scope` does: it returns the authorized set only when the scope is
-EXACT and strictly satisfied, and raises :class:`StrictScopeError` otherwise.
+denials, and emitted 62 has silently excluded three. It must fail loudly instead, which is what
+:func:`require_strict_scope` does: it returns the authorized set only when the scope is EXACT
+and strictly satisfied, and raises :class:`StrictScopeError` otherwise. A catalog traversal
+never satisfies a strict requirement, even when it completes in a single page.
 
-``ScopeKind`` makes that distinction checkable rather than inferable. A catalog **traversal**
-never satisfies a strict requirement, even when it completes in a single page and even though
-``authoritative`` is true for it, because ``authoritative`` describes best-effort traversal
-completeness and is not sufficient for a pinned scope. Only an EXACT result can be strict.
+Every input and every provider budget is finite
+-----------------------------------------------
+Traversal pages are bounded by ``budget`` provider checks and a budget-proportional SQL window.
+Exact scope is bounded by ``MAX_EXACT_INPUTS`` requested identities, ``MAX_EXACT_RESOLVED_ROWS``
+resolved rows, a finite ``DEFAULT_EXACT_BUDGET`` and a hard ``MAX_EXACT_BUDGET`` that is refused
+rather than clamped. No path produces unbounded provider calls or unbounded database work.
 
-Exact-source budgets are always finite: an omitted budget falls back to
-``DEFAULT_EXACT_BUDGET``, and a budget above ``MAX_EXACT_BUDGET`` is refused rather than
-clamped. No exact-source call can therefore produce unbounded provider calls, and none quietly
-checks fewer sources than it was asked to check.
-
-No durable authorization cache and no per-principal scan-position record exists. Continuation
-is stateless, and authorization is revalidated on every page.
+The continuation cursor is opaque and authenticated-encrypted (Fernet, AEAD), not a readable
+signed blob, because a base64 payload would disclose tenant, principal and resource
+identifiers. There is deliberately no durable authorization cache and no per-principal
+scan-position record: continuation is stateless and authorization is revalidated on every page.
 """
 
 from __future__ import annotations
@@ -133,8 +133,11 @@ from app.services.connectors.authorization import (
 from app.services.document_lifecycle import retrievable_filter
 from app.services.document_policy import DocumentAccess, document_is_visible
 
-CURSOR_VERSION = 3
-CURSOR_CONTEXT = b"openjm:ca2:candidate-cursor:v3"
+# v4: the cursor position is a 3-tuple identity including resource_namespace. A v3 cursor must
+# not be reinterpreted under the new identity model, so the version is bumped and old tokens are
+# rejected outright.
+CURSOR_VERSION = 4
+CURSOR_CONTEXT = b"openjm:ca2:candidate-cursor:v4"
 
 # Defaults are EXPERIMENTAL. They are not product limits and they are below the current
 # production bound of 100, so nothing here may be enabled as a default before the Phase 4
@@ -143,31 +146,35 @@ DEFAULT_PAGE_BUDGET = 32
 DEFAULT_MAX_SCAN_ROWS = 512
 DEFAULT_CURSOR_TTL_SECONDS = 900
 
-# Exact-source budgets are ALWAYS finite, so an omitted or oversized budget can never turn
-# into unbounded provider calls. The default covers the existing 65 to 100 source report
-# shapes with headroom; the maximum is a hard refusal point, not a silent clamp.
+# Exact-source budgets are ALWAYS finite, so an omitted or oversized budget can never turn into
+# unbounded provider calls. The default covers the existing 65 to 100 source report shapes with
+# headroom; the maximum is a hard refusal point, not a silent clamp.
 DEFAULT_EXACT_BUDGET = 128
 MAX_EXACT_BUDGET = 256
 
-# A page fetches at most this multiple of its provider budget, so a small budget does not drag
-# a large window out of the database. This can only affect how many pages a traversal takes:
-# the cursor advances only past handled rows, so shrinking the window never skips a locally
+# Finite bounds on exact-source input size and database work.
+MAX_EXACT_INPUTS = 512
+MAX_EXACT_RESOLVED_ROWS = 4096
+IDENTITY_CHUNK = 256
+
+# A page fetches at most this multiple of its provider budget, so a small budget does not drag a
+# large window out of the database. This can only affect how many pages a traversal takes: the
+# cursor advances only past handled rows, so shrinking the window never skips a locally
 # ineligible, denied or otherwise unexamined candidate.
 SCAN_WINDOW_MULTIPLIER = 2
-
-# Bounds the size of a single identity-resolution read for exact scope.
-IDENTITY_CHUNK = 256
 
 REASON_BUDGET = "budget_exhausted"
 REASON_SCAN_BOUND = "scan_bound_reached"
 REASON_UNAVAILABLE = "authorization_unavailable"
 REASON_CORPUS_CHANGED = "corpus_changed"
 REASON_REFERENCE_UNRESOLVED = "reference_unresolved"
+REASON_REFERENCE_AMBIGUOUS = "reference_ambiguous"
 REASON_REFERENCE_EXCLUDED = "reference_excluded_locally"
 
-# Strict exact-scope failure reasons. Precedence is budget, unavailable, denied, then local
-# policy, so the most structurally important cause is reported first.
+# Strict exact-scope failure reasons. Precedence is budget, ambiguous, unavailable, denied, then
+# local policy, so the most structural cause is reported first.
 REASON_STRICT_BUDGET = "strict_budget_incomplete"
+REASON_STRICT_AMBIGUOUS = "strict_ambiguous_identity"
 REASON_STRICT_UNAVAILABLE = "strict_unavailable"
 REASON_STRICT_DENIED = "strict_denied"
 REASON_STRICT_LOCAL_POLICY = "strict_local_policy_excluded"
@@ -182,8 +189,8 @@ class CandidateState(str, Enum):
     UNAVAILABLE = "unavailable"
     UNEXAMINED = "unexamined"
     # Not one of the four authorization states: a row the local policy excludes before any
-    # provider budget is spent. It carries no authorization meaning and is recorded so that
-    # scan progress is unambiguous.
+    # provider budget is spent. It carries no authorization meaning and is recorded so that scan
+    # progress is unambiguous.
     LOCAL_POLICY_EXCLUDED = "local_policy_excluded"
 
 
@@ -195,9 +202,9 @@ class CoverageStatus(str, Enum):
 class ScopeKind(str, Enum):
     """How the candidate set was determined. It decides which success condition applies."""
 
-    # A catalog traversal: bounded, resumable, and a best-effort view of a scope. It can be
-    # complete, but it never carries a caller-supplied list of sources, so it can never satisfy
-    # a strict pinned-report requirement.
+    # A catalog traversal: bounded, resumable, a best-effort view of a scope. It never carries a
+    # caller-supplied list of sources, so it can never satisfy a strict pinned-report
+    # requirement.
     TRAVERSAL = "traversal"
     # An exact-source operation: the caller named the sources. Only this kind can be strict.
     EXACT = "exact"
@@ -206,8 +213,8 @@ class ScopeKind(str, Enum):
 class StrictScopeError(Exception):
     """A strict exact-scope requirement was not met.
 
-    Raised rather than returning a subset, so an authoritative output cannot silently exclude
-    a denied, missing or locally restricted source.
+    Raised rather than returning a subset, so an authoritative output cannot silently exclude a
+    denied, missing or locally restricted source.
     """
 
     def __init__(self, reason: str, detail: str = "") -> None:
@@ -227,10 +234,16 @@ class CursorError(Exception):
 
 @dataclass(frozen=True)
 class CandidateRef:
-    """An explicitly identified candidate. Never an enumeration."""
+    """An explicitly identified candidate. Never an enumeration.
+
+    ``resource_namespace`` is optional only for caller convenience. Omitting it is safe but may
+    be ambiguous, and an ambiguous identity fails closed rather than resolving to an arbitrary
+    namespace.
+    """
 
     connector_instance_id: str
     external_id: str
+    resource_namespace: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -239,17 +252,26 @@ class CandidateRef:
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        if self.resource_namespace is not None and (
+            not isinstance(self.resource_namespace, str) or not self.resource_namespace.strip()
+        ):
+            raise ValueError("resource_namespace must be a non-empty string when given")
 
 
 @dataclass(frozen=True)
 class CandidateDecision:
-    """One candidate's outcome. Only AUTHORIZED carries a document id."""
+    """One candidate's outcome. Only AUTHORIZED carries a document id.
+
+    ``resource_namespace`` is part of the reported identity, so two rows that share an
+    ``external_id`` are distinguishable in the result instead of collapsing into one entry.
+    """
 
     connector_instance_id: str
     external_id: str
     state: CandidateState
     reason: str = ""
     document_id: str | None = None
+    resource_namespace: str = ""
 
     def __post_init__(self) -> None:
         if self.state is not CandidateState.AUTHORIZED and self.document_id is not None:
@@ -260,9 +282,9 @@ class CandidateDecision:
 class CandidateAuthorizationResult:
     """The CA2-A contract result.
 
-    ``coverage`` and ``coverage_reason`` are the only fields a caller may surface to an end
-    user, and only through :meth:`user_facing_summary`. The counts are internal: exposing
-    denied or unexamined counts would leak resource existence and volume.
+    ``coverage`` and ``coverage_reason`` are the only fields a caller may surface to an end user,
+    and only through :meth:`user_facing_summary`. The counts are internal: exposing denied or
+    unexamined counts would leak resource existence and volume.
     """
 
     decisions: tuple[CandidateDecision, ...] = ()
@@ -283,8 +305,8 @@ class CandidateAuthorizationResult:
     def authorized_document_ids(self) -> frozenset[str]:
         """Currently authorized ids from THIS evaluation.
 
-        Point in time. An authoritative consumer must never combine these across pages, or
-        reuse them later, without :func:`revalidate_document_ids`.
+        Point in time. An authoritative consumer must never combine these across pages, or reuse
+        them later, without :func:`revalidate_document_ids`.
         """
         return frozenset(
             d.document_id
@@ -309,12 +331,12 @@ class CandidateAuthorizationResult:
         """Traversal-level completeness. NOT sufficient for a pinned report.
 
         Requires COMPLETE coverage, a single-read candidate set, and nothing unresolved. A
-        resumable traversal always fails this, which is the point: a best-effort walk must not
-        be mistaken for complete authorization.
+        resumable traversal always fails this, which is the point: a best-effort walk must not be
+        mistaken for complete authorization.
 
-        This is deliberately weaker than ``strict_scope_satisfied``. It describes whether a
-        candidate set was fully walked, not whether a caller's requested sources were all
-        authorized, so authoritative outputs must gate on :func:`require_strict_scope` instead.
+        Deliberately weaker than ``strict_scope_satisfied``. It describes whether a candidate set
+        was fully walked, not whether a caller's requested sources were all authorized, so
+        authoritative outputs must gate on :func:`require_strict_scope` instead.
         """
         return (
             self.coverage is CoverageStatus.COMPLETE
@@ -331,14 +353,23 @@ class CandidateAuthorizationResult:
         }
 
 
+def _resource_key(resource: ExternalResource) -> tuple[str, str, str]:
+    """The schema identity of a resource row. The only deduplication key used here."""
+    return (
+        resource.connector_instance_id,
+        resource.resource_namespace,
+        resource.external_id,
+    )
+
+
 # --------------------------------------------------------------------------- cursor
 
 
 def _cursor_cipher() -> Fernet:
     """Authenticated encryption for cursors, keyed from the existing server secret.
 
-    Uses the same server-owned secret source as the credential vault, with a distinct context
-    so the two cryptographic uses are separated. Rotating that secret invalidates outstanding
+    Uses the same server-owned secret source as the credential vault, with a distinct context so
+    the two cryptographic uses are separated. Rotating that secret invalidates outstanding
     cursors, which is acceptable precisely because a cursor carries no authority: every page
     revalidates.
 
@@ -361,7 +392,6 @@ def _query_fingerprint(query: str) -> str:
 
 
 def _scope_fingerprint(connector_instance_ids: Sequence[str] | None) -> str:
-    """Fingerprint the complete candidate scope the page was walked under."""
     material = (
         "*"
         if connector_instance_ids is None
@@ -382,7 +412,11 @@ def encode_cursor(
     now: float | None = None,
     ttl_seconds: int | None = None,
 ) -> str:
-    """Seal a scan position bound to tenant, principal, query and the candidate scope."""
+    """Seal a scan position bound to tenant, principal, query and the candidate scope.
+
+    ``after`` is a full candidate identity triple. A two-element position is rejected rather than
+    widened, because a truncated identity cannot address a namespaced candidate uniquely.
+    """
     settings = get_settings()
     ttl = (
         ttl_seconds
@@ -445,9 +479,11 @@ def decode_cursor(
 
     key = payload.get("k")
     if key is not None and (
-        not isinstance(key, list) or len(key) != 2 or not all(isinstance(x, str) for x in key)
+        not isinstance(key, list)
+        or len(key) != 3
+        or not all(isinstance(x, str) for x in key)
     ):
-        raise CursorError("cursor_invalid", "malformed position")
+        raise CursorError("cursor_invalid", "malformed identity position")
     return payload
 
 
@@ -457,11 +493,11 @@ def decode_cursor(
 def _state_for(outcome: AuthorizationOutcome) -> tuple[CandidateState, str]:
     """Map a CA1 outcome onto a candidate state. Total, and pinned by a test.
 
-    DENIED means definitive, principal-specific refusal. It includes a locally detected
-    missing provider-user mapping, which is refused without a provider call because the
-    absence is definitive rather than uncertain. Every other failure to authorize is
-    UNAVAILABLE. Unexamined is never produced here: it is the state of a candidate the walk
-    has not reached, and it is never reported as denied.
+    DENIED means definitive, principal-specific refusal. It includes a locally detected missing
+    provider-user mapping, which is refused without a provider call because the absence is
+    definitive rather than uncertain. Every other failure to authorize is UNAVAILABLE.
+    Unexamined is never produced here: it is the state of a candidate the walk has not reached,
+    and it is never reported as denied.
     """
     if outcome.allowed:
         return CandidateState.AUTHORIZED, ""
@@ -492,11 +528,37 @@ def _candidate_filters(
 
 
 def _candidate_query(access: DocumentAccess, connector_instance_ids: Sequence[str] | None):
+    """The traversal query. Ordered by the FULL identity triple, not a prefix of it.
+
+    Ordering by ``(connector_instance_id, external_id)`` alone is not a total order once two
+    namespaces may share an ``external_id``, so a keyset page boundary could skip or repeat rows.
+    """
     return (
         select(ExternalResource)
         .join(ConnectorInstance, ConnectorInstance.id == ExternalResource.connector_instance_id)
         .where(*_candidate_filters(access, connector_instance_ids))
-        .order_by(ExternalResource.connector_instance_id, ExternalResource.external_id)
+        .order_by(
+            ExternalResource.connector_instance_id,
+            ExternalResource.resource_namespace,
+            ExternalResource.external_id,
+        )
+    )
+
+
+def _after_identity(after: list[str]):
+    """The keyset predicate for a full identity triple."""
+    instance_id, namespace, external_id = after
+    return or_(
+        ExternalResource.connector_instance_id > instance_id,
+        and_(
+            ExternalResource.connector_instance_id == instance_id,
+            ExternalResource.resource_namespace > namespace,
+        ),
+        and_(
+            ExternalResource.connector_instance_id == instance_id,
+            ExternalResource.resource_namespace == namespace,
+            ExternalResource.external_id > external_id,
+        ),
     )
 
 
@@ -507,34 +569,20 @@ async def _corpus_digest(
 
     Detects: additions (count and the timestamp watermark), removals (count), any edit to the
     ``ExternalResource`` row itself (the ``updated_at`` watermark), and a balanced middle
-    replacement that preserves both count and key extrema (the watermark moves when the
-    replacement row is written).
+    replacement that preserves count and key extrema (the watermark moves when the replacement
+    row is written). Extrema cover the full identity triple, so a namespace-only change moves it.
 
     Does NOT detect, and must not be claimed to detect:
 
-    * a replacement whose new row carries a timestamp at or below the current watermark,
-      possible only if timestamps are set backwards, for example a backdated import;
-    * a change to a ``Document``'s governed policy fields (``classification``,
-      ``tenant_visible``, ``department_id``, ``allowed_group_ids_json``). ``Document`` has no
-      ``updated_at`` column at all, only ``created_at``, so no cheap aggregate can see such an
-      edit. Those changes are instead handled by re-evaluating local eligibility on every page,
-      which excludes the document on the page that examines it, and by consumption-time
-      revalidation for anything decided on an earlier page.
+    * a replacement whose new row carries a timestamp at or below the current watermark, possible
+      only if timestamps are set backwards, for example a backdated import;
+    * a change to a ``Document``'s governed policy fields. ``Document`` has no ``updated_at``
+      column at all, only ``created_at``, so no cheap aggregate can see such an edit. Those
+      changes are handled by re-evaluating local eligibility on every page and by
+      consumption-time revalidation for anything decided on an earlier page.
 
-    **An unchanged digest is therefore not proof of an unchanged corpus**, and no caller may
-    treat it as one. The contract's ``snapshot_consistent`` and ``authoritative`` fields exist
-    so that a resumable traversal is never read as authoritative regardless of what the digest
-    says.
-
-    No corpus-level generation or revision counter exists on ``ExternalResource`` or
-    ``ConnectorInstance`` (checked: the only ``generation`` field in the models is an unrelated
-    ``generation_ms``), and ``Document`` carries no modification timestamp, so a timestamp
-    watermark over the in-scope resource rows is the smallest reliable mechanism available
-    without new infrastructure or a migration. Closing the remaining gap would require an
-    invasive change (a migration adding a corpus generation, or per-row modcounts) which the
-    CA2-A boundary forbids, so the gap is stated rather than hidden.
-
-    Returns the digest and the number of SQL reads it took.
+    **An unchanged digest is not proof of an unchanged corpus.** ``snapshot_consistent`` and
+    ``authoritative`` exist so a resumable traversal is never read as authoritative regardless.
     """
     row = (
         await db.execute(
@@ -542,10 +590,12 @@ async def _corpus_digest(
                 func.count(ExternalResource.id),
                 func.max(ExternalResource.updated_at),
                 func.max(ExternalResource.created_at),
-                func.min(ExternalResource.external_id),
-                func.max(ExternalResource.external_id),
                 func.min(ExternalResource.connector_instance_id),
                 func.max(ExternalResource.connector_instance_id),
+                func.min(ExternalResource.resource_namespace),
+                func.max(ExternalResource.resource_namespace),
+                func.min(ExternalResource.external_id),
+                func.max(ExternalResource.external_id),
             )
             .select_from(ExternalResource)
             .join(ConnectorInstance, ConnectorInstance.id == ExternalResource.connector_instance_id)
@@ -577,11 +627,9 @@ async def _local_eligible(
 
 
 async def _decide(
-    db: AsyncSession,
-    access: DocumentAccess,
-    resource: ExternalResource,
+    db: AsyncSession, access: DocumentAccess, resource: ExternalResource
 ) -> tuple[CandidateDecision, bool]:
-    """Authorize one resolved candidate. Returns the decision and whether it was unavailable."""
+    """Authorize one resolved row. Returns the decision and whether it was unavailable."""
     outcome = await authorize_resource(
         db,
         tenant_id=access.tenant_id,
@@ -593,6 +641,7 @@ async def _decide(
     return (
         CandidateDecision(
             connector_instance_id=resource.connector_instance_id,
+            resource_namespace=resource.resource_namespace,
             external_id=resource.external_id,
             state=state,
             reason=reason,
@@ -615,15 +664,15 @@ async def authorize_candidates(
 ) -> CandidateAuthorizationResult:
     """Bounded, resumable traversal of a candidate scope. Best effort, never authoritative.
 
-    Each page walks candidates in stable identity order, applies local policy before spending
-    provider budget, and stops when the budget is spent or the SQL scan window is reached. The
-    cursor advances only past *handled* rows, so no eligible candidate is skipped and paging
-    reaches every authorized candidate, including ones beyond the first window whose titles do
-    not match the query.
+    Each page walks candidates in stable **full-identity** order, applies local policy before
+    spending provider budget, and stops when the budget is spent or the SQL scan window is
+    reached. The cursor advances only past *handled* rows, so no eligible candidate is skipped
+    and paging reaches every authorized candidate, including namespaced rows that share an
+    ``external_id`` and including ones beyond the first window whose titles do not match the
+    query.
 
     The result is never ``authoritative``: it did not come from a single snapshot, and earlier
-    pages cannot be guaranteed still valid. Authoritative consumers use
-    :func:`authorize_exact_candidates` or :func:`revalidate_document_ids`.
+    pages cannot be guaranteed still valid.
     """
     if budget <= 0:
         raise ValueError("budget must be positive")
@@ -647,27 +696,17 @@ async def authorize_candidates(
     inherited_digest = str(sealed.get("d") or "") if sealed else ""
 
     digest, digest_reads = await _corpus_digest(db, access, connector_instance_ids)
-    # Only meaningful once a first page has been issued: the digest is compared against the one
-    # sealed into the cursor.
     corpus_changed = bool(sealed) and inherited_digest != digest
 
-    # Budget-proportional window, capped by the hard scan bound. One extra row is fetched only
-    # so that "there is more" is answerable without counting the corpus.
+    # Budget-proportional window, capped by the hard scan bound. One extra row is fetched only so
+    # that "there is more" is answerable without counting the corpus.
     window = min(max_scan_rows, max(budget, budget * SCAN_WINDOW_MULTIPLIER))
     statement = _candidate_query(access, connector_instance_ids).limit(window + 1)
     if after:
-        statement = statement.where(
-            or_(
-                ExternalResource.connector_instance_id > after[0],
-                and_(
-                    ExternalResource.connector_instance_id == after[0],
-                    ExternalResource.external_id > after[1],
-                ),
-            )
-        )
+        statement = statement.where(_after_identity(after))
 
     decisions: list[CandidateDecision] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     checks = 0
     scanned = 0
     handled: list[str] | None = after
@@ -684,7 +723,7 @@ async def authorize_candidates(
             break
         scanned += 1
 
-        key = (resource.connector_instance_id, resource.external_id)
+        key = _resource_key(resource)
         if key in seen:
             continue
         seen.add(key)
@@ -693,19 +732,20 @@ async def authorize_candidates(
             decisions.append(
                 CandidateDecision(
                     connector_instance_id=resource.connector_instance_id,
+                    resource_namespace=resource.resource_namespace,
                     external_id=resource.external_id,
                     state=CandidateState.LOCAL_POLICY_EXCLUDED,
                     reason="local_policy_excluded",
                 )
             )
-            handled = [resource.connector_instance_id, resource.external_id]
+            handled = list(key)
             continue
 
         decision, unavailable = await _decide(db, access, resource)
         checks += 1
         page_unavailable = page_unavailable or unavailable
         decisions.append(decision)
-        handled = [resource.connector_instance_id, resource.external_id]
+        handled = list(key)
 
     if at_scan_bound and not stop_reason:
         stop_reason = REASON_SCAN_BOUND
@@ -751,12 +791,17 @@ async def authorize_candidates(
         unresolved=unresolved,
         snapshot_consistent=snapshot_consistent,
         # A traversal is never a strict exact-source result, even when it finishes in a single
-        # page. It has no caller-supplied list of sources, so it cannot satisfy a pinned-report
+        # page: it has no caller-supplied list of sources, so it cannot satisfy a pinned-report
         # requirement, and saying so explicitly is what stops one qualifying by accident.
         scope_kind=ScopeKind.TRAVERSAL,
         strict_scope_satisfied=False,
         strict_exclusion_reason=REASON_STRICT_NOT_APPLICABLE,
     )
+
+
+def _chunks(items: Sequence[Any], size: int):
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
 
 
 async def authorize_exact_candidates(
@@ -769,37 +814,36 @@ async def authorize_exact_candidates(
 ) -> CandidateAuthorizationResult:
     """Authorize an explicitly identified set of candidates. No enumeration.
 
-    For pinned reports, report snapshots, exports and exact-source operations. Rows are
-    resolved by identity, so resources outside the requested set never consume the request's
+    For pinned reports, report snapshots, exports and exact-source operations. Rows are resolved
+    by identity, so resources outside the requested set never consume the request's
     authorization budget.
 
-    Malformed references raise ``ValueError``. A reference that does not resolve inside this
-    tenant, or that is not currently an eligible resource, is reported UNAVAILABLE without
-    spending provider budget, and the same answer is given whether the identity is absent or
-    belongs to another tenant, so nothing is disclosed.
+    Identity handling:
 
-    Coverage is COMPLETE only if every requested identity received a decision. If the budget
-    cannot cover the request, the result is PARTIAL with no cursor: exact-scope authorization
-    does not paginate, and an authoritative consumer must treat an incomplete exact result as a
-    failure rather than a partial answer.
+    * A reference carrying ``resource_namespace`` is resolved on the full identity triple.
+    * A reference without one is resolved on ``(instance, external_id)``, and if more than one
+      namespace matches it **fails closed** as ``reference_ambiguous`` without spending provider
+      budget, because picking a namespace would answer a question the caller did not ask.
+    * A ``document_id`` that resolves to more than one row fails closed the same way.
 
-    Two independent conditions are reported. ``coverage`` says every requested source was
-    decided. ``strict_scope_satisfied`` says every requested source was actually **authorized**,
-    which is the condition a pinned report needs and which a denial, an unresolved reference, a
-    locally restricted source or an exhausted budget all fail. Authoritative consumers read the
-    result through :func:`require_strict_scope`, never through a subset.
+    Each distinct row is authorized at most once per call, so specifying the same resource by
+    both reference and document id costs one provider check while still producing a decision for
+    every requested identity.
 
-    The provider budget is always finite. An omitted budget uses ``DEFAULT_EXACT_BUDGET`` and a
-    budget above ``MAX_EXACT_BUDGET`` raises, so a caller cannot request an unbounded number of
-    provider calls by omission or by passing a large number.
+    Malformed references raise. A reference that does not resolve inside this tenant, or that is
+    not currently an eligible resource, is reported UNAVAILABLE without spending provider budget,
+    and the same answer is given whether the identity is absent or belongs to another tenant.
+
+    Input and work are bounded by ``MAX_EXACT_INPUTS`` and ``MAX_EXACT_RESOLVED_ROWS``; the
+    provider budget is always finite (``DEFAULT_EXACT_BUDGET`` when omitted, refused above
+    ``MAX_EXACT_BUDGET``). Coverage is COMPLETE only if every requested identity was decided, and
+    ``strict_scope_satisfied`` only if every requested identity was actually **authorized**.
+    Authoritative consumers read the result through :func:`require_strict_scope`.
     """
     if resource_refs is None and document_ids is None:
         raise ValueError("provide resource_refs or document_ids")
     if budget is not None and budget <= 0:
         raise ValueError("budget must be positive")
-    # A finite provider budget in every case. An omitted budget falls back to a default and an
-    # oversized budget is refused rather than clamped, because quietly checking fewer sources
-    # than requested would be exactly the silent exclusion this contract exists to prevent.
     if budget is not None and budget > MAX_EXACT_BUDGET:
         raise ValueError(
             f"budget {budget} exceeds MAX_EXACT_BUDGET {MAX_EXACT_BUDGET}; "
@@ -814,133 +858,235 @@ async def authorize_exact_candidates(
             raise ValueError("document_ids must be non-empty strings")
         ids.append(value)
 
-    # Deduplicate so a repeated identity cannot consume budget twice.
-    ref_keys = sorted({(r.connector_instance_id, r.external_id) for r in refs})
+    # Deduplicate requested identities so a repeated request cannot inflate the answer.
+    ref_keys = sorted(
+        {(r.connector_instance_id, r.resource_namespace or "", r.external_id) for r in refs}
+    )
+    namespaced_refs = sorted({k for k in ref_keys if k[1]})
+    bare_refs = sorted({(k[0], k[2]) for k in ref_keys if not k[1]})
     doc_keys = sorted(set(ids))
     requested = len(ref_keys) + len(doc_keys)
     if requested == 0:
         raise ValueError("no candidate identities provided")
+    if requested > MAX_EXACT_INPUTS:
+        raise ValueError(
+            f"{requested} requested identities exceed MAX_EXACT_INPUTS {MAX_EXACT_INPUTS}; "
+            "exact-source authorization is bounded by design"
+        )
 
     rows: list[ExternalResource] = []
     reads = 0
-    for start in range(0, len(ref_keys), IDENTITY_CHUNK):
-        chunk = ref_keys[start : start + IDENTITY_CHUNK]
-        statement = (
-            select(ExternalResource)
-            .join(
-                ConnectorInstance,
-                ConnectorInstance.id == ExternalResource.connector_instance_id,
-            )
-            .where(
-                ExternalResource.tenant_id == access.tenant_id,
-                tuple_(
-                    ExternalResource.connector_instance_id, ExternalResource.external_id
-                ).in_(chunk),
-            )
+    for chunk in _chunks(namespaced_refs, IDENTITY_CHUNK):
+        rows.extend(
+            (
+                await db.execute(
+                    select(ExternalResource)
+                    .join(
+                        ConnectorInstance,
+                        ConnectorInstance.id == ExternalResource.connector_instance_id,
+                    )
+                    .where(
+                        ExternalResource.tenant_id == access.tenant_id,
+                        tuple_(
+                            ExternalResource.connector_instance_id,
+                            ExternalResource.resource_namespace,
+                            ExternalResource.external_id,
+                        ).in_(chunk),
+                    )
+                )
+            ).scalars().all()
         )
-        rows.extend((await db.execute(statement)).scalars().all())
         reads += 1
-    for start in range(0, len(doc_keys), IDENTITY_CHUNK):
-        chunk = doc_keys[start : start + IDENTITY_CHUNK]
-        statement = (
-            select(ExternalResource)
-            .join(
-                ConnectorInstance,
-                ConnectorInstance.id == ExternalResource.connector_instance_id,
-            )
-            .where(
-                ExternalResource.tenant_id == access.tenant_id,
-                ExternalResource.document_id.in_(chunk),
-            )
+    for chunk in _chunks(bare_refs, IDENTITY_CHUNK):
+        rows.extend(
+            (
+                await db.execute(
+                    select(ExternalResource)
+                    .join(
+                        ConnectorInstance,
+                        ConnectorInstance.id == ExternalResource.connector_instance_id,
+                    )
+                    .where(
+                        ExternalResource.tenant_id == access.tenant_id,
+                        tuple_(
+                            ExternalResource.connector_instance_id,
+                            ExternalResource.external_id,
+                        ).in_(chunk),
+                    )
+                )
+            ).scalars().all()
         )
-        rows.extend((await db.execute(statement)).scalars().all())
         reads += 1
+    for chunk in _chunks(doc_keys, IDENTITY_CHUNK):
+        rows.extend(
+            (
+                await db.execute(
+                    select(ExternalResource)
+                    .join(
+                        ConnectorInstance,
+                        ConnectorInstance.id == ExternalResource.connector_instance_id,
+                    )
+                    .where(
+                        ExternalResource.tenant_id == access.tenant_id,
+                        ExternalResource.document_id.in_(chunk),
+                    )
+                )
+            ).scalars().all()
+        )
+        reads += 1
+    # A finite bound on database work, not only on the request size.
+    if len(rows) > MAX_EXACT_RESOLVED_ROWS:
+        raise ValueError(
+            f"identity resolution returned {len(rows)} rows, above MAX_EXACT_RESOLVED_ROWS "
+            f"{MAX_EXACT_RESOLVED_ROWS}; split the request"
+        )
 
-    # Resolve only within the tenant and only to rows the caller asked for.
-    resolved: dict[tuple[str, str], ExternalResource] = {}
+    # De-duplicate resolved rows by row id. The same row legitimately satisfies more than one
+    # resolution query (a caller may name it by reference AND by document id), and counting it
+    # twice would read as two distinct namespaces and be misreported as an ambiguous identity.
+    unique_rows: list[ExternalResource] = []
+    seen_row_ids: set[str] = set()
     for row in rows:
-        key = (row.connector_instance_id, row.external_id)
-        if key in ref_keys or (row.document_id and row.document_id in set(doc_keys)):
-            resolved.setdefault(key, row)
+        if row.id in seen_row_ids:
+            continue
+        seen_row_ids.add(row.id)
+        unique_rows.append(row)
+    rows = unique_rows
+
+    by_triple: dict[tuple[str, str, str], ExternalResource] = {}
+    by_bare: dict[tuple[str, str], list[ExternalResource]] = {}
+    by_document: dict[str, list[ExternalResource]] = {}
+    for row in rows:
+        by_triple.setdefault(_resource_key(row), row)
+        by_bare.setdefault((row.connector_instance_id, row.external_id), []).append(row)
+        if row.document_id:
+            by_document.setdefault(row.document_id, []).append(row)
 
     decisions: list[CandidateDecision] = []
     checks = 0
     unavailable = False
-    unresolved_refs = 0
+    ambiguous = False
+    # Per-row decision cache: one provider check per distinct row, however many requested
+    # identities point at it, so a resource named by both reference and document id is checked
+    # once.
+    row_outcome: dict[tuple[str, str, str], tuple[CandidateState, str, str | None] | None] = {}
+    undecided = 0
 
-    # Requested identities in stable order, so an exact result is deterministic.
-    for instance_id, external_id in ref_keys:
-        resource = resolved.get((instance_id, external_id))
-        if resource is None:
-            decisions.append(
-                CandidateDecision(
-                    connector_instance_id=instance_id,
-                    external_id=external_id,
-                    state=CandidateState.UNAVAILABLE,
-                    reason=REASON_REFERENCE_UNRESOLVED,
-                )
-            )
-            unavailable = True
-            unresolved_refs += 1
-            continue
+    async def _outcome_for(resource: ExternalResource):
+        """Resolve one row, at most once per call. None means the budget cannot decide it."""
+        nonlocal checks, unavailable
+        key = _resource_key(resource)
+        if key in row_outcome:
+            return row_outcome[key]
         if checks >= effective_budget:
-            continue
+            return None
         if not await _local_eligible(db, access, resource):
-            decisions.append(
-                CandidateDecision(
-                    connector_instance_id=instance_id,
-                    external_id=external_id,
-                    state=CandidateState.LOCAL_POLICY_EXCLUDED,
-                    reason=REASON_REFERENCE_EXCLUDED,
-                )
-            )
-            continue
+            row_outcome[key] = (CandidateState.LOCAL_POLICY_EXCLUDED, REASON_REFERENCE_EXCLUDED, None)
+            return row_outcome[key]
         decision, was_unavailable = await _decide(db, access, resource)
         checks += 1
         unavailable = unavailable or was_unavailable
-        decisions.append(decision)
+        row_outcome[key] = (decision.state, decision.reason, decision.document_id)
+        return row_outcome[key]
+
+    def _emit(instance_id: str, namespace: str, external_id: str, outcome) -> None:
+        state, reason, document_id = outcome
+        decisions.append(
+            CandidateDecision(
+                connector_instance_id=instance_id,
+                resource_namespace=namespace,
+                external_id=external_id,
+                state=state,
+                reason=reason,
+                document_id=document_id,
+            )
+        )
+
+    for instance_id, namespace, external_id in namespaced_refs:
+        resource = by_triple.get((instance_id, namespace, external_id))
+        if resource is None:
+            _emit(
+                instance_id,
+                namespace,
+                external_id,
+                (CandidateState.UNAVAILABLE, REASON_REFERENCE_UNRESOLVED, None),
+            )
+            unavailable = True
+            continue
+        outcome = await _outcome_for(resource)
+        if outcome is None:
+            undecided += 1
+            continue
+        _emit(instance_id, namespace, external_id, outcome)
+
+    for instance_id, external_id in bare_refs:
+        matches = by_bare.get((instance_id, external_id), [])
+        if not matches:
+            _emit(
+                instance_id,
+                "",
+                external_id,
+                (CandidateState.UNAVAILABLE, REASON_REFERENCE_UNRESOLVED, None),
+            )
+            unavailable = True
+            continue
+        if len(matches) > 1:
+            # Fail closed: the provider cannot distinguish which namespace was meant, and
+            # choosing one would answer a question the caller did not ask.
+            _emit(
+                instance_id,
+                "",
+                external_id,
+                (CandidateState.UNAVAILABLE, REASON_REFERENCE_AMBIGUOUS, None),
+            )
+            unavailable = True
+            ambiguous = True
+            continue
+        resource = matches[0]
+        outcome = await _outcome_for(resource)
+        if outcome is None:
+            undecided += 1
+            continue
+        _emit(instance_id, resource.resource_namespace, external_id, outcome)
 
     for document_id in doc_keys:
-        resource = next(
-            (r for r in resolved.values() if r.document_id == document_id), None
-        )
-        if resource is None:
-            decisions.append(
-                CandidateDecision(
-                    connector_instance_id="",
-                    external_id=document_id,
-                    state=CandidateState.UNAVAILABLE,
-                    reason=REASON_REFERENCE_UNRESOLVED,
-                )
+        matches = by_document.get(document_id, [])
+        if not matches:
+            _emit(
+                "",
+                "",
+                document_id,
+                (CandidateState.UNAVAILABLE, REASON_REFERENCE_UNRESOLVED, None),
             )
             unavailable = True
-            unresolved_refs += 1
             continue
-        if checks >= effective_budget:
-            continue
-        if not await _local_eligible(db, access, resource):
-            decisions.append(
-                CandidateDecision(
-                    connector_instance_id=resource.connector_instance_id,
-                    external_id=resource.external_id,
-                    state=CandidateState.LOCAL_POLICY_EXCLUDED,
-                    reason=REASON_REFERENCE_EXCLUDED,
-                )
+        if len(matches) > 1:
+            _emit(
+                "",
+                "",
+                document_id,
+                (CandidateState.UNAVAILABLE, REASON_REFERENCE_AMBIGUOUS, None),
             )
+            unavailable = True
+            ambiguous = True
             continue
-        decision, was_unavailable = await _decide(db, access, resource)
-        checks += 1
-        unavailable = unavailable or was_unavailable
-        decisions.append(decision)
+        resource = matches[0]
+        outcome = await _outcome_for(resource)
+        if outcome is None:
+            undecided += 1
+            continue
+        decisions.append(
+            CandidateDecision(
+                connector_instance_id=resource.connector_instance_id,
+                resource_namespace=resource.resource_namespace,
+                external_id=resource.external_id,
+                state=outcome[0],
+                reason=outcome[1],
+                document_id=outcome[2],
+            )
+        )
 
-    # Every requested identity must have received a decision for this to be complete. A
-    # budget that could not cover the request leaves identities undecided, which is incomplete
-    # rather than a partial answer.
-    decided = len(decisions)
-    undecided = requested - decided
-    examined = sum(
-        1 for d in decisions if d.state is not CandidateState.LOCAL_POLICY_EXCLUDED
-    )
+    examined = sum(1 for d in decisions if d.state is not CandidateState.LOCAL_POLICY_EXCLUDED)
 
     if undecided > 0:
         coverage, reason = CoverageStatus.PARTIAL, REASON_BUDGET
@@ -949,17 +1095,16 @@ async def authorize_exact_candidates(
     else:
         coverage, reason = CoverageStatus.COMPLETE, ""
 
-    # STRICT success is a different and stronger question than coverage. Coverage asks whether
-    # every requested source was *decided*; strict asks whether every requested source was
-    # actually AUTHORIZED. A complete set of decisions containing a denial, an unresolved
-    # reference or a locally restricted source is a successful decision pass and a failed
-    # pinned-report requirement, and conflating the two is how an authoritative output would
-    # silently drop a source. Precedence puts the most structural cause first.
+    # STRICT success is a stronger question than coverage. Coverage asks whether every requested
+    # source was *decided*; strict asks whether every requested source was actually AUTHORIZED,
+    # and conflating them is how an authoritative output would silently drop a source.
     tally = {s.value: 0 for s in CandidateState}
     for decision in decisions:
         tally[decision.state.value] += 1
     if undecided > 0:
         strict_satisfied, strict_reason = False, REASON_STRICT_BUDGET
+    elif ambiguous:
+        strict_satisfied, strict_reason = False, REASON_STRICT_AMBIGUOUS
     elif tally[CandidateState.UNAVAILABLE.value]:
         strict_satisfied, strict_reason = False, REASON_STRICT_UNAVAILABLE
     elif tally[CandidateState.DENIED.value]:
@@ -981,9 +1126,9 @@ async def authorize_exact_candidates(
         rows_fetched=len(rows),
         sql_reads=reads,
         unresolved=unavailable,
-        # One read per identity class, over a caller-supplied fixed set: there is no
-        # enumeration to drift.
-        snapshot_consistent=reads <= 2 and undecided == 0,
+        # One read per identity class over a caller-supplied fixed set: there is no enumeration
+        # to drift.
+        snapshot_consistent=reads <= 3 and undecided == 0,
         scope_kind=ScopeKind.EXACT,
         strict_scope_satisfied=strict_satisfied,
         strict_exclusion_reason=strict_reason,
@@ -1000,14 +1145,14 @@ async def revalidate_document_ids(
     """Consumption-time revalidation for authoritative consumers.
 
     Pinned reports, report snapshots, exports and exact-source operations must call this
-    immediately before emitting anything, passing the document ids they intend to use, and
-    emit only what comes back AUTHORIZED. It re-runs local policy and current provider
+    immediately before emitting anything, passing the document ids they intend to use, and emit
+    only what :func:`require_strict_scope` returns. It re-runs local policy and current provider
     authorization at the moment of use, so an authorization granted on an earlier page cannot
     survive a later revocation into an authoritative output.
 
-    This is the smallest mechanism that closes that window: it is the exact-scope operation
-    applied at consumption time, with no persistent allow cache and no change to CA1's
-    non-mutation invariant.
+    This is the smallest mechanism that closes that window: the exact-scope operation applied at
+    consumption time, with no persistent allow cache and no change to CA1's non-mutation
+    invariant.
     """
     return await authorize_exact_candidates(
         db, access=access, document_ids=list(document_ids), budget=budget
@@ -1018,10 +1163,10 @@ def currently_authorized(result: CandidateAuthorizationResult) -> frozenset[str]
     """The currently authorized subset. PERMISSIVE, and not an authoritative output.
 
     Returns nothing unless the result is ``authoritative``, so an incomplete or unresolved
-    evaluation cannot silently degrade into a partial answer. It nonetheless returns a
-    *subset* when some requested source was denied or restricted, which is fine for an
-    exploratory consumer that will surface partial coverage, and wrong for a pinned report,
-    report snapshot, export or exact-source output.
+    evaluation cannot silently degrade into a partial answer. It nonetheless returns a *subset*
+    when some requested source was denied or restricted, which is fine for an exploratory
+    consumer that will surface partial coverage, and wrong for a pinned report, report snapshot,
+    export or exact-source output.
 
     Authoritative consumers must use :func:`require_strict_scope` instead.
     """
@@ -1033,13 +1178,13 @@ def currently_authorized(result: CandidateAuthorizationResult) -> frozenset[str]
 def require_strict_scope(result: CandidateAuthorizationResult) -> frozenset[str]:
     """The only accessor for authoritative outputs. Raises rather than returning a subset.
 
-    A pinned report, report snapshot, export or exact-source output must call this and emit
-    only what it returns. It raises :class:`StrictScopeError` when ANY requested source was
-    denied, missing, locally restricted, left undecided by the budget, or unproven, so such an
+    A pinned report, report snapshot, export or exact-source output must call this and emit only
+    what it returns. It raises :class:`StrictScopeError` when ANY requested source was denied,
+    missing, ambiguous, locally restricted, left undecided by the budget, or unproven, so such an
     output cannot silently exclude a source.
 
-    A catalog traversal also raises, because traversal is not exact-source authorization: it
-    has no requested set, so it cannot fail to cover one, and treating it as strict would let a
+    A catalog traversal also raises, because traversal is not exact-source authorization: it has
+    no requested set, so it cannot fail to cover one, and treating it as strict would let a
     best-effort walk stand in for a pinned scope.
     """
     if result.scope_kind is not ScopeKind.EXACT:
