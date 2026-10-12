@@ -4,6 +4,27 @@ These scripts are not collected by pytest (no `test_` prefix). They drive real
 running products over real HTTP and exist so a live acceptance can be re-run and
 re-checked rather than taken on trust.
 
+## test_ca2_live_retrieval.py
+
+CA2 live retrieval completeness. Unlike the other files here it IS `test_`-prefixed, so
+`tests/live/conftest.py` ignores it unless `CA2_LIVE=1` is set explicitly. It cannot run in
+normal CI because it needs the real embedding model and a persistent local Chroma.
+
+It runs 13 ordered checks against the REAL retrieval path (DB-GPT chunking plus
+`EmbeddingAssembler`, a persistent Chroma collection, and `sentence-transformers/all-MiniLM-L6-v2`),
+with nothing stubbed: it deliberately does not request the `knowledge` fixture, which is what
+replaces ingest and retrieve elsewhere in the suite.
+
+Run it deliberately:
+
+    cd backend
+    CA2_LIVE=1 ./.venv/bin/python -m pytest tests/live/test_ca2_live_retrieval.py -q -s
+
+Everything is disposable and local: a scratch sqlite database, scratch upload and vector
+directories, synthetic documents only, no listening port, no credential or customer data, and no
+change to production configuration or to the default retrieval mode. It writes
+`ca2_live_evidence.json` next to itself.
+
 ## vs7_live_acceptance.py
 
 The VS7 Workspace dual-product vertical slice: 27 ordered checks covering

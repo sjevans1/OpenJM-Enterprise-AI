@@ -1,0 +1,149 @@
+{
+  "checks": [
+    {
+      "environment": "version.dbgpt",
+      "value": "0.8.2"
+    },
+    {
+      "environment": "version.dbgpt-ext",
+      "value": "0.8.2"
+    },
+    {
+      "environment": "version.chromadb",
+      "value": "1.5.9"
+    },
+    {
+      "environment": "version.sentence-transformers",
+      "value": "6.1.0"
+    },
+    {
+      "environment": "version.torch",
+      "value": "2.14.1"
+    },
+    {
+      "environment": "embedding_model",
+      "value": "sentence-transformers/all-MiniLM-L6-v2"
+    },
+    {
+      "environment": "vector_backend",
+      "value": "chromadb persistent, local scratch path"
+    },
+    {
+      "environment": "llm_gateway",
+      "value": "not required by the retrieval path"
+    },
+    {
+      "environment": "scratch_path",
+      "value": "/home/sjeva/.hermes/cache/scratch/ca2-live"
+    },
+    {
+      "environment": "embedding_model_cache_mb",
+      "value": 174.7
+    },
+    {
+      "environment": "resources_ingested",
+      "value": 120
+    },
+    {
+      "environment": "real_ingest_seconds_total",
+      "value": 32.2
+    },
+    {
+      "environment": "real_ingest_ms_per_document",
+      "value": 268.6
+    },
+    {
+      "environment": "chroma_vector_dir_mb",
+      "value": 20.7
+    },
+    {
+      "check": "legacy_window_truncates_at_100",
+      "detail": "legacy reached 100; beyond-window present=False",
+      "result": "PASS"
+    },
+    {
+      "environment": "live_legacy_query_ms",
+      "value": 2546.7
+    },
+    {
+      "environment": "live_legacy_refs",
+      "value": 100
+    },
+    {
+      "check": "legacy_live_retrieval_misses_the_beyond_window_document",
+      "detail": "legacy evidence items=0",
+      "result": "PASS"
+    },
+    {
+      "check": "candidate_mode_reaches_every_authorized_document",
+      "detail": "candidate reached 120/120; coverage=CoverageStatus.COMPLETE",
+      "result": "PASS"
+    },
+    {
+      "environment": "live_query_ms",
+      "value": 2898.8
+    },
+    {
+      "environment": "live_evidence_items",
+      "value": 1
+    },
+    {
+      "environment": "live_candidate_refs",
+      "value": 120
+    },
+    {
+      "environment": "live_retrieval_latency_ratio_candidate_over_legacy",
+      "value": 1.138
+    },
+    {
+      "check": "live_retrieval_cites_the_beyond_window_document",
+      "detail": "target cited=True; distinct cited=1",
+      "result": "PASS"
+    },
+    {
+      "check": "live_evidence_passage_is_real_indexed_content",
+      "detail": "the retrieved passage contains the indexed body text",
+      "result": "PASS"
+    },
+    {
+      "check": "an_indexed_but_unauthorized_document_is_never_returned",
+      "detail": "withholding one document from the refs withheld its content from live retrieval",
+      "result": "PASS"
+    },
+    {
+      "check": "a_revoked_resource_leaves_the_candidate_set",
+      "detail": "coverage after revocation=CoverageStatus.COMPLETE",
+      "result": "PASS"
+    },
+    {
+      "check": "an_authoritative_scope_refuses_a_revoked_source",
+      "detail": "strict_satisfied=False",
+      "result": "PASS"
+    },
+    {
+      "check": "revoked_content_is_not_retrieved_live",
+      "detail": "the revoked document was indexed but is no longer cited",
+      "result": "PASS"
+    },
+    {
+      "check": "partial_coverage_is_reported_with_a_notice",
+      "detail": "reason=provider_cap_reached",
+      "result": "PASS"
+    },
+    {
+      "check": "partial_notice_leaks_no_identifiers",
+      "detail": "{\"code\": \"partial_coverage\", \"coverage\": \"partial\", \"reason\": \"provider_cap_reached\", \"message\": \"This request reached its authorization budget before every connector source could be checked, so this answer may not include every source you are authorized to read. Ask a narrower question, or ask again to continue checking.\"}",
+      "result": "PASS"
+    },
+    {
+      "check": "tenant_isolation_holds_with_a_real_index",
+      "detail": "a foreign tenant sees no candidates and spends no provider budget",
+      "result": "PASS"
+    },
+    {
+      "check": "rollback_restores_the_legacy_window",
+      "detail": "rolled back to 100 documents, coverage=None",
+      "result": "PASS"
+    }
+  ]
+}
