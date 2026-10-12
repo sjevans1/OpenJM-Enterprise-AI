@@ -62,3 +62,154 @@ def test_alembic_uses_current_path_separator_setting() -> None:
     config = (ROOT / "backend" / "alembic.ini").read_text(encoding="utf-8")
     assert "path_separator = os" in config
     assert "version_path_separator" not in config
+
+
+def test_production_proxy_frontend_builder_uses_node_22() -> None:
+    """The production Compose proxy image must build the frontend on Node 22.
+
+    Issue #79 requires production to remain Python 3.11 / Node 22, and the
+    accepted installer/toolchain contract enforces Node 22. The Compose proxy
+    image builds the frontend that production actually ships, so a Node 20
+    builder stage there would ship a frontend built on an unsupported toolchain
+    while every other gate reported Node 22.
+
+    Semantically scoped: any Node 22 major tag is accepted (for example
+    ``node:22`` or ``node:22-bookworm-slim``); no exact minor or patch is pinned,
+    because the production contract requires the major version only.
+    """
+    dockerfile = (ROOT / "deploy" / "compose" / "Dockerfile.proxy").read_text()
+
+    frontend_stages = re.findall(
+        r"^FROM\s+node:(\S+)\s+AS\s+frontend\s*$", dockerfile, re.MULTILINE
+    )
+    assert frontend_stages, "expected a frontend build stage: FROM node:<tag> AS frontend"
+    for tag in frontend_stages:
+        assert tag.startswith("22"), f"frontend builder must be Node 22, found node:{tag}"
+
+    # Node 20 must not build the shipped frontend in any stage.
+    assert not re.search(
+        r"^FROM\s+node:20\S*\s+AS\s+frontend\s*$", dockerfile, re.MULTILINE
+    ), "the frontend builder must not use Node 20"
+
+
+def test_production_compose_backend_obeys_locked_release_contract() -> None:
+    """The Compose backend image must install the same artifact as the release contract.
+
+    The accepted REL1 production contract is: Python 3.11, the committed
+    ``backend/requirements.lock`` as runtime dependency authority, hash-enforced
+    installation, no ``[dev]`` extras, and the application as a NON-EDITABLE wheel
+    installed with ``--no-deps`` so the runtime dependency graph is exactly the
+    locked one and never re-resolved from open-ended ``pyproject.toml`` ranges.
+
+    An editable source install in the Compose backend would let production run a
+    different dependency graph from the artifact being qualified, which would make
+    a production Compose/browser run indefensible as release evidence.
+    """
+    dockerfile = (ROOT / "deploy" / "compose" / "Dockerfile").read_text()
+
+    # Runtime is Python 3.11.
+    assert re.search(r"^FROM\s+python:3\.11", dockerfile, re.MULTILINE), (
+        "the Compose backend image must use a Python 3.11 base"
+    )
+
+    # The committed production lock is the dependency authority, hash-enforced.
+    assert "requirements.lock" in dockerfile
+    assert "--require-hashes" in dockerfile
+    assert "-r /opt/openjm/backend/requirements.lock" in dockerfile
+
+    # Production never installs the development lock or dev extras.
+    assert "requirements-dev.lock" not in dockerfile
+    assert "[dev]" not in dockerfile
+
+    # The application arrives as a wheel, installed non-editable and without
+    # re-resolving dependencies.
+    assert ".whl" in dockerfile, "the application must be installed from a wheel"
+    assert "--no-deps" in dockerfile
+    assert not re.search(r"pip install[^\n]*(-e|--editable)\s", dockerfile), (
+        "the production image must not perform an editable application install"
+    )
+    # The runtime installs the application from the build stage's wheel path,
+    # never from a source directory (a source-directory install is what
+    # re-resolves the dependency graph).
+    assert re.search(
+        r"pip install[^\n]*--no-deps[^\n]*/opt/openjm/wheels/\*\.whl", dockerfile
+    ), "the application wheel must be installed from the build stage with --no-deps"
+    assert not re.search(
+        r"pip install[^\n]*[\"'\s](/opt/openjm/backend|/build/backend)[\"'\s]", dockerfile
+    ), "the runtime must not install the application from a source directory"
+
+
+def test_production_compose_db_secret_delivery_is_secure() -> None:
+    """The Compose DB secret must not depend on host file ownership/mode.
+
+    File-backed Compose secrets are bind-mounted, so the host file's owner and
+    mode travel into the container unchanged. The backend runs unprivileged as
+    ``openjm`` (uid 999) while the operator creates the file as their own account,
+    so a restrictive ``0600`` host file is unreadable and the entrypoint fails with
+    ``cat: /run/secrets/openjm_db_password: Permission denied``. The only options
+    under the old design were to run the backend as root (rejected) or to loosen
+    the secret to ``0644`` on disk (rejected for production).
+
+    The secret is therefore sourced from a Compose interpolation environment
+    variable, which Compose materialises itself, so no operator-owned file with
+    the wrong uid/mode exists. The source variable must never reach the backend
+    application environment: the backend keeps reading the mounted file through
+    ``OPENJM_DB_PASSWORD_FILE``.
+    """
+    import yaml
+
+    compose_path = ROOT / "deploy" / "compose" / "docker-compose.prod.yml"
+    compose_text = compose_path.read_text()
+    compose = yaml.safe_load(compose_text)
+
+    secret = compose["secrets"]["openjm_db_password"]
+
+    # Not file-backed: the host uid/mode leak is exactly what this corrects.
+    assert "file" not in secret, (
+        "the Compose DB secret must not be file-backed; host ownership/mode leaks into the container"
+    )
+
+    # Sourced from the Compose interpolation environment instead.
+    assert "environment" in secret, (
+        "the Compose DB secret must be sourced from a Compose interpolation environment variable"
+    )
+    source_key = secret["environment"]
+    assert isinstance(source_key, str) and source_key.startswith("OPENJM_"), source_key
+
+    backend = compose["services"]["backend"]
+
+    # The backend keeps the accepted file contract.
+    backend_env = backend.get("environment") or {}
+    assert backend_env.get("OPENJM_DB_PASSWORD_FILE") == "/run/secrets/openjm_db_password"
+
+    # The secret SOURCE variable must not be injected into the backend service:
+    # Compose consumes it to materialise the secret; the application never sees it.
+    assert source_key not in backend_env, (
+        "the secret source variable must not be injected into the backend environment"
+    )
+    for entry in backend.get("env_file") or []:
+        assert source_key not in str(entry)
+    assert source_key not in compose_text.split("services:")[1].split("secrets:")[0], (
+        "the secret source variable must not appear inside the service definitions"
+    )
+
+    # The production template is the backend's env_file, so the source variable
+    # must not be added there either.
+    template = (ROOT / ".env.production.example").read_text()
+    for line in template.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue  # documentation may name the variable; assignment would inject it
+        assert not stripped.startswith(f"{source_key}="), (
+            "the secret source variable must not be assigned in the backend env_file template"
+        )
+
+    # Both services that need the password read the mounted secret.
+    assert "openjm_db_password" in (compose["services"]["db"].get("secrets") or [])
+    assert "openjm_db_password" in (backend.get("secrets") or [])
+    assert (compose["services"]["db"]["environment"] or {}).get(
+        "POSTGRES_PASSWORD_FILE"
+    ) == "/run/secrets/openjm_db_password"
+
+    # No committed secret value or placeholder default in the Compose path.
+    assert "REPLACE_ME" not in compose_text

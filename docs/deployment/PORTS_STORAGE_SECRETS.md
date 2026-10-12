@@ -88,12 +88,27 @@ environment variable or a `0600` file (systemd `EnvironmentFile`, Compose
 | Credential-vault key material | `OPENJM_CREDENTIAL_ENCRYPTION_KEY` or `credential_key_file` | inline env or `0600` file | secret |
 | Model provider credential | `OPENJM_MODEL_API_KEY` | env / secret file | secret |
 | Operational-surface bearer | `OPENJM_OPS_TOKEN` | env / secret file | secret |
-| Database password | `OPENJM_DB_PASSWORD` / `openjm_db_password` Compose secret | Compose secret file `deploy/compose/secrets/openjm_db_password.txt` | secret |
+| Database password | `OPENJM_DB_PASSWORD` / `openjm_db_password` Compose secret | Compose secret materialised from `OPENJM_DB_PASSWORD_SECRET` in the Compose process environment (standalone: env or `0600` file) | secret |
 
 The Compose stack has a single database-password source: the
 `openjm_db_password` secret is mounted into both `db` and `backend`, and
 `entrypoint.sh` assembles `OPENJM_DATABASE_URL` from it so the two can never
 disagree.
+
+That secret is deliberately **not** file-backed. Compose bind-mounts `file:`
+secrets, so the host file's owner and mode travel into the container unchanged;
+the backend runs unprivileged as `openjm` (uid 999) while an operator creates the
+file as their own account, so a restrictive `0600` host file is unreadable and the
+entrypoint fails with `cat: /run/secrets/openjm_db_password: Permission denied`.
+The alternatives were running the backend as root or loosening the secret to
+`0644` on disk, both rejected. Instead Compose consumes
+`OPENJM_DB_PASSWORD_SECRET` from the environment it was started with and
+materialises `/run/secrets/openjm_db_password` itself, so no operator-owned file
+with a mismatched uid/mode exists. That variable belongs to the Compose invocation
+only and must never be added to a service `environment:` or to the backend
+`env_file:`. With it unset, Compose refuses to start the stack
+(`environment variable "OPENJM_DB_PASSWORD_SECRET" required by secret ... is not
+set`) rather than falling back to a placeholder.
 
 Preflight refuses a production start when a secret-classified setting is missing
 or is a stock placeholder (`auth_mode`, OIDC secret, vault key, provider

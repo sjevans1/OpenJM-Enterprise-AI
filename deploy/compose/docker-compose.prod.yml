@@ -5,15 +5,28 @@
 # browser talks to the reverse proxy, which terminates TLS and serves the built
 # frontend from the proxy image (Dockerfile.proxy).
 #
-#   cp .env.production.example .env
-#   mkdir -p deploy/compose/secrets
-#   printf '%s' "$(openssl rand -hex 24)" > deploy/compose/secrets/openjm_db_password.txt
+#   # The database password is consumed from the Compose process environment only.
+#   # Never write it to a world-readable file, never commit it, never paste it on
+#   # the command line (that lands in shell history).
+#   read -rs -p "OpenJM DB password: " OPENJM_DB_PASSWORD_SECRET; echo
+#   export OPENJM_DB_PASSWORD_SECRET
 #   docker compose -f deploy/compose/docker-compose.prod.yml up -d --build
+#   unset OPENJM_DB_PASSWORD_SECRET   # Compose no longer needs it once the stack is up
 #
-# Secrets come from the .env file / docker secrets and are never baked into an
-# image. This file has no default passwords. The database password has a single
-# source: the openjm_db_password secret, mounted into both the db and the
-# backend, so the two can never disagree.
+# Secrets are never baked into an image and this file has no default passwords.
+# The database password has a single source: the openjm_db_password secret, which
+# both db and backend consume, so the two can never disagree. The backend
+# entrypoint assembles OPENJM_DATABASE_URL from the mounted secret file, so the
+# password is not duplicated into the application environment either.
+#
+# Why not a file-backed secret: Compose bind-mounts `file:` secrets, so the host
+# file's owner and mode travel into the container unchanged. The backend runs
+# unprivileged as `openjm` (uid 999) while an operator creates the file as their
+# own account, so a restrictive 0600 host file is unreadable and the entrypoint
+# fails with `cat: /run/secrets/openjm_db_password: Permission denied`. The only
+# ways out of that are running the backend as root or loosening the secret to 0644
+# on disk, both rejected. An environment-sourced secret is materialised by Compose
+# itself, so no operator-owned file with a mismatched uid/mode exists at all.
 
 services:
   db:
@@ -93,5 +106,12 @@ volumes:
   caddy-data:
 
 secrets:
+  # Sourced from the Compose interpolation environment rather than a host file.
+  # Compose consumes OPENJM_DB_PASSWORD_SECRET from the process environment it was
+  # started with and materialises /run/secrets/openjm_db_password itself, so no
+  # operator-owned file with a mismatched uid/mode exists and no chmod workaround
+  # is needed. This variable belongs to the Compose invocation ONLY: it must never
+  # be added to a service `environment:` or to the backend `env_file:`, so the
+  # application process never sees it. Both db and backend read the mounted file.
   openjm_db_password:
-    file: ./secrets/openjm_db_password.txt
+    environment: OPENJM_DB_PASSWORD_SECRET
