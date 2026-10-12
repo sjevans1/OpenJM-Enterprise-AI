@@ -235,7 +235,7 @@ requirement (DB-GPT pins `aiohttp==3.8.4`, which does not build on 3.12).
 
 | # | Item | Status | Evidence |
 | --- | --- | --- | --- |
-| 1 | Clean Linux **development** install (`install-linux.sh --profile development`) | **PASS** (2026-10-12) | Executed on a fresh Docker Agentic Platform CLOUD sandbox: unmodified canonical installer exit 0, editable development install as the contract expects, REL1-A verifier OK, migration current == head. The original NOT RUN entry above is retained as history. |
+| 1 | Clean Linux **development** install (`install-linux.sh --profile development`) | NOT RUN | Not executed on a separate clean host; development retains the editable install. |
 | 2 | Clean Linux **production** install (`install-linux.sh --profile production`) | PARTIAL (offline dependency + wheel install PASS; full PostgreSQL production profile NOT RUN) | The supported installer ran offline from the bundle: dependency install from the bundled wheelhouse (`--no-index --require-hashes`) and application-wheel install (`--no-deps`) both succeeded (see item 3). It then stopped at the fail-closed production preflight (`PermissionError` writing `/var/lib/openjm`; the production profile also requires a PostgreSQL-backed config). The host is non-root with no PostgreSQL, so the full PG production profile is not runnable here. |
 | 3 | Offline committed-lock install (full bundle, committed lock) | PASS | Installer offline step: `app` imported from `site-packages` (`.../backend/.venv/lib/python3.11/site-packages/app/__init__.py`), `pip show openjm-enterprise-ai-backend` = 0.2.0, and no `pytest`/`pgserver`/`pytest-asyncio` present (production excludes dev extras). No editable install, no build backend, no PYTHONPATH, no package index. |
 | 4 | Trusted-digest verification (out-of-band manifest sha) | PASS | `release-integrity.py verify <bundle> --expected-manifest-sha256 f3c9926c...` -> `verified release payload: 884 files` (fresh environment). Code negative case: `test_wrong_trusted_manifest_sha256_is_rejected`. |
@@ -326,8 +326,9 @@ require environments not available here and are not claimed.
 | Readiness detail | database ok, migrations ok (no drift), storage ok, knowledge ok, scheduler ok, connectors ok, notifications ok. `model_provider` reports `error`/`ConnectTimeout` for the development-profile default local model, which is **not** a readiness gate (readiness gates only on database, migrations and storage). No credential was exposed, no model was substituted, and Rahkia was not involved. |
 | Frontend | `frontend/dist` emitted (index.html + assets); no browser/persona journey claimed here (separate #79 row) |
 
-The clean Linux development host, the clean Linux production/PostgreSQL host and the
-production-installed browser/persona journey remain **NOT RUN**.
+The clean Linux production/PostgreSQL host and the production-installed browser/persona
+journey remain **NOT RUN** and OPEN under Issue #79. Clean Linux development (above) and
+the Windows/WSL2 supported runtime are **PASS**.
 
 
 ### Clean Linux development host qualification evidence (2026-10-12)
