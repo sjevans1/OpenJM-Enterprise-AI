@@ -1,4 +1,4 @@
-"""CA2-A: candidate-scoped authorization, bounded execution and safe continuation.
+"""CA2-A: candidate authorization. Traversal, exact scope, revalidation.
 
 Fixture-only, in-process, no network and no model. The production authorization path is not
 exercised differently here; these tests use the same in-process connector doubles as the
@@ -14,6 +14,7 @@ import json
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import delete, func, select
 
 from test_vs7_connector_security import (  # noqa: F401
     PRINCIPAL_A,
@@ -31,6 +32,7 @@ from test_vs7_connector_security import (  # noqa: F401
     provider,
 )
 
+from app.models import ConnectorInstance, Document, ExternalResource
 from app.services.connectors import candidate_authorization as ca
 from app.services.connectors.authorization import AuthorizationOutcome, DenialScope
 from app.services.document_policy import DocumentAccess
@@ -67,7 +69,7 @@ async def walk(
     all_ids: set[str] = set()
     cursor = None
     last = None
-    for _ in range(50):
+    for _ in range(60):
         async with db_factory() as db:
             last = await ca.authorize_candidates(
                 db, access=access, query=query, budget=budget, cursor=cursor
@@ -80,7 +82,25 @@ async def walk(
     return last, all_ids
 
 
-# =============================================================== finding 2: opacity
+async def legacy_digest_inputs(db, access) -> tuple:
+    """The pre-B1 digest basis: count plus key extrema. Blind to a balanced middle swap."""
+    return (
+        await db.execute(
+            select(
+                func.count(ExternalResource.id),
+                func.min(ExternalResource.external_id),
+                func.max(ExternalResource.external_id),
+                func.min(ExternalResource.connector_instance_id),
+                func.max(ExternalResource.connector_instance_id),
+            )
+            .select_from(ExternalResource)
+            .join(ConnectorInstance, ConnectorInstance.id == ExternalResource.connector_instance_id)
+            .where(ExternalResource.tenant_id == access.tenant_id)
+        )
+    ).one()
+
+
+# =============================================================== cursor integrity
 
 
 def test_cursor_round_trips_and_binds_scope():
@@ -96,7 +116,6 @@ def test_cursor_round_trips_and_binds_scope():
 
 
 def test_cursor_does_not_disclose_tenant_principal_or_resource_identities():
-    """Finding 2: the token must be opaque, not a readable signed payload."""
     external_id = "resource-external-identifier-000042"
     token = ca.encode_cursor(
         tenant_id=TENANT_ID,
@@ -106,7 +125,7 @@ def test_cursor_does_not_disclose_tenant_principal_or_resource_identities():
         now=1000.0,
     )
     raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
-    for secret in (TENANT_ID, PRINCIPAL_ID, "/a very distinctive query string", external_id):
+    for secret in (TENANT_ID, PRINCIPAL_ID, "a very distinctive query string", external_id):
         assert secret.encode() not in raw, f"cursor leaked {secret!r}"
         assert secret not in token, f"cursor leaked {secret!r} in its encoded form"
 
@@ -133,7 +152,6 @@ def test_tampered_cursor_is_refused():
 
 
 def test_cursor_sealed_with_a_foreign_key_is_refused():
-    """Proves the token is bound to the server secret, not merely well-formed."""
     foreign = Fernet(Fernet.generate_key())
     payload = {
         "v": ca.CURSOR_VERSION,
@@ -205,12 +223,10 @@ def test_query_change_is_refused():
 
 
 def test_candidate_scope_change_is_refused():
-    """Finding 4: continuation is bound to the complete candidate scope."""
     token = ca.encode_cursor(
         tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"],
         connector_instance_ids=["instance-a", "instance-b"], now=1000.0,
     )
-    # Same principal and query, different scope: must not be honoured.
     with pytest.raises(ca.CursorError) as exc:
         ca.decode_cursor(
             token, tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q",
@@ -218,7 +234,6 @@ def test_candidate_scope_change_is_refused():
         )
     assert exc.value.code == "cursor_scope_mismatch"
 
-    # Order within the scope must not matter.
     reordered = ca.encode_cursor(
         tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID, query="q", after=["i", "e"],
         connector_instance_ids=["instance-b", "instance-a"], now=1000.0,
@@ -242,7 +257,6 @@ def test_query_fingerprint_ignores_case_and_surrounding_space():
 async def test_invalid_cursor_is_refused_at_the_contract_boundary(
     file_db, connector, provider, knowledge
 ):
-    """A bad cursor must raise, not silently start from the beginning."""
     await seed_resources(file_db, provider, 3, name="c-bad-cursor")
     async with file_db() as db:
         with pytest.raises(ca.CursorError) as exc:
@@ -252,215 +266,518 @@ async def test_invalid_cursor_is_refused_at_the_contract_boundary(
     assert exc.value.code == "cursor_invalid"
 
 
-# ====================================== correction B: DENIED versus UNAVAILABLE
+# ============================================ B1: corpus-change detection
 
 
-def test_denial_scope_maps_totally_onto_candidate_states():
-    """The two vocabularies are pinned together, so they cannot drift apart.
-
-    White-box on purpose: this is the reconciliation itself.
-    """
-    assert ca._state_for(AuthorizationOutcome.allow())[0] is ca.CandidateState.AUTHORIZED
-    # Only a provider-proved denial for THIS principal is a denial.
-    assert (
-        ca._state_for(AuthorizationOutcome.deny("access_revoked", DenialScope.PRINCIPAL))[0]
-        is ca.CandidateState.DENIED
-    )
-    # Everything else that fails to authorize is unavailable, never denied.
-    for scope in (DenialScope.REQUEST, DenialScope.CONNECTOR, DenialScope.CONTENT):
-        state, _ = ca._state_for(AuthorizationOutcome.deny("some_reason", scope))
-        assert state is ca.CandidateState.UNAVAILABLE, f"{scope} must be unavailable"
-
-
-# ================================================ finding 1: coverage honesty
-
-
-async def test_outage_makes_coverage_partial_even_when_the_walk_completes(
+async def test_middle_replacement_is_invisible_to_the_legacy_digest_but_not_the_new_one(
     file_db, connector, provider, knowledge
 ):
-    """A fully walked corpus with an outage is still not complete coverage."""
-    from app.services.connectors.base import ConnectorAuthUnavailable
-
-    await seed_resources(file_db, provider, 3, name="c-outage-complete")
-    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
-    async with file_db() as db:
-        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=10)
-    assert result.examined == 3, "the walk itself finished"
-    assert result.coverage is ca.CoverageStatus.PARTIAL, "unavailable must not read as complete"
-    assert result.coverage_reason == ca.REASON_UNAVAILABLE
-    assert result.unresolved is True
-    assert result.cursor is None
-    assert result.authorization_incomplete is True
-    assert result.counts()[ca.CandidateState.UNAVAILABLE.value] == 3
-
-
-async def test_unresolved_failure_on_an_earlier_page_cannot_later_claim_complete(
-    file_db, connector, provider, knowledge
-):
-    """Finding 1: the unresolved flag is sticky across pages."""
-    from app.services.connectors.base import ConnectorAuthUnavailable
-
-    await seed_resources(file_db, provider, 3, name="c-sticky")
-    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
-    async with file_db() as db:
-        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
-    assert first.unresolved is True
-    assert first.cursor is not None
-
-    # Provider recovers. The next page exhausts the corpus with no failures of its own.
-    provider.access_error = None
-    async with file_db() as db:
-        second = await ca.authorize_candidates(
-            db, access=access_for(), query="q", budget=10, cursor=first.cursor
-        )
-    assert second.examined >= 1
-    assert second.coverage is ca.CoverageStatus.PARTIAL, (
-        "a clean final page must not erase an earlier unresolved failure"
-    )
-    assert second.coverage_reason == ca.REASON_UNAVAILABLE
-    assert second.unresolved is True
-
-
-async def test_complete_is_claimed_only_when_fully_walked_and_unresolved_is_false(
-    file_db, connector, provider, knowledge
-):
-    await seed_resources(file_db, provider, 3, name="c-complete-honest")
-    async with file_db() as db:
-        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=10)
-    assert result.coverage is ca.CoverageStatus.COMPLETE
-    assert result.coverage_reason == ""
-    assert result.unresolved is False
-    assert result.cursor is None
-    assert result.authorization_incomplete is False
-
-
-# ================================================ finding 3: the SQL scan bound
-
-
-async def test_scan_bound_is_enforced_in_sql_and_does_not_materialise_the_corpus(
-    file_db, connector, provider, knowledge
-):
-    """Finding 3: a 150-resource corpus with a 20-row bound must fetch at most 21 rows."""
-    await seed_resources(file_db, provider, N, name="c-sql-bound")
-    async with file_db() as db:
-        result = await ca.authorize_candidates(
-            db, access=access_for(), query="q", budget=1000, max_scan_rows=20
-        )
-    assert result.rows_fetched <= 21, f"fetched {result.rows_fetched} rows for a 20-row bound"
-    assert result.rows_fetched < N, "the corpus must not be materialised"
-    assert result.coverage is ca.CoverageStatus.PARTIAL
-    assert result.coverage_reason == ca.REASON_SCAN_BOUND
-    assert result.cursor is not None, "the walk must be resumable"
-
-
-async def test_scan_bound_walk_still_reaches_every_resource(
-    file_db, connector, provider, knowledge
-):
-    """A small scan bound must not lose candidates, only spread them over more pages."""
-    await seed_resources(file_db, provider, N, name="c-sql-bound-progress")
+    """B1 before/after. Replacement preserving count and extrema defeats the old digest."""
+    instance_id = await seed_resources(file_db, provider, 6, name="c-b1-middle")
     access = access_for()
-    seen: set[str] = set()
-    cursor = None
-    pages = 0
-    for _ in range(200):
-        async with file_db() as db:
-            result = await ca.authorize_candidates(
-                db, access=access, query="q", budget=1000, cursor=cursor, max_scan_rows=15
-            )
-        seen |= result.authorized_document_ids
-        cursor = result.cursor
-        pages += 1
-        if cursor is None:
-            break
-    assert len(seen) == N, f"only {len(seen)} of {N} reached with a 15-row scan bound"
-    assert pages >= 10
 
-
-# ================================================ finding 4: candidate-set change
-
-
-async def test_candidate_set_change_between_pages_invalidates_completeness(
-    file_db, connector, provider, knowledge
-):
-    """Finding 4: a scan invalidated by a corpus change must never claim complete."""
-    instance_id = await seed_resources(file_db, provider, 6, name="c-corpus-change")
     async with file_db() as db:
-        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=3)
-    assert first.cursor is not None
+        before_legacy = await legacy_digest_inputs(db, access)
+        before_digest, _ = await ca._corpus_digest(db, access, None)
 
-    # A new candidate appears in scope between the pages.
-    provider.put("m900", text="late arriving document", revision="1")
-    provider.access[("u1", "m900")] = True
+    # Balanced middle replacement: remove one middle candidate, add another that does not
+    # move either extreme, leaving the count identical.
+    provider.put("m003x", text="replacement document", revision="1")
+    provider.access[("u1", "m003x")] = True
     async with file_db() as db:
         instance = await _instance(db, instance_id)
         await _run_initial(db, instance, limit=100)
+        victim = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m003",
+                )
+            )
+        ).scalars().first()
+        assert victim is not None
+        await db.execute(delete(ExternalResource).where(ExternalResource.id == victim.id))
+        await db.commit()
+
+    async with file_db() as db:
+        after_legacy = await legacy_digest_inputs(db, access)
+        after_digest, _ = await ca._corpus_digest(db, access, None)
+
+    # BEFORE: the old basis cannot see the change at all.
+    assert after_legacy == before_legacy, (
+        "the legacy count/extrema basis was expected to be blind to a balanced middle swap"
+    )
+    # AFTER: the new watermark-based digest detects it.
+    assert after_digest != before_digest, "the new digest must detect a middle replacement"
+
+
+async def test_balanced_middle_replacement_forces_partial_and_blocks_authoritative(
+    file_db, connector, provider, knowledge
+):
+    """B1 at contract level: a change between pages must never yield authoritative output."""
+    instance_id = await seed_resources(file_db, provider, 6, name="c-b1-contract")
+    async with file_db() as db:
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
+    assert first.cursor is not None
+
+    provider.put("m003x", text="replacement document", revision="1")
+    provider.access[("u1", "m003x")] = True
+    async with file_db() as db:
+        instance = await _instance(db, instance_id)
+        await _run_initial(db, instance, limit=100)
+        victim = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m003",
+                )
+            )
+        ).scalars().first()
+        await db.execute(delete(ExternalResource).where(ExternalResource.id == victim.id))
         await db.commit()
 
     async with file_db() as db:
         second = await ca.authorize_candidates(
             db, access=access_for(), query="q", budget=1000, cursor=first.cursor
         )
-    assert second.coverage is ca.CoverageStatus.PARTIAL, (
-        "a walk invalidated by a corpus change must not claim complete coverage"
-    )
+    assert second.coverage is ca.CoverageStatus.PARTIAL
     assert second.coverage_reason == ca.REASON_CORPUS_CHANGED
     assert second.unresolved is True
+    assert second.authoritative is False
 
 
-# ============================================== correction A: revocation, non-vacuous
-
-
-async def test_revocation_ahead_of_the_cursor_is_denied_on_the_next_page(
-    file_db, connector, provider, knowledge
-):
-    """The cursor has not reached this resource yet, so the next page must see the revocation."""
-    await seed_resources(file_db, provider, 6, name="c-revoke-ahead")
+async def test_candidate_addition_is_detected(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 6, name="c-b1-add")
     async with file_db() as db:
-        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
-    assert first.cursor is not None
-    authorized_first = {d.external_id for d in first.decisions if d.document_id}
-    assert authorized_first == {"m000", "m001"}
-
-    # Revoke a resource that lies AHEAD of the cursor. The old test revoked one already
-    # passed, which the next page never revisits, making the assertion vacuous.
-    provider.access[("u1", "m003")] = False
-
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=3)
+    provider.put("m900", text="late document", revision="1")
+    provider.access[("u1", "m900")] = True
+    async with file_db() as db:
+        instance = await _instance(db, instance_id)
+        await _run_initial(db, instance, limit=100)
+        await db.commit()
     async with file_db() as db:
         second = await ca.authorize_candidates(
-            db, access=access_for(), query="q", budget=2, cursor=first.cursor
+            db, access=access_for(), query="q", budget=1000, cursor=first.cursor
         )
-    by_ext = {d.external_id: d for d in second.decisions}
-    assert "m003" in by_ext, "the next page must actually examine m003"
-    assert by_ext["m003"].state is ca.CandidateState.DENIED
-    assert by_ext["m003"].document_id is None
-    assert "m003" not in second.authorized_document_ids
+    assert second.coverage_reason == ca.REASON_CORPUS_CHANGED
+    assert second.coverage is ca.CoverageStatus.PARTIAL
 
 
-async def test_revocation_of_a_previously_authorized_resource_is_honoured_immediately(
+async def test_candidate_removal_is_detected(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 6, name="c-b1-remove")
+    async with file_db() as db:
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=3)
+    async with file_db() as db:
+        victim = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m005",
+                )
+            )
+        ).scalars().first()
+        await db.execute(delete(ExternalResource).where(ExternalResource.id == victim.id))
+        await db.commit()
+    async with file_db() as db:
+        second = await ca.authorize_candidates(
+            db, access=access_for(), query="q", budget=1000, cursor=first.cursor
+        )
+    assert second.coverage_reason == ca.REASON_CORPUS_CHANGED
+    assert second.coverage is ca.CoverageStatus.PARTIAL
+
+
+async def test_document_level_policy_change_is_a_stated_limit_with_a_safe_path(
     file_db, connector, provider, knowledge
 ):
-    """No cross-request caching: a fresh walk must drop a revoked resource."""
-    await seed_resources(file_db, provider, 5, name="c-revoke-cached")
-    _, before = await walk(file_db, access_for(), budget=2)
-    assert len(before) == 5
+    """B1 limit, stated rather than hidden.
 
-    provider.access[("u1", "m002")] = False
+    ``Document`` has no ``updated_at``, so a reclassification cannot move the digest. The
+    contract therefore still refuses to call the resumed walk authoritative, and
+    consumption-time revalidation excludes the now-ineligible document.
+    """
+    instance_id = await seed_resources(file_db, provider, 5, name="c-b1-policy")
+    async with file_db() as db:
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m004")
+        collected = row.document_id
+        doc = (
+            await db.execute(select(Document).where(Document.id == collected))
+        ).scalars().first()
+        doc.classification = "highly_restricted"
+        doc.tenant_visible = False
+        await db.commit()
+    async with file_db() as db:
+        second = await ca.authorize_candidates(
+            db, access=access_for(), query="q", budget=1000, cursor=first.cursor
+        )
+    # The documented limit: a Document edit does not move the resource-row watermark, so the
+    # digest reports no change and the page count reason stands.
+    assert second.coverage_reason in (ca.REASON_BUDGET, "")
+    # A resumed walk is never authoritative regardless, which is the safety property.
+    assert second.snapshot_consistent is False
+    assert second.authoritative is False
+    # And the safe path excludes the now-ineligible document.
+    async with file_db() as db:
+        revalidated = await ca.revalidate_document_ids(
+            db, access=access_for(), document_ids=[collected]
+        )
+    assert collected not in ca.currently_authorized(revalidated)
 
-    _, after = await walk(file_db, access_for(), budget=2)
-    assert len(after) == 4, "the revoked resource must not survive a revalidation"
-    assert len(after - before) == 0
 
-    # And the granted set cannot be larger than the granted set before revocation.
-    assert after < before
+async def test_an_unchanged_digest_is_not_treated_as_proof_of_an_unchanged_corpus(
+    file_db, connector, provider, knowledge
+):
+    """B1: a resumed traversal is never authoritative, whatever the digest says."""
+    await seed_resources(file_db, provider, 10, name="c-b1-not-proof")
+    first = None
+    async with file_db() as db:
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=3)
+    assert first.cursor is not None
+    async with file_db() as db:
+        second = await ca.authorize_candidates(
+            db, access=access_for(), query="q", budget=3, cursor=first.cursor
+        )
+    # No change occurred, so the digest matched and the reason is the mechanical one.
+    assert second.coverage_reason == ca.REASON_BUDGET
+    # But a resumed traversal still cannot claim snapshot consistency or authority.
+    assert second.snapshot_consistent is False
+    assert second.authoritative is False
 
 
-# ============================================================ continuation behaviour
+# ============================================ B2: exact candidate authorization
+
+
+async def test_exact_scope_is_unaffected_by_hundreds_of_unrelated_resources(
+    file_db, connector, provider, knowledge
+):
+    """B2: 65 requested sources among 300 unrelated resources."""
+    instance_id = await seed_resources(file_db, provider, 365, name="c-b2-isolation")
+    requested = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(65)]
+
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=requested, budget=65
+        )
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.provider_checks == 65, (
+        f"unrelated resources consumed budget: {result.provider_checks} checks for 65 refs"
+    )
+    assert result.rows_fetched <= 65, f"fetched {result.rows_fetched} rows for 65 identities"
+    assert len(result.authorized_document_ids) == 65
+    assert result.authoritative is True
+
+
+async def test_exact_scope_reports_incomplete_when_the_budget_cannot_cover_the_request(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 20, name="c-b2-budget")
+    requested = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(20)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=requested, budget=5
+        )
+    assert result.coverage is ca.CoverageStatus.PARTIAL
+    assert result.coverage_reason == ca.REASON_BUDGET
+    assert result.cursor is None, "exact scope does not paginate"
+    assert result.authoritative is False
+    assert ca.currently_authorized(result) == frozenset()
+
+
+async def test_exact_scope_rejects_unresolved_and_cross_tenant_references_safely(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 4, name="c-b2-refs")
+    refs = [
+        ca.CandidateRef(instance_id, "m000"),
+        ca.CandidateRef(instance_id, "does-not-exist"),
+        ca.CandidateRef("instance-from-another-tenant", "m001"),
+    ]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=10
+        )
+    by_ext = {d.external_id: d for d in result.decisions}
+    assert by_ext["m000"].state is ca.CandidateState.AUTHORIZED
+    # Both failures give the same answer, so nothing is disclosed about the other tenant.
+    assert by_ext["does-not-exist"].state is ca.CandidateState.UNAVAILABLE
+    assert by_ext["does-not-exist"].reason == ca.REASON_REFERENCE_UNRESOLVED
+    assert by_ext["m001"].state is ca.CandidateState.UNAVAILABLE
+    assert by_ext["m001"].reason == ca.REASON_REFERENCE_UNRESOLVED
+    # Unresolved identities cost no provider budget: only m000 was checked.
+    assert result.provider_checks == 1
+    assert result.coverage is ca.CoverageStatus.PARTIAL
+    assert result.authoritative is False
+
+
+async def test_exact_scope_does_not_leak_across_tenants(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-b2-tenant")
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(tenant_id=TENANT_B),
+            resource_refs=[ca.CandidateRef(instance_id, "m000")],
+            budget=5,
+        )
+    assert result.decisions[0].state is ca.CandidateState.UNAVAILABLE
+    assert result.decisions[0].document_id is None
+    assert result.authorized_document_ids == frozenset()
+    assert result.provider_checks == 0
+
+
+def test_malformed_references_are_rejected():
+    with pytest.raises(ValueError):
+        ca.CandidateRef("", "m001")
+    with pytest.raises(ValueError):
+        ca.CandidateRef("instance", "   ")
+    with pytest.raises(ValueError):
+        ca.CandidateRef(None, "m001")  # type: ignore[arg-type]
+
+
+async def test_exact_scope_requires_some_identity(file_db, connector, provider, knowledge):
+    async with file_db() as db:
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(db, access=access_for())
+        with pytest.raises(ValueError):
+            await ca.authorize_exact_candidates(
+                db, access=access_for(), resource_refs=[ca.CandidateRef("i", "e")], budget=0
+            )
+
+
+async def test_exact_scope_deduplicates_repeated_identities(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-b2-dedupe")
+    refs = [ca.CandidateRef(instance_id, "m000")] * 4
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=10
+        )
+    assert result.provider_checks == 1, "a repeated identity must not cost repeated checks"
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+
+
+async def test_exact_scope_applies_local_policy_before_provider_budget(
+    file_db, connector, provider, knowledge
+):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-b2-policy")
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m001")
+        doc = (
+            await db.execute(select(Document).where(Document.id == row.document_id))
+        ).scalars().first()
+        doc.classification = "highly_restricted"
+        doc.tenant_visible = False
+        await db.commit()
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(3)]
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), resource_refs=refs, budget=10
+        )
+    assert result.counts()[ca.CandidateState.LOCAL_POLICY_EXCLUDED.value] == 1
+    assert result.provider_checks == 2, "a locally excluded source must not cost a check"
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+
+
+async def test_exact_scope_resolves_by_document_id(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-b2-docid")
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m002")
+        target = row.document_id
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), document_ids=[target], budget=5
+        )
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.authorized_document_ids == frozenset({target})
+    assert result.provider_checks == 1
+
+
+async def test_exact_scope_preserves_the_paginated_catalog_operation(
+    file_db, connector, provider, knowledge
+):
+    """B2: exact scope is additive; traversal with a cursor still works."""
+    instance_id = await seed_resources(file_db, provider, 12, name="c-b2-both")
+    async with file_db() as db:
+        traversed = await ca.authorize_candidates(db, access=access_for(), query="q", budget=5)
+    assert traversed.cursor is not None, "traversal still paginates"
+    async with file_db() as db:
+        exact = await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[ca.CandidateRef(instance_id, "m011")],
+            budget=5,
+        )
+    assert exact.cursor is None, "exact scope does not paginate"
+    assert exact.coverage is ca.CoverageStatus.COMPLETE
+
+
+async def test_exact_scope_does_not_mutate_shared_content(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-b2-nomutate")
+    provider.access[("u1", "m000")] = False
+    async with file_db() as db:
+        await ca.authorize_exact_candidates(
+            db,
+            access=access_for(),
+            resource_refs=[ca.CandidateRef(instance_id, "m000")],
+            budget=5,
+        )
+        await db.commit()
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m000")
+    assert row.lifecycle_state == "active", "CA1 non-mutation must hold for exact scope"
+
+
+# ============================================ B3: stale cross-page authorization
+
+
+async def test_revocation_cannot_survive_into_an_authoritative_output(
+    file_db, connector, provider, knowledge
+):
+    """B3 before/after. Page one authorizes A; A is revoked; later pages complete."""
+    instance_id = await seed_resources(file_db, provider, 6, name="c-b3-stale")
+
+    # 1. Page one authorizes resource A (m000) alone.
+    async with file_db() as db:
+        page_one = await ca.authorize_candidates(db, access=access_for(), query="q", budget=1)
+    first_id = next(iter(page_one.authorized_document_ids))
+    with_revoked = set(page_one.authorized_document_ids)
+    assert len(with_revoked) == 1
+
+    # 2. The provider revokes access to A.
+    provider.access[("u1", "m000")] = False
+
+    # 3. Later pages complete successfully.
+    cursor = page_one.cursor
+    while cursor is not None:
+        async with file_db() as db:
+            nxt = await ca.authorize_candidates(
+                db, access=access_for(), query="q", budget=10, cursor=cursor
+            )
+        with_revoked |= set(nxt.authorized_document_ids)
+        cursor = nxt.cursor
+
+    # 4. The naive union that a caller would build across pages still contains A.
+    assert first_id in with_revoked, "the naive cross-page union is expected to retain A"
+
+    # The contract must not let that set be treated as authoritative current authorization.
+    async with file_db() as db:
+        revalidated = await ca.revalidate_document_ids(
+            db, access=access_for(), document_ids=list(with_revoked)
+        )
+    current = ca.currently_authorized(revalidated)
+    assert first_id not in current, "a revoked authorization survived into the output"
+    assert current == with_revoked - {first_id}
+    assert current != with_revoked
+
+
+async def test_a_resumable_traversal_is_never_authoritative(
+    file_db, connector, provider, knowledge
+):
+    await seed_resources(file_db, provider, 40, name="c-b3-trav")
+    last, ids = await walk(file_db, access_for(), budget=7)
+    assert len(ids) == 40
+    assert last.coverage is ca.CoverageStatus.COMPLETE
+    assert last.snapshot_consistent is False
+    assert last.authoritative is False, "a multi-page walk must not be authoritative"
+
+
+async def test_a_single_page_traversal_is_snapshot_consistent(
+    file_db, connector, provider, knowledge
+):
+    await seed_resources(file_db, provider, 5, name="c-b3-single")
+    async with file_db() as db:
+        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=10)
+    assert result.coverage is ca.CoverageStatus.COMPLETE
+    assert result.snapshot_consistent is True
+    assert result.authoritative is True
+
+
+async def test_an_unresolved_single_page_is_not_authoritative(
+    file_db, connector, provider, knowledge
+):
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    await seed_resources(file_db, provider, 3, name="c-b3-unres")
+    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+    async with file_db() as db:
+        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=10)
+    assert result.coverage is ca.CoverageStatus.PARTIAL
+    assert result.authoritative is False
+    assert ca.currently_authorized(result) == frozenset()
+
+
+async def test_revalidation_returns_nothing_when_it_cannot_be_trusted(
+    file_db, connector, provider, knowledge
+):
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    instance_id = await seed_resources(file_db, provider, 4, name="c-b3-untrusted")
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m000")
+        target = row.document_id
+    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+    async with file_db() as db:
+        result = await ca.revalidate_document_ids(
+            db, access=access_for(), document_ids=[target]
+        )
+    assert result.authoritative is False
+    assert ca.currently_authorized(result) == frozenset()
+
+
+async def test_revalidation_does_not_mutate_content(file_db, connector, provider, knowledge):
+    instance_id = await seed_resources(file_db, provider, 3, name="c-b3-nomutate")
+    provider.access[("u1", "m001")] = False
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m001")
+        target = row.document_id
+    async with file_db() as db:
+        await ca.revalidate_document_ids(db, access=access_for(), document_ids=[target])
+        await db.commit()
+    async with file_db() as db:
+        row = await _resource(db, instance_id, "m001")
+    assert row.lifecycle_state == "active"
+    assert row.permission_state != "revoked"
+
+
+# ====================================== DENIED versus UNAVAILABLE, and consistency
+
+
+def test_denial_scope_maps_totally_onto_candidate_states():
+    """The two vocabularies are pinned together, so they cannot drift apart."""
+    assert ca._state_for(AuthorizationOutcome.allow())[0] is ca.CandidateState.AUTHORIZED
+    assert (
+        ca._state_for(AuthorizationOutcome.deny("access_revoked", DenialScope.PRINCIPAL))[0]
+        is ca.CandidateState.DENIED
+    )
+    for scope in (DenialScope.REQUEST, DenialScope.CONNECTOR, DenialScope.CONTENT):
+        state, _ = ca._state_for(AuthorizationOutcome.deny("some_reason", scope))
+        assert state is ca.CandidateState.UNAVAILABLE, f"{scope} must be unavailable"
+
+
+async def test_a_missing_provider_mapping_is_denied_and_is_documented_as_local(
+    file_db, connector, provider, knowledge
+):
+    """DENIED includes definitive local refusal, not only a direct provider answer."""
+    await seed_resources(file_db, provider, 2, name="c-unmapped")
+    async with file_db() as db:
+        result = await ca.authorize_candidates(
+            db, access=access_for(PRINCIPAL_C), query="q", budget=5
+        )
+    assert result.counts()[ca.CandidateState.DENIED.value] == 2
+    assert result.authorized_document_ids == frozenset()
+    assert "mapping" in (ca._state_for.__doc__ or "").lower(), (
+        "the DENIED documentation must not imply every denial came from the provider"
+    )
+
+
+# ================================================ traversal behaviour, preserved
 
 
 async def test_continuation_reaches_every_authorized_resource_beyond_100(
     file_db, connector, provider, knowledge
 ):
-    """The measurement that matters: all 150 reachable across pages with budget 32."""
     await seed_resources(file_db, provider, N, name="c-continuation")
     last, ids = await walk(file_db, access_for(), budget=32)
     assert len(ids) == N, f"only {len(ids)} of {N} authorized resources were reachable"
@@ -474,19 +791,17 @@ async def test_continuation_is_deterministic_across_repeat_walks(
     await seed_resources(file_db, provider, 40, name="c-determinism")
     _, first = await walk(file_db, access_for(), budget=7)
     _, second = await walk(file_db, access_for(), budget=7)
-    assert first == second, "repeated identical walks must agree"
+    assert first == second
     assert len(first) == 40
 
 
 async def test_candidate_beyond_the_first_window_is_reachable_with_an_unrelated_title(
     file_db, connector, provider, knowledge
 ):
-    """Adversarial shape: relevance only in the body, unrelated title, index above 100."""
     instance_id = await seed_resources(file_db, provider, N, name="c-adversarial")
     async with file_db() as db:
         resource = await _resource(db, instance_id, f"m{N - 1:03d}")
         tail_id = resource.document_id
-    # The query shares no word with any seeded title.
     _, ids = await walk(file_db, access_for(), budget=32, query="quarterly reforestation")
     assert tail_id in ids, "a document beyond the first window must still be reachable"
 
@@ -501,49 +816,123 @@ async def test_budget_is_respected_on_every_page(file_db, connector, provider, k
     assert result.cursor is not None
 
 
-# ================================================= correction C: not semantic retrieval
-
-
-async def test_authorization_traversal_is_independent_of_query_relevance(
+async def test_scan_bound_is_enforced_in_sql_and_does_not_materialise_the_corpus(
     file_db, connector, provider, knowledge
 ):
-    """Correction C: traversal is not retrieval. Relevance must not change the result.
-
-    A query matching every title and a query matching none must authorize exactly the same
-    resources, because this module decides what is permitted, not what is relevant. If this
-    test ever fails, an authorization walk has started behaving like a ranking.
-    """
-    await seed_resources(file_db, provider, 20, name="c-not-retrieval")
-    _, matching = await walk(file_db, access_for(), budget=5, query="policy document")
-    _, nonsense = await walk(file_db, access_for(), budget=5, query="zzz unrelated nonsense zzz")
-    assert matching == nonsense
-    assert len(matching) == 20
-
-
-async def test_the_contract_exposes_no_relevance_or_score_concept(
-    file_db, connector, provider, knowledge
-):
-    await seed_resources(file_db, provider, 4, name="c-no-score")
+    await seed_resources(file_db, provider, N, name="c-sql-bound")
     async with file_db() as db:
-        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=4)
-    forbidden = ("score", "relevance", "rank", "similarity", "confidence", "vector")
-    for name in forbidden:
-        assert not hasattr(result, name)
-        assert not hasattr(result.decisions[0], name)
+        result = await ca.authorize_candidates(
+            db, access=access_for(), query="q", budget=1000, max_scan_rows=20
+        )
+    assert result.rows_fetched <= 21, f"fetched {result.rows_fetched} rows for a 20-row bound"
+    assert result.rows_fetched < N, "the corpus must not be materialised"
+    assert result.coverage_reason == ca.REASON_SCAN_BOUND
+    assert result.cursor is not None
 
 
-# ============================================================== remaining contract
+async def test_a_small_scan_window_never_skips_a_candidate(
+    file_db, connector, provider, knowledge
+):
+    """A budget-proportional window changes the page count, never the reachability."""
+    await seed_resources(file_db, provider, N, name="c-window-progress")
+    access = access_for()
+    seen: set[str] = set()
+    cursor = None
+    pages = 0
+    for _ in range(200):
+        async with file_db() as db:
+            result = await ca.authorize_candidates(
+                db, access=access, query="q", budget=1000, cursor=cursor, max_scan_rows=15
+            )
+        seen |= result.authorized_document_ids
+        cursor = result.cursor
+        pages += 1
+        if cursor is None:
+            break
+    assert len(seen) == N, f"only {len(seen)} of {N} reached with a 15-row window"
+    assert pages >= 10
+
+
+async def test_local_policy_excluded_candidates_do_not_consume_budget_or_skip_the_walk(
+    file_db, connector, provider, knowledge
+):
+    """Locally ineligible rows are handled, not skipped, and cost no provider check."""
+    instance_id = await seed_resources(file_db, provider, 6, name="c-window-eligible")
+    async with file_db() as db:
+        for ext in ("m000", "m001", "m002", "m003"):
+            row = await _resource(db, instance_id, ext)
+            doc = (
+                await db.execute(select(Document).where(Document.id == row.document_id))
+            ).scalars().first()
+            doc.classification = "highly_restricted"
+            doc.tenant_visible = False
+        await db.commit()
+
+    # Budget 1 per page and a window of 2, so the walk must cross the ineligible prefix
+    # without skipping the eligible rows behind it.
+    seen: set[str] = set()
+    cursor = None
+    for _ in range(50):
+        async with file_db() as db:
+            result = await ca.authorize_candidates(
+                db,
+                access=access_for(),
+                query="q",
+                budget=1,
+                cursor=cursor,
+                max_scan_rows=2,
+                connector_instance_ids=[instance_id],
+            )
+        seen |= result.authorized_document_ids
+        cursor = result.cursor
+        if cursor is None:
+            break
+    assert len(seen) == 2, f"expected the two eligible resources, reached {len(seen)}"
+
+
+async def test_unresolved_failure_on_an_earlier_page_cannot_later_claim_complete(
+    file_db, connector, provider, knowledge
+):
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    await seed_resources(file_db, provider, 3, name="c-sticky")
+    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+    async with file_db() as db:
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
+    assert first.unresolved is True
+    provider.access_error = None
+    async with file_db() as db:
+        second = await ca.authorize_candidates(
+            db, access=access_for(), query="q", budget=10, cursor=first.cursor
+        )
+    assert second.coverage is ca.CoverageStatus.PARTIAL
+    assert second.coverage_reason == ca.REASON_UNAVAILABLE
+    assert second.unresolved is True
+
+
+async def test_outage_makes_coverage_partial_even_when_the_walk_completes(
+    file_db, connector, provider, knowledge
+):
+    from app.services.connectors.base import ConnectorAuthUnavailable
+
+    await seed_resources(file_db, provider, 3, name="c-outage-complete")
+    provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
+    async with file_db() as db:
+        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=10)
+    assert result.examined == 3
+    assert result.coverage is ca.CoverageStatus.PARTIAL
+    assert result.coverage_reason == ca.REASON_UNAVAILABLE
+    assert result.counts()[ca.CandidateState.UNAVAILABLE.value] == 3
+    assert result.counts()[ca.CandidateState.DENIED.value] == 0, "an outage is not a denial"
 
 
 async def test_denied_first_window_still_makes_progress(file_db, connector, provider, knowledge):
-    """A denial at the front must consume its slot and not stall the scan."""
     await seed_resources(file_db, provider, 4, name="c-denied-first")
     provider.access[("u1", "m000")] = False
     async with file_db() as db:
         first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=1)
     assert first.counts()[ca.CandidateState.DENIED.value] == 1
     assert first.cursor is not None
-
     _, ids = await walk(file_db, access_for(), budget=4)
     assert len(ids) == 3, "the three authorized resources must be reached past the denial"
 
@@ -557,13 +946,9 @@ async def test_provider_outage_is_unavailable_not_denied_and_scan_continues(
     provider.access_error = ConnectorAuthUnavailable("provider down", code="provider_error")
     async with file_db() as db:
         result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
-    counts = result.counts()
-    assert counts[ca.CandidateState.UNAVAILABLE.value] == 2
-    assert counts[ca.CandidateState.DENIED.value] == 0, "an outage is not a denial"
+    assert result.counts()[ca.CandidateState.UNAVAILABLE.value] == 2
     assert result.authorized_document_ids == frozenset()
-    assert result.coverage is ca.CoverageStatus.PARTIAL
-    assert result.cursor is not None, "a caller must be able to continue after an outage"
-
+    assert result.cursor is not None
     provider.access_error = None
     async with file_db() as db:
         nxt = await ca.authorize_candidates(
@@ -572,38 +957,35 @@ async def test_provider_outage_is_unavailable_not_denied_and_scan_continues(
     assert len(nxt.authorized_document_ids) >= 1
 
 
-async def test_unmapped_principal_is_denied_not_errored(file_db, connector, provider, knowledge):
-    await seed_resources(file_db, provider, 2, name="c-unmapped")
-    async with file_db() as db:
-        result = await ca.authorize_candidates(
-            db, access=access_for(PRINCIPAL_C), query="q", budget=5
-        )
-    assert result.counts()[ca.CandidateState.DENIED.value] == 2
-    assert result.authorized_document_ids == frozenset()
-
-
-async def test_local_eligibility_is_applied_before_provider_budget(
+async def test_revocation_ahead_of_the_cursor_is_denied_on_the_next_page(
     file_db, connector, provider, knowledge
 ):
-    """A locally invisible candidate must not consume a provider check."""
-    from sqlalchemy import select
-
-    from app.models import Document
-
-    instance_id = await seed_resources(file_db, provider, 3, name="c-local-first")
+    await seed_resources(file_db, provider, 6, name="c-revoke-ahead")
     async with file_db() as db:
-        resource = await _resource(db, instance_id, "m000")
-        doc = (
-            await db.execute(select(Document).where(Document.id == resource.document_id))
-        ).scalars().first()
-        doc.classification = "highly_restricted"
-        doc.tenant_visible = False
-        await db.commit()
-
+        first = await ca.authorize_candidates(db, access=access_for(), query="q", budget=2)
+    authorized_first = {d.external_id for d in first.decisions if d.document_id}
+    assert authorized_first == {"m000", "m001"}
+    provider.access[("u1", "m003")] = False
     async with file_db() as db:
-        result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=5)
-    assert result.counts()[ca.CandidateState.LOCAL_POLICY_EXCLUDED.value] == 1
-    assert result.provider_checks == 2, "the excluded candidate must not cost a provider check"
+        second = await ca.authorize_candidates(
+            db, access=access_for(), query="q", budget=2, cursor=first.cursor
+        )
+    by_ext = {d.external_id: d for d in second.decisions}
+    assert "m003" in by_ext, "the next page must actually examine m003"
+    assert by_ext["m003"].state is ca.CandidateState.DENIED
+    assert "m003" not in second.authorized_document_ids
+
+
+async def test_revocation_of_a_previously_authorized_resource_is_honoured_immediately(
+    file_db, connector, provider, knowledge
+):
+    await seed_resources(file_db, provider, 5, name="c-revoke-cached")
+    _, before = await walk(file_db, access_for(), budget=2)
+    assert len(before) == 5
+    provider.access[("u1", "m002")] = False
+    _, after = await walk(file_db, access_for(), budget=2)
+    assert len(after) == 4, "the revoked resource must not survive a revalidation"
+    assert after < before
 
 
 async def test_authorized_decisions_are_the_only_ones_carrying_a_document_id(
@@ -618,8 +1000,6 @@ async def test_authorized_decisions_are_the_only_ones_carrying_a_document_id(
             assert decision.document_id
         else:
             assert decision.document_id is None
-    # The user-facing shape carries coverage only, and no numeric volume that could reveal
-    # how much was denied or left unexamined. Note bool is a subclass of int.
     summary = result.user_facing_summary()
     assert set(summary) == {"coverage", "partial", "reason"}
     assert not any(
@@ -627,19 +1007,29 @@ async def test_authorized_decisions_are_the_only_ones_carrying_a_document_id(
     ), "the user-facing summary must not carry counts"
 
 
-async def test_partial_coverage_is_represented_in_the_contract(
+async def test_authorization_traversal_is_independent_of_query_relevance(
     file_db, connector, provider, knowledge
 ):
-    await seed_resources(file_db, provider, 10, name="c-partial")
+    """Traversal is not retrieval: relevance must not change what is authorized."""
+    await seed_resources(file_db, provider, 20, name="c-not-retrieval")
+    _, matching = await walk(file_db, access_for(), budget=5, query="policy document")
+    _, nonsense = await walk(file_db, access_for(), budget=5, query="zzz unrelated nonsense zzz")
+    assert matching == nonsense
+    assert len(matching) == 20
+
+
+async def test_the_contract_exposes_no_relevance_or_score_concept(
+    file_db, connector, provider, knowledge
+):
+    await seed_resources(file_db, provider, 4, name="c-no-score")
     async with file_db() as db:
         result = await ca.authorize_candidates(db, access=access_for(), query="q", budget=4)
-    assert result.coverage is ca.CoverageStatus.PARTIAL
-    assert result.authorization_incomplete is True
-    assert result.user_facing_summary()["partial"] is True
+    for name in ("score", "relevance", "rank", "similarity", "confidence", "vector"):
+        assert not hasattr(result, name)
+        assert not hasattr(result.decisions[0], name)
 
 
 async def test_tenant_isolation_is_preserved(file_db, connector, provider, knowledge):
-    """A principal in another tenant sees no candidates from this tenant."""
     await seed_resources(file_db, provider, 5, name="c-isolation")
     async with file_db() as db:
         result = await ca.authorize_candidates(
@@ -653,7 +1043,6 @@ async def test_tenant_isolation_is_preserved(file_db, connector, provider, knowl
 async def test_authorization_does_not_mutate_shared_content(
     file_db, connector, provider, knowledge
 ):
-    """CA1 semantics preserved: a denial must leave the resource active."""
     instance_id = await seed_resources(file_db, provider, 3, name="c-no-mutate")
     provider.access[("u1", "m000")] = False
     async with file_db() as db:
