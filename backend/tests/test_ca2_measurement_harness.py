@@ -440,7 +440,66 @@ async def test_the_declared_maximum_cap_is_enforced_and_cannot_be_bypassed(
             await rc.governed_candidates(db, access_for(), query="policy", check_cap=0)
 
 
-# =============================================== latency against the agreed threshold
+# =============================================== request-level provider accounting
+
+
+async def test_one_exploratory_traversal_per_full_knowledge_request(
+    file_db, connector, provider, knowledge, mode, monkeypatch
+):
+    """E1/F2/B-3: a FULL orchestrator Knowledge request must authorize the corpus once.
+
+    Instrumented two ways at the request level rather than at the helper: the exploratory gate's
+    own invocation count, and the provider adapter's call log, which counts BOTH paths because it
+    is the shared boundary (F4).
+    """
+    from app.services.orchestrator import OpenJMOrchestrator
+
+    total = 150
+    await prepare(file_db, provider, total, name="m-request")
+    mode(rc.MODE_CANDIDATE)
+    stub_retrieve(monkeypatch, body_records(knowledge))
+
+    invocations = {"n": 0}
+    original = rc.governed_candidates
+
+    async def counting(*args, **kwargs):
+        invocations["n"] += 1
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(rc, "governed_candidates", counting)
+
+    with request_context() as principal:
+        async with file_db() as db:
+            provider.check_calls.clear()
+            # The authenticated route passes the principal's composite user id, and the orchestrator
+            # resolves access only when that id matches the active principal. Passing a bare
+            # principal id silently takes the no-identity legacy branch, which is what made an
+            # earlier version of this test prove nothing.
+            plan = await OpenJMOrchestrator().plan(
+                "policy document", db, principal.user_id, mode="knowledge"
+            )
+            provider_calls = len(provider.check_calls)
+
+    report(
+        {
+            "scenario": "full orchestrator Knowledge request, 150 resources",
+            "exploratory_gate_invocations": invocations["n"],
+            "provider_calls_for_entire_request": provider_calls,
+            "per_request_cap": rc.DEFAULT_REQUEST_CHECK_CAP,
+            "duplicated_work_avoided": invocations["n"] == 1,
+            "answer_chars": len(plan.direct_answer or ""),
+        }
+    )
+    # Exactly one exploratory traversal for the whole request. Before the handoff wiring this was
+    # two: one in _ready_documents and one inside the tool.
+    assert invocations["n"] == 1, (
+        f"the exploratory gate ran {invocations['n']} times for one request; it must run once"
+    )
+    # And the request's provider work is bounded by the configured per-request cap, not doubled.
+    assert provider_calls <= rc.DEFAULT_REQUEST_CHECK_CAP, (
+        f"{provider_calls} provider calls exceeds the {rc.DEFAULT_REQUEST_CHECK_CAP} request cap"
+    )
+    assert provider_calls >= total, "the traversal must actually have examined the corpus"
 
 
 async def test_latency_on_comparable_work_against_the_1_25x_threshold(
