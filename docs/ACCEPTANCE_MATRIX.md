@@ -125,15 +125,15 @@ and final integrated qualification, not another broad business-feature wave.
    release gates, and the prior PostgreSQL production-profile qualification ran
    on 2026-10-10. This is implementation/package capability, and it is the only
    part of REL1 that is complete.
-2. **REL1-B4 final host/runtime qualification: NOT RUN / OPEN under Issue #79.**
-   The mandatory release-acceptance rows that remain outstanding are the clean
-   Linux **development** host, the clean Linux **production** host with
-   PostgreSQL and production-safe paths, the supported **Windows/WSL2** runtime,
-   and the final **browser/persona journey on the production-installed
-   artifact**. Issue #79 makes these part of the release acceptance contract, so
-   they are NOT optional compatibility coverage, and none of them is satisfied
-   by CI, by prior WSL evidence, by the prior PostgreSQL qualification or by
-   contract tests. Current status for the current artifact is recorded in
+2. **REL1-B4 final host/runtime qualification: partly PASS, partly OPEN under
+   Issue #79.** **PASS**: the clean Linux **development** host (Docker Agentic
+   Platform Cloud sandbox) and the supported **Windows/WSL2** runtime install.
+   **NOT RUN / OPEN**: the clean Linux **production** host with PostgreSQL and
+   production-safe paths, and the final **browser/persona journey on the
+   production-installed artifact**. Issue #79 makes the outstanding rows part of
+   the release acceptance contract, so they are NOT optional compatibility
+   coverage, and they must not be upgraded from CI, prior WSL evidence, the prior
+   PostgreSQL qualification or contract tests. Current status is recorded in
    `docs/REL1_B4_ACCEPTANCE.md`.
 3. **Product journey acceptance on the controlled QA environment: PASS, and
    distinct from host qualification.** QA2 executed the real OIDC persona and
@@ -164,18 +164,20 @@ date; do not read an older row as current-artifact host evidence.
 | Final browser/persona journey (end user, data steward, client admin, OpenJM operator) | live QA env: PostgreSQL production profile, Keycloak 26.7.4 OIDC, seeded personas | **PASS** | QA2 (2026-10-11) live Chrome journeys for all four personas through real OIDC authorization-code + PKCE |
 | Live delegated-support / OIDC walkthrough | live Keycloak 26.7.4 + PostgreSQL 16 | **PASS** | QA2 delegated-support grant, consumption, ceiling, audit, revocation and expiry exercised live; residual delegation revoked at handoff |
 | Live authoritative-candidate / vector-RAG journey (BV6-B) | DB-GPT knowledge engine + Chroma, `glm-5.3-flash` | **PASS** | QA3 (2026-10-11) 50 PASS: ordinary retrieval, curation lifecycle, two-person rule, additive candidate, non-authoritative negatives, relevance gate, revocation/regrant, unauthorized and cross-tenant negatives, authorization-before-context, withdrawal. See `docs/qa/QA3_ACCEPTANCE.md` |
-| Clean Linux development host install | none | **NOT RUN** | no separate clean Linux host is attached and no virtualization tooling is installed; `sudo` needs a password and paid cloud is not authorised. See `docs/REL1_B4_ACCEPTANCE.md` (inventory A). |
-| Real Windows/WSL2 runtime install | Windows 11 Pro build 26200, WSL 2.6.3.0, fresh `openjm-rel1b4` distro | **NOT RUN** | the supported path was executed from Windows PowerShell (detection PASS, Windows to WSL mapping PASS, canonical-installer delegation PASS, correct fail-fast), but the clean runtime had no Python 3.11 and no `sudo`, so the install did not complete. Partial-path evidence only; not a PASS. See `docs/REL1_B4_ACCEPTANCE.md`. |
+| Clean Linux development host install | Docker Agentic Platform Cloud sandbox `openjm-rel1-dev` (medium 4 vCPU / 8 GiB, Ubuntu 26.04.1, kernel 6.12.103, x86_64) | **PASS** (2026-10-12) | Fresh clean sandbox, independent GitHub clone at `2456f92a`, Python 3.11.9 operator-provisioned (GPG-verified python.org source, digest re-verified independently), Node 22.22.1, canonical `install-linux.sh --profile development` exit 0, REL1-A verifier OK, migration current == head `0021_support_content_scope`, frontend built, backend started from the new venv, `/api/health` 200, `/api/ready` 200 `ready:true`. See `docs/REL1_B4_ACCEPTANCE.md`. |
+| Real Windows/WSL2 runtime install | Windows 11 Pro build 26200, WSL 2.6.3.0, fresh `openjm-rel1b4` distro (Ubuntu 24.04.5, root) | **PASS** (2026-10-12) | Real supported chain from Windows PowerShell through the hardened `install-wsl2.ps1` to `install-linux.sh --profile development` at `c3937c88`: bootstrap exit 0, REL1-A verifier OK, migration current == head `0021_support_content_scope`, frontend built, backend started from the new venv, `/api/health` 200, `/api/ready` 200 `ready:true`. See `docs/REL1_B4_ACCEPTANCE.md`. |
+| Clean Linux **production** host install (PostgreSQL, production-owned paths) | none | **NOT RUN** | No clean Linux production host has been qualification-executed. The dated `Full PostgreSQL production-profile install/migrate/ready` row above is controlled-environment capability evidence, not a clean-host row, and does not satisfy this one. See `docs/REL1_B4_ACCEPTANCE.md`. |
+| **Production-installed** browser/persona journey | none | **NOT RUN** | The dated persona-journey row above is the QA-environment journey; the journey against a production-installed build has not been executed. See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Rahkia production cutover | n/a | **DEFERRED** | deliberate product decision |
 
 The PostgreSQL production profile, the frontend production build, the live OIDC
 persona/delegated-support journeys and the live vector/RAG authoritative-candidate
-journey all pass. The clean-host rows above (clean Linux development, clean Linux
-production with PostgreSQL and production-safe paths, supported Windows/WSL2
-runtime, and the production-installed browser/persona journey) remain **NOT RUN**
-and **OPEN under Issue #79**. They are mandatory release-acceptance rows, not
-optional compatibility coverage, and they must not be upgraded from CI, prior WSL
-evidence, the prior PostgreSQL qualification or contract tests.
+journey all pass. Current #79 host/runtime state: **PASS** for the clean Linux
+development host and the Windows/WSL2 supported runtime; **NOT RUN / OPEN** for the
+clean Linux production/PostgreSQL host and the production-installed browser/persona
+journey. The remaining rows are mandatory release-acceptance rows, not optional
+compatibility coverage, and they must not be upgraded from CI, prior WSL evidence,
+the prior PostgreSQL qualification or contract tests.
 
 ## How this matrix is maintained
 
@@ -193,6 +195,6 @@ Re-verified on the current release artifact built from
 (`fb97c0bf...`, 916 files), bounded tamper-negative PASS, and offline
 committed-lock install of the current artifact PASS (bundled wheelhouse with
 `--no-index --require-hashes`, application wheel with `--no-deps`, no dev extras).
-The clean Linux development and production host rows, the Windows/WSL2 runtime
-install and the on-host browser/persona journey remain **NOT RUN** for want of a
-clean Linux host and a fully provisioned clean WSL2 runtime.
+The clean Linux development host and the Windows/WSL2 runtime install are **PASS**
+(see `docs/REL1_B4_ACCEPTANCE.md`). The clean Linux production/PostgreSQL host and the
+on-host browser/persona journey remain **NOT RUN** and OPEN under Issue #79.
