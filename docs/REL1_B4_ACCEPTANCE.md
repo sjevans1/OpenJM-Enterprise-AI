@@ -144,17 +144,42 @@ It could not complete because the fresh runtime had no Python 3.11 and the
 bootstrap's own prerequisite step needs `sudo`, which the imported root-only
 distribution does not provide. Recorded as **NOT RUN**, not PASS.
 
-Two observations to feed back to the release contract:
+### Follow-on recommendation: bounded REL1-B4 installer hardening
 
-- `install-wsl2.ps1` fails at its `param()` default when PowerShell reports an
-  empty `$PSScriptRoot` (`Join-Path : Cannot bind argument to parameter 'Path'
-  because it is an empty string`). Passing `-RepoPath` explicitly works. A
-  defensive default (for example falling back to `$MyInvocation.MyCommand.Path`)
-  would make the script robust.
-- The prerequisite step assumes a `sudo`-capable non-root user; a root-only
-  distribution is reported as `sudo: command not found` and then the installer
-  fails on the missing Python 3.11. Both are environment/host ergonomics, not
-  product-core defects.
+None of the following is fixed, and none may be treated as resolved merely
+because `-RepoPath` was supplied or because the test runtime happened to lack
+`sudo`. They are open release-tooling concerns for the supported Windows/WSL2
+path and are recommended for a separate bounded package BEFORE the next
+Windows/WSL2 runtime attempt.
+
+1. **Python 3.11 acquisition on a stock Ubuntu 24.04 (Noble).** The supported
+   bootstrap contains `sudo apt-get install ... python3.11 ...`. Ubuntu 24.04's
+   default Python line is 3.12, so `python3.11` is not available from the stock
+   Noble archive. On the fresh Noble runtime exercised here the install did not
+   succeed (`python3.11: command not found` afterwards). The bootstrap therefore
+   needs either a pinned, explicitly documented source for Python 3.11 (for
+   example a PPA added by the script), a documented prerequisite that the
+   operator supplies 3.11, or a supported alternative to acquiring it. Relying on
+   `apt-get install python3.11` on a stock fresh Noble environment is not a valid
+   bootstrap path as written.
+2. **`$PSScriptRoot` empty in the `param()` default.** `install-wsl2.ps1` fails
+   with `Join-Path : Cannot bind argument to parameter 'Path' because it is an
+   empty string` when PowerShell reports an empty `$PSScriptRoot` at parameter
+   binding time. Passing `-RepoPath` explicitly works around it, but the default
+   remains broken; a defensive fallback (for example to
+   `$MyInvocation.MyCommand.Path`) would make the script robust.
+3. **Root-only / no-`sudo` runtime is not detected.** The prerequisite step
+   assumes a `sudo`-capable non-root user. A root-only distribution reports
+   `sudo: command not found`, after which the canonical installer fails further
+   downstream on the missing Python 3.11 rather than surfacing the real cause.
+   Detecting the runtime user model (or using a no-`sudo` path when already root)
+   would make the bootstrap fail early and clearly.
+
+Recommended bounded follow-on package: **REL1-B4 installer hardening**, covering
+the three items above with focused tests on the bootstrap's detection,
+prerequisite acquisition and failure reporting, no change to
+`install-linux.sh` semantics, and no weakening of the Python 3.11 / Node 22
+requirement (DB-GPT pins `aiohttp==3.8.4`, which does not build on 3.12).
 
 ## Committed-lock release artifacts (built on the acceptance host)
 

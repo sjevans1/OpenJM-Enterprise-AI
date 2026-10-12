@@ -110,7 +110,7 @@ Security automated capability: **6/6 PASS**.
 | Metering / entitlements (M1/M2/M3) | accepted | **PASS** |
 | Admission / capacity (INF1-A/B/C) | registry/admission/capacity telemetry accepted | **PASS** |
 | Backup / recovery (E1/E2/E3 + VS8) | accepted automated recovery evidence | **PASS** |
-| Installer / productization (REL1) | REL1-A + REL1-B1..B4 accepted (reproducible install, committed hash-pinned locks, lock drift gate, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged-wheel production install); full PostgreSQL production-profile acceptance executed 2026-10-10 | **PASS** (automated + PostgreSQL production profile + live browser persona journey at QA2); clean dev host and Windows/WSL2 runtime remain compatibility coverage |
+| Installer / productization (REL1) | implementation and package capability accepted: reproducible install, committed hash-pinned locks with a drift gate, production wheelhouse, offline bundle + registry-blocked acceptance, deterministic manifest/archive, packaged application wheel, CI release gates, and the prior PostgreSQL production-profile qualification (2026-10-10) | **PASS** for implementation/package capability; **NOT RUN / OPEN** for final clean-host qualification under Issue #79 (clean Linux development host; clean Linux production host with PostgreSQL and production-safe paths; supported Windows/WSL2 runtime; browser/persona journey on the production-installed artifact). See `docs/REL1_B4_ACCEPTANCE.md`. |
 | Rahkia qualification | intentionally not integrated during current product build | **DEFERRED** |
 
 ## Remaining completion gates
@@ -118,22 +118,29 @@ Security automated capability: **6/6 PASS**.
 The feature gap list is now short. The remaining work is primarily productization
 and final integrated qualification, not another broad business-feature wave.
 
-1. **REL1 productization is accepted.** REL1-A and REL1-B1..B4 delivered the
-   reproducible install, committed hash-pinned locks with a drift gate, the
-   offline bundle with registry-blocked acceptance, the deterministic
-   manifest/archive, and the packaged-wheel production install. The full
-   PostgreSQL production-profile acceptance was executed 2026-10-10, and a
-   production-like acceptance environment (PostgreSQL production profile, live
-   Keycloak OIDC, seeded tenants and personas, governed Knowledge/Data fixtures,
-   live vector/RAG, approved model path) was qualified at QA1, QA2 and QA3 (see
-   "Live/deployment qualification" below).
-2. **Final manual/browser journey is PASS.** The end-user, data-steward,
-   client-admin and OpenJM-operator golden journeys were executed live through
-   real Keycloak OIDC at QA2, and the authoritative candidate path was
-   re-exercised live at QA3.
-3. **Live environment qualifications are now executed.** QA2 ran live
-   OIDC/Keycloak and a live PostgreSQL delegated-support walkthrough; QA3 ran a
-   real vector-engine/RAG path for authoritative candidates.
+1. **REL1 implementation and packaging: PASS.** REL1-A and REL1-B1..B4 delivered
+   the reproducible install, committed hash-pinned locks with a drift gate, the
+   production wheelhouse, the offline bundle with registry-blocked acceptance,
+   the deterministic manifest/archive, the packaged application wheel and the CI
+   release gates, and the prior PostgreSQL production-profile qualification ran
+   on 2026-10-10. This is implementation/package capability, and it is the only
+   part of REL1 that is complete.
+2. **REL1-B4 final host/runtime qualification: NOT RUN / OPEN under Issue #79.**
+   The mandatory release-acceptance rows that remain outstanding are the clean
+   Linux **development** host, the clean Linux **production** host with
+   PostgreSQL and production-safe paths, the supported **Windows/WSL2** runtime,
+   and the final **browser/persona journey on the production-installed
+   artifact**. Issue #79 makes these part of the release acceptance contract, so
+   they are NOT optional compatibility coverage, and none of them is satisfied
+   by CI, by prior WSL evidence, by the prior PostgreSQL qualification or by
+   contract tests. Current status for the current artifact is recorded in
+   `docs/REL1_B4_ACCEPTANCE.md`.
+3. **Product journey acceptance on the controlled QA environment: PASS, and
+   distinct from host qualification.** QA2 executed the real OIDC persona and
+   delegated-support journeys, QA3 executed the live vector/RAG
+   authoritative-candidate path, and OPS1 executed the operator-plane journey.
+   That is product acceptance on a production-like environment, not the
+   REL1-B4 clean-host row, which remains NOT RUN.
 4. **Rahkia cutover is DEFERRED by design.** Do not connect the application to
    Rahkia during the remaining product build. The specialist integration phase
    later verifies call paths, M1/M2/M3 attribution, hardware/security/performance
@@ -142,7 +149,12 @@ and final integrated qualification, not another broad business-feature wave.
    Source-level classification plus authorized-object narrowing remains the v1
    contract unless an unsplittable mixed-sensitivity source creates a proven need.
 
-## Live/deployment qualification (2026-10-10, qualified product head `7ca41149`; current `main` `23ea4845` differs only by CI workflow modernization)
+## Live/deployment qualification
+
+Two qualification sets are recorded here: the automated/controlled-environment
+qualification performed 2026-10-10, and the host rows restamped for current `main`
+(`7e859f2801bee1d6b5d52688b633709e5e9ed27d`) on 2026-10-11. Host rows carry their own
+date; do not read an older row as current-artifact host evidence.
 
 | Gate | Environment | Status | Evidence |
 | --- | --- | --- | --- |
@@ -158,8 +170,12 @@ and final integrated qualification, not another broad business-feature wave.
 
 The PostgreSQL production profile, the frontend production build, the live OIDC
 persona/delegated-support journeys and the live vector/RAG authoritative-candidate
-journey all pass. The remaining NOT RUN/DEFERRED items are compatibility coverage
-on hosts not available here, not Issue #45 deployment gates.
+journey all pass. The clean-host rows above (clean Linux development, clean Linux
+production with PostgreSQL and production-safe paths, supported Windows/WSL2
+runtime, and the production-installed browser/persona journey) remain **NOT RUN**
+and **OPEN under Issue #79**. They are mandatory release-acceptance rows, not
+optional compatibility coverage, and they must not be upgraded from CI, prior WSL
+evidence, the prior PostgreSQL qualification or contract tests.
 
 ## How this matrix is maintained
 
