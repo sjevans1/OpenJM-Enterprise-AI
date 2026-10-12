@@ -910,7 +910,28 @@ async def test_revoked_user_mapping_denies(file_db, connector, provider, knowled
     assert outcome.reason == "user_not_mapped"
 
 
-async def test_revoked_source_acl_denies_and_quarantines(
+# ---------------------------------------------------------------------------
+# CURRENT AUTHORIZATION decides; it never mutates shared content
+# ---------------------------------------------------------------------------
+#
+# The four tests in this block previously asserted `outcome.quarantined is True`
+# and `resource.lifecycle_state == "quarantined"` after a principal-specific
+# denial. Those assertions encoded a defect rather than a requirement. Quarantine
+# mutates the *shared* ExternalResource row and the shared Knowledge document, so
+# one principal's correct refusal removed the document for every other principal
+# in the tenant. Reversing the evaluation order in the two-user isolation test
+# made it observable: allowed_c came back as set() where the document id was
+# expected.
+#
+# The security intent is preserved and asserted more strongly here. A denied
+# principal still receives nothing, and the denial is still durable, because the
+# provider is re-consulted on every request rather than a decision being cached.
+# What changed is that the refusal is no longer charged to every other reader as
+# well. Content-scoped conditions are quarantined through the explicit lifecycle
+# operation, which is asserted separately below.
+
+
+async def test_revoked_source_acl_denies_the_principal_without_mutating_shared_content(
     file_db, connector, provider, knowledge
 ):
     instance_id = await _authorized_setup(file_db, provider, name="acl-conn")
@@ -929,11 +950,14 @@ async def test_revoked_source_acl_denies_and_quarantines(
 
     assert outcome.allowed is False
     assert outcome.reason == "access_revoked"
-    assert outcome.quarantined is True
-    assert resource.lifecycle_state == "quarantined"
+    assert outcome.scope is authorization_service.DenialScope.PRINCIPAL
+    # The refusal is about this reader, so the content is left exactly as it was.
+    assert resource.lifecycle_state == "active"
+    assert resource.quarantined_at is None
+    assert resource.quarantine_reason is None
 
 
-async def test_provider_authorization_timeout_denies_and_quarantines(
+async def test_provider_authorization_timeout_denies_without_mutating_shared_content(
     file_db, connector, provider, knowledge
 ):
     instance_id = await _authorized_setup(file_db, provider, name="timeout-conn")
@@ -952,11 +976,12 @@ async def test_provider_authorization_timeout_denies_and_quarantines(
 
     assert outcome.allowed is False
     assert outcome.reason == "provider_timeout"
-    assert outcome.quarantined is True
-    assert resource.lifecycle_state == "quarantined"
+    # A third party being briefly unreachable says nothing about the content.
+    assert outcome.scope is authorization_service.DenialScope.REQUEST
+    assert resource.lifecycle_state == "active"
 
 
-async def test_provider_authorization_outage_denies_and_quarantines(
+async def test_provider_authorization_outage_denies_without_mutating_shared_content(
     file_db, connector, provider, knowledge
 ):
     instance_id = await _authorized_setup(file_db, provider, name="outage-conn")
@@ -977,8 +1002,8 @@ async def test_provider_authorization_outage_denies_and_quarantines(
 
     assert outcome.allowed is False
     assert outcome.reason == "provider_error"
-    assert outcome.quarantined is True
-    assert resource.lifecycle_state == "quarantined"
+    assert outcome.scope is authorization_service.DenialScope.REQUEST
+    assert resource.lifecycle_state == "active"
 
 
 async def test_cached_content_never_bypasses_current_permission_checks(
@@ -997,7 +1022,8 @@ async def test_cached_content_never_bypasses_current_permission_checks(
     assert allowed_before == {document_id}
 
     # Access is revoked after the successful authorized read. The current-state
-    # check now denies and quarantines the cached content.
+    # check must deny on the next request even though the vectors are cached, and
+    # it must deny without withdrawing the content from anyone else.
     provider.access[("u1", "r1")] = False
 
     async with file_db() as db:
@@ -1012,14 +1038,212 @@ async def test_cached_content_never_bypasses_current_permission_checks(
     assert outcome.allowed is False
     assert outcome.reason == "access_revoked"
 
-    # The document id is no longer returned by the retrieval gate.
+    # The document id is no longer returned by the retrieval gate for this
+    # principal, while the resource itself remains active and intact.
     async with file_db() as db:
         allowed_after, _denials = await authorization_service.authorized_connector_document_ids(
             db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
         )
+        resource = await _resource(db, instance_id, "r1")
 
     assert document_id not in allowed_after
     assert allowed_after == set()
+    assert resource.lifecycle_state == "active"
+    assert resource.document_id == document_id
+
+
+async def test_authorized_principal_is_unaffected_by_another_principals_denial(
+    file_db, connector, provider, knowledge
+):
+    """Regression: a denial for B must not remove the document from A."""
+    instance_id = await _authorized_setup(file_db, provider, name="co-tenant-conn")
+    async with file_db() as db:
+        await _mapping(db, instance_id, PRINCIPAL_C, "uc")
+        await _mapping(db, instance_id, PRINCIPAL_D, "ud")
+        await db.commit()
+
+    provider.access[("u1", "r1")] = True
+    provider.access[("uc", "r1")] = True
+    provider.access[("ud", "r1")] = False
+
+    async with file_db() as db:
+        resource = await _resource(db, instance_id, "r1")
+        document_id = resource.document_id
+
+        # The unauthorized principal is evaluated first.
+        allowed_d, denials_d = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_D
+        )
+        allowed_a, _ = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+        )
+        allowed_c, _ = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_C
+        )
+        state_after = resource.lifecycle_state
+
+    assert allowed_d == set()
+    assert denials_d["r1"] == "access_revoked"
+    assert state_after == "active"
+    assert allowed_a == {document_id}
+    assert allowed_c == {document_id}
+
+
+async def test_denial_outcome_is_independent_of_evaluation_order(
+    file_db, connector, provider, knowledge
+):
+    """The same two principals, evaluated in both orders, must agree."""
+    instance_id = await _authorized_setup(file_db, provider, name="order-conn")
+    async with file_db() as db:
+        await _mapping(db, instance_id, PRINCIPAL_D, "ud")
+        await db.commit()
+
+    provider.access[("u1", "r1")] = True
+    provider.access[("ud", "r1")] = False
+
+    async def evaluate(denied_first: bool) -> tuple[set, set]:
+        async with file_db() as db:
+            if denied_first:
+                allowed_d, _ = await authorization_service.authorized_connector_document_ids(
+                    db, tenant_id=TENANT_A, principal_id=PRINCIPAL_D
+                )
+                allowed_a, _ = await authorization_service.authorized_connector_document_ids(
+                    db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+                )
+            else:
+                allowed_a, _ = await authorization_service.authorized_connector_document_ids(
+                    db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+                )
+                allowed_d, _ = await authorization_service.authorized_connector_document_ids(
+                    db, tenant_id=TENANT_A, principal_id=PRINCIPAL_D
+                )
+            resource = await _resource(db, instance_id, "r1")
+            assert resource.lifecycle_state == "active"
+            return allowed_a, allowed_d
+
+    async with file_db() as db:
+        document_id = (await _resource(db, instance_id, "r1")).document_id
+
+    allowed_a_first, allowed_d_first = await evaluate(denied_first=False)
+    allowed_a_second, allowed_d_second = await evaluate(denied_first=True)
+
+    assert allowed_a_first == allowed_a_second == {document_id}
+    assert allowed_d_first == allowed_d_second == set()
+
+
+async def test_availability_recovers_without_reconciliation_when_content_is_valid(
+    file_db, connector, provider, knowledge
+):
+    """A restored provider decision is enough; no reconciliation run is needed."""
+    instance_id = await _authorized_setup(file_db, provider, name="recover-conn")
+    provider.access[("u1", "r1")] = False
+
+    async with file_db() as db:
+        resource = await _resource(db, instance_id, "r1")
+        document_id = resource.document_id
+        denied, _ = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+        )
+
+    assert denied == set()
+
+    # The provider now allows the principal again. Nothing else is run.
+    provider.access[("u1", "r1")] = True
+
+    async with file_db() as db:
+        allowed_again, _ = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+        )
+        resource = await _resource(db, instance_id, "r1")
+
+    assert allowed_again == {document_id}
+    assert resource.lifecycle_state == "active"
+
+
+async def test_content_scoped_quarantine_still_withdraws_the_document(
+    file_db, connector, provider, knowledge
+):
+    """The explicit lifecycle operation still removes content from retrieval.
+
+    This is the capability that must not be lost while removing it as an
+    authorization side effect. It is invoked directly, which is the point: only a
+    content-scoped caller reaches it.
+    """
+    instance_id = await _authorized_setup(file_db, provider, name="lifecycle-conn")
+    provider.access[("u1", "r1")] = True
+
+    async with file_db() as db:
+        resource = await _resource(db, instance_id, "r1")
+        document_id = resource.document_id
+        allowed_before, _ = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+        )
+
+    assert allowed_before == {document_id}
+
+    async with file_db() as db:
+        resource = await _resource(db, instance_id, "r1")
+        await ingest_service.quarantine_resource(
+            db, resource=resource, reason="content_integrity_failed"
+        )
+        await db.commit()
+
+    async with file_db() as db:
+        allowed_after, _ = await authorization_service.authorized_connector_document_ids(
+            db, tenant_id=TENANT_A, principal_id=PRINCIPAL_A
+        )
+        resource = await _resource(db, instance_id, "r1")
+
+    assert allowed_after == set()
+    assert resource.lifecycle_state == "quarantined"
+    assert resource.quarantine_reason == "content_integrity_failed"
+
+
+async def test_unknown_and_foreign_resources_deny_structurally_without_raising(
+    file_db, connector, provider, knowledge
+):
+    """Regression: the missing-resource path must deny, not raise.
+
+    ``AuthorizationOutcome.deny`` requires a DenialScope. The missing-resource
+    branch of ``require_current_authorization`` called it with a reason only, so
+    asking for an unknown or foreign resource raised TypeError on a path that is
+    reachable from connector tool execution. A refusal must be structured.
+
+    The same reason is returned for an absent id and for a real id requested
+    under a foreign tenant, so the refusal does not enumerate which resources
+    exist elsewhere.
+    """
+    instance_id = await _authorized_setup(file_db, provider, name="unknown-conn")
+    provider.access[("u1", "r1")] = True
+
+    async with file_db() as db:
+        # An external id that does not exist in this tenant at all.
+        absent = await authorization_service.require_current_authorization(
+            db,
+            tenant_id=TENANT_A,
+            connector_instance_id=instance_id,
+            external_id="does-not-exist",
+            principal_id=PRINCIPAL_A,
+        )
+        # A real external id, requested under a foreign tenant.
+        foreign = await authorization_service.require_current_authorization(
+            db,
+            tenant_id=TENANT_B,
+            connector_instance_id=instance_id,
+            external_id="r1",
+            principal_id=PRINCIPAL_A,
+        )
+
+    for outcome in (absent, foreign):
+        assert outcome.allowed is False
+        assert outcome.reason == "resource_unknown"
+        assert outcome.scope is authorization_service.DenialScope.CONTENT
+        assert outcome.detail == ""
+
+    # The foreign request must not have exposed or mutated the real resource.
+    async with file_db() as db:
+        resource = await _resource(db, instance_id, "r1")
+        assert resource.lifecycle_state == "active"
 
 
 # ---------------------------------------------------------------------------
@@ -1129,7 +1353,7 @@ async def test_reconciliation_restores_a_quarantined_resource(
 
         resource = await _resource(db, instance_id, "rs-1")
         await ingest_service.quarantine_resource(
-            db, resource=resource, reason="access_revoked"
+            db, resource=resource, reason="content_integrity_failed"
         )
         await db.commit()
         assert (await _resource(db, instance_id, "rs-1")).lifecycle_state == "quarantined"
@@ -1167,7 +1391,7 @@ async def test_quarantine_is_cleared_only_by_a_sweep_that_sees_the_resource(
 
         resource = await _resource(db, instance_id, "rs-1")
         await ingest_service.quarantine_resource(
-            db, resource=resource, reason="access_revoked"
+            db, resource=resource, reason="content_integrity_failed"
         )
         await db.commit()
 

@@ -117,8 +117,10 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
 
     The search runs over connector-owned resources only. Every candidate is put
     through the current-authorization gate before it is returned, so a resource
-    the mapped user can no longer see is not merely filtered from the output, it
-    is quarantined on the way past.
+    the mapped user can no longer see is refused and is not returned to that
+    user. Authorization does not mutate content: an unreadable resource is not
+    quarantined on the way past, because that would withdraw it from every other
+    principal in the tenant. Withdrawal is an explicit lifecycle operation.
     """
     principal = current_principal()
     query = str(arguments.get("query") or "").strip().lower()

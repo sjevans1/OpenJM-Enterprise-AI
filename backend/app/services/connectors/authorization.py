@@ -16,9 +16,18 @@ access, and it fails closed on every outcome that is not a proven yes:
 * a provider timeout, outage, rate limit or contradictory response denies;
 * an inaccessible resource denies.
 
-Denial is not merely a return value. Where cached content exists, a denial
-quarantines it, so a stale authorization decision cannot survive revocation even
-if some other code path would have admitted the document.
+Denial is not merely a return value, and a denial never mutates shared content
+either. A denial is enforced by refusing this request, and it stays enforced on
+the next request because the provider is consulted again rather than because a
+decision was cached.
+
+The scope of a state change must match the scope of the failure. A
+principal-scoped failure proves something about one reader and must change
+nothing about the content, so one user's correct refusal cannot withdraw a
+document from the rest of the tenant. Content-scoped conditions (the resource is
+gone, its ACL is broken, its integrity is in doubt) are handled by explicit
+lifecycle operations in :mod:`app.services.connectors.ingest`, never as a side
+effect of an authorization decision.
 
 The single exception is a connector that declares
 ``AuthorizationBehavior.CONNECTOR_SCOPED``, which states by construction that
@@ -30,6 +39,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +53,6 @@ from app.models import (
     WorkspaceUserMapping,
 )
 from app.services.connectors.base import ConnectorAuthUnavailable, ConnectorError
-from app.services.connectors.ingest import quarantine_resource
 from app.services.connectors.service import (
     build_context,
     get_implementation,
@@ -58,20 +67,43 @@ from app.services.identity import utcnow
 MAX_AUTHORIZATION_CHECKS = 100
 
 
+class DenialScope(str, Enum):
+    """What a denial is evidence about.
+
+    Authorization never changes content lifecycle state, so a denial carries its
+    scope instead of acting on it. A caller that owns a lifecycle operation reads
+    the scope and decides separately, and only content-scoped evidence can justify
+    withdrawing content from everyone.
+    """
+
+    # This reader is not entitled. Says nothing about the content.
+    PRINCIPAL = "principal"
+    # Not provable for this request: timeout, outage, rate limit, contradictory
+    # or unexpected provider failure. Fails closed for the request only.
+    REQUEST = "request"
+    # The connector instance or its credential cannot currently authorize anyone.
+    CONNECTOR = "connector"
+    # The content itself is gone, inconsistent, or already non-retrievable.
+    CONTENT = "content"
+
+
 @dataclass(frozen=True)
 class AuthorizationOutcome:
-    """The result of a current-authorization decision."""
+    """The result of a current-authorization decision.
+
+    Constructing an outcome never mutates shared state. There is deliberately no
+    ``quarantined`` field: quarantine is an explicit lifecycle operation, not an
+    authorization side effect.
+    """
 
     allowed: bool
     reason: str
+    scope: "DenialScope | None" = None
     detail: str = ""
-    quarantined: bool = False
 
     @staticmethod
-    def deny(reason: str, detail: str = "", *, quarantined: bool = False) -> "AuthorizationOutcome":
-        return AuthorizationOutcome(
-            allowed=False, reason=reason, detail=detail, quarantined=quarantined
-        )
+    def deny(reason: str, scope: DenialScope, detail: str = "") -> "AuthorizationOutcome":
+        return AuthorizationOutcome(allowed=False, reason=reason, scope=scope, detail=detail)
 
     @staticmethod
     def allow() -> "AuthorizationOutcome":
@@ -192,50 +224,52 @@ async def authorize_resource(
     connector_instance_id: str,
     resource: ExternalResource,
     principal_id: str,
-    quarantine_on_deny: bool = True,
 ) -> AuthorizationOutcome:
     """Decide whether ``principal_id`` may currently receive this evidence.
 
-    Every failure mode returns a denial. There is no branch that upgrades a
-    failure into an allowance, and there is no reliance on a previously cached
-    decision.
+    This function never mutates content lifecycle state. Every failure mode
+    returns a denial, there is no branch that upgrades a failure into an
+    allowance, and there is no reliance on a previously cached decision: the
+    provider is consulted on every request, which is what makes a denial durable
+    without persisting anything principal-specific.
+
+    An earlier revision quarantined the shared resource on every denial. That
+    conflated a statement about one reader with a statement about the content, so
+    one user's correct refusal removed the document for every other user in the
+    tenant. Content-scoped conditions are handled by the explicit lifecycle
+    operations in :mod:`app.services.connectors.ingest`, never here.
     """
-    # A resource that is not currently active is not evidence at all.
+    # A resource that is not currently active is not evidence at all. Reporting
+    # that is not a mutation: the stored state already said so.
     if resource.lifecycle_state == "deleted":
-        return AuthorizationOutcome.deny("resource_deleted")
+        return AuthorizationOutcome.deny("resource_deleted", DenialScope.CONTENT)
     if resource.lifecycle_state != EXTERNAL_STATE_ACTIVE:
-        return AuthorizationOutcome.deny("resource_quarantined")
+        return AuthorizationOutcome.deny("resource_quarantined", DenialScope.CONTENT)
 
     try:
         instance = await resolve_instance(
             db, tenant_id=tenant_id, connector_instance_id=connector_instance_id
         )
     except ConnectorError:
-        return AuthorizationOutcome.deny("connector_not_found")
+        return AuthorizationOutcome.deny("connector_not_found", DenialScope.CONNECTOR)
 
     # The tenant boundary is re-asserted here rather than trusted from the
     # caller, so a resource row that somehow carries a foreign tenant cannot be
     # authorized for this principal.
     if instance.tenant_id != resource.tenant_id or instance.id != resource.connector_instance_id:
-        return AuthorizationOutcome.deny("resource_instance_mismatch")
+        return AuthorizationOutcome.deny("resource_instance_mismatch", DenialScope.CONTENT)
 
     if not instance.enabled or instance.status != CONNECTOR_STATUS_ACTIVE:
-        return await _deny(
-            db,
-            resource=resource,
-            reason="connector_disabled",
-            quarantine_on_deny=quarantine_on_deny,
-        )
+        # The instance cannot authorize anyone right now. Withdrawing its
+        # content is a connector-scoped lifecycle decision and is performed by
+        # quarantine_instance_resources in :mod:`service`, not as a side effect
+        # of asking about one principal.
+        return AuthorizationOutcome.deny("connector_disabled", DenialScope.CONNECTOR)
 
     spec = spec_for(instance)
 
     if spec.authorization_behavior is AuthorizationBehavior.NONE:
-        return await _deny(
-            db,
-            resource=resource,
-            reason="authorization_unsupported",
-            quarantine_on_deny=quarantine_on_deny,
-        )
+        return AuthorizationOutcome.deny("authorization_unsupported", DenialScope.CONNECTOR)
 
     if spec.authorization_behavior is AuthorizationBehavior.CONNECTOR_SCOPED:
         # The provider has no per-user model. The content is tenant-wide and is
@@ -251,32 +285,22 @@ async def authorize_resource(
         principal_id=principal_id,
     )
     if mapping is None:
-        return await _deny(
-            db,
-            resource=resource,
-            reason="user_not_mapped",
-            quarantine_on_deny=quarantine_on_deny,
-        )
+        return AuthorizationOutcome.deny("user_not_mapped", DenialScope.PRINCIPAL)
 
     try:
         ctx = await build_context(db, instance)
     except ConnectorError as exc:
         # Credential missing, revoked, unreadable, or the connector is not
-        # enabled. All of these are refusals, never a fallback.
-        return await _deny(
-            db,
-            resource=resource,
-            reason=exc.code,
-            detail=exc.detail or "",
-            quarantine_on_deny=quarantine_on_deny,
+        # enabled. All of these are refusals, never a fallback, and none of them
+        # is evidence that the content is invalid.
+        return AuthorizationOutcome.deny(
+            exc.code, DenialScope.CONNECTOR, detail=exc.detail or ""
         )
 
     try:
         connector = get_implementation(spec.type_id, spec.version)
     except ConnectorError as exc:
-        return await _deny(
-            db, resource=resource, reason=exc.code, quarantine_on_deny=quarantine_on_deny
-        )
+        return AuthorizationOutcome.deny(exc.code, DenialScope.CONNECTOR)
 
     try:
         allowed = await connector.check_user_access(
@@ -284,56 +308,27 @@ async def authorize_resource(
         )
     except ConnectorAuthUnavailable as exc:
         # Timeout, outage, rate limit or contradictory provider state. Current
-        # authorization cannot be proven, so the evidence must not be served.
-        return await _deny(
-            db,
-            resource=resource,
-            reason=exc.code or "authorization_unavailable",
+        # authorization cannot be proven for this request, so the evidence must
+        # not be served. It must also not be withdrawn from anyone else: a third
+        # party being briefly unreachable says nothing about the content.
+        return AuthorizationOutcome.deny(
+            exc.code or "authorization_unavailable",
+            DenialScope.REQUEST,
             detail=exc.detail or "",
-            quarantine_on_deny=quarantine_on_deny,
         )
     except ConnectorError as exc:
-        return await _deny(
-            db,
-            resource=resource,
-            reason=exc.code,
-            detail=exc.detail or "",
-            quarantine_on_deny=quarantine_on_deny,
+        return AuthorizationOutcome.deny(
+            exc.code, DenialScope.REQUEST, detail=exc.detail or ""
         )
     except Exception as exc:  # noqa: BLE001 - an unexpected provider failure is a deny
-        return await _deny(
-            db,
-            resource=resource,
-            reason="authorization_error",
-            detail=str(exc)[:200],
-            quarantine_on_deny=quarantine_on_deny,
+        return AuthorizationOutcome.deny(
+            "authorization_error", DenialScope.REQUEST, detail=str(exc)[:200]
         )
 
     if not allowed:
-        return await _deny(
-            db,
-            resource=resource,
-            reason="access_revoked",
-            quarantine_on_deny=quarantine_on_deny,
-        )
+        return AuthorizationOutcome.deny("access_revoked", DenialScope.PRINCIPAL)
 
     return AuthorizationOutcome.allow()
-
-
-async def _deny(
-    db: AsyncSession,
-    *,
-    resource: ExternalResource,
-    reason: str,
-    detail: str = "",
-    quarantine_on_deny: bool,
-) -> AuthorizationOutcome:
-    """Deny, and quarantine the cached content so the denial is durable."""
-    quarantined = False
-    if quarantine_on_deny and resource.lifecycle_state == EXTERNAL_STATE_ACTIVE:
-        await quarantine_resource(db, resource=resource, reason=reason)
-        quarantined = True
-    return AuthorizationOutcome.deny(reason, detail, quarantined=quarantined)
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +398,12 @@ async def require_current_authorization(
         external_id=external_id,
     )
     if resource is None:
-        return AuthorizationOutcome.deny("resource_unknown")
+        # Unknown, missing or foreign resource. This is a denial about the
+        # requested resource, not about the principal and not about the
+        # connector: it must return a structured refusal rather than raise, and
+        # it must not mutate anything (there is nothing to mutate). The scope is
+        # CONTENT, consistent with resource_deleted and resource_instance_mismatch.
+        return AuthorizationOutcome.deny("resource_unknown", DenialScope.CONTENT)
     return await authorize_resource(
         db,
         tenant_id=tenant_id,
@@ -470,6 +470,7 @@ async def authorized_connector_document_ids_for_context(db: AsyncSession) -> set
 
 __all__ = [
     "AuthorizationOutcome",
+    "DenialScope",
     "MAX_AUTHORIZATION_CHECKS",
     "authorize_resource",
     "authorized_connector_document_ids",

@@ -37,7 +37,6 @@ from app.core.config import get_settings
 from app.core.tenancy import DOC_STATE_FAILED, DOC_STATE_PENDING, DOC_STATE_READY
 from app.models import (
     Document,
-    EXTERNAL_PERMISSION_ALLOWED,
     EXTERNAL_PERMISSION_REVOKED,
     EXTERNAL_PERMISSION_UNKNOWN,
     EXTERNAL_STATE_ACTIVE,
@@ -346,17 +345,6 @@ async def quarantine_resource(
     await db.flush()
 
 
-async def record_permission_state(
-    db: AsyncSession, *, resource: ExternalResource, allowed: bool
-) -> None:
-    """Record a proven current-authorization outcome."""
-    resource.permission_state = (
-        EXTERNAL_PERMISSION_ALLOWED if allowed else EXTERNAL_PERMISSION_REVOKED
-    )
-    resource.updated_at = utcnow()
-    await db.flush()
-
-
 async def restore_resource(
     db: AsyncSession,
     *,
@@ -493,7 +481,6 @@ __all__ = [
     "load_resource",
     "mark_resource_deleted",
     "quarantine_resource",
-    "record_permission_state",
     "restore_resource",
     "upsert_resource",
 ]
