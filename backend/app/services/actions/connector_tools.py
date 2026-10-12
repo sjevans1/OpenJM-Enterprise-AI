@@ -72,6 +72,28 @@ def _like_pattern(value: str) -> str:
     return f"%{escaped}%"
 
 
+def _metadata_match(column, query: str):
+    """A SUPERSET predicate for the in-Python substring test.
+
+    Python's ``str.lower()`` and the database's ``lower()`` do not fold every non-ASCII character
+    the same way, so a single ``lower(col) LIKE %lower(q)%`` can exclude a row that the
+    authoritative Python matcher would have accepted. Three forms are unioned instead:
+
+    * the ASCII case-insensitive form, which matches the previous Python behaviour for ASCII
+    * the exact-case form
+    * the upper-folded form, which catches a query typed in upper case against lower-folded content
+      and vice versa for characters the database will not case-fold
+
+    The Python check in the caller remains the authoritative matcher, so these forms can only ever
+    widen the candidate set, never narrow it below what the matcher accepts.
+    """
+    return or_(
+        func.lower(column).like(_like_pattern(query.lower()), escape="\\"),
+        column.like(_like_pattern(query), escape="\\"),
+        func.upper(column).like(_like_pattern(query.upper()), escape="\\"),
+    )
+
+
 def _refuse(category: str, detail: str = "") -> dict:
     return {"ok": False, "failure_category": category, "detail": redact(detail, limit=300)}
 
@@ -151,13 +173,14 @@ async def _connector_search(db: AsyncSession, arguments: dict) -> dict:
         ExternalResource.tenant_id == principal.tenant_id,
         ExternalResource.lifecycle_state == EXTERNAL_STATE_ACTIVE,
         # Matching, not permission. This is the SAME substring test the loop below performs, moved
-        # into SQL so the window bounds matches instead of bounding the table. Body content is
-        # deliberately not matched here: connector search matches provider metadata, and pushing a
-        # body predicate into this query would hard-filter resources whose relevance is only in
-        # their content, which is the Knowledge path's job.
+        # into SQL so the window bounds matches instead of bounding the table, and widened to three
+        # forms per column so it cannot exclude a row the Python matcher would accept (see
+        # _metadata_match). Body content is deliberately not matched here: connector search matches
+        # provider metadata, and pushing a body predicate into this query would hard-filter
+        # resources whose relevance is only in their content, which is the Knowledge path's job.
         or_(
-            func.lower(ExternalResource.title).like(_like_pattern(query), escape="\\"),
-            func.lower(ExternalResource.external_id).like(_like_pattern(query), escape="\\"),
+            _metadata_match(ExternalResource.title, query),
+            _metadata_match(ExternalResource.external_id, query),
         ),
     )
     connector_id = arguments.get("connector_id")

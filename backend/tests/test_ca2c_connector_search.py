@@ -217,6 +217,48 @@ async def test_wildcards_in_the_query_are_treated_literally(
     assert result["matches"] == [], "a literal % must not match everything"
 
 
+async def test_unicode_metadata_beyond_position_200_is_not_dropped_by_the_narrowing(
+    file_db, connector, provider, knowledge
+):
+    """The SQL narrowing must not drop a row the authoritative matcher accepts.
+
+    Python's ``lower()`` folds 'Ä' to 'ä'; SQLite's ``lower()`` does not fold non-ASCII at all. So a
+    single ``lower(col) LIKE %lower(q)%`` form missed an uppercase non-ASCII title entirely, while
+    the Python matcher would have accepted it. The upper-folded form is what closes this.
+    """
+    instance_id = await seed_titled(file_db, provider, 300, name="c2c-unicode")
+    async with file_db() as db:
+        row = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m280",
+                )
+            )
+        ).scalars().first()
+        row.title = "ÄNDERUNGSBERICHT-280"
+        await db.commit()
+
+    with request_context():
+        result = await search(file_db, query="änderungsbericht-280")
+
+    returned = {match["external_id"] for match in result["matches"]}
+    assert "m280" in returned, (
+        "a non-ASCII metadata match beyond position 200 was dropped by the SQL narrowing even though "
+        "the case-insensitive matcher accepts it"
+    )
+
+
+async def test_ascii_matching_is_unchanged_by_the_unicode_widening(
+    file_db, connector, provider, knowledge
+):
+    """Widening the predicate must not turn it into a match-everything filter."""
+    instance_id = await seed_titled(file_db, provider, 40, name="c2c-narrow-still")
+    with request_context():
+        result = await search(file_db, query="quarterly-report-007")
+    assert [match["external_id"] for match in result["matches"]] == ["m007"]
+
+
 # ============================================================ truthful completeness
 
 
