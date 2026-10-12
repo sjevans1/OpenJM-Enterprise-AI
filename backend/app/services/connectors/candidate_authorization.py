@@ -89,12 +89,35 @@ denials, and emitted 62 has silently excluded three. It must fail loudly instead
 and strictly satisfied, and raises :class:`StrictScopeError` otherwise. A catalog traversal
 never satisfies a strict requirement, even when it completes in a single page.
 
+Namespace and provider permission evidence
+------------------------------------------
+Identity includes ``resource_namespace``, but permission evidence does not. The established
+provider authorization API answers about a provider ``external_id`` and has no notion of a
+namespace, so its answer cannot distinguish the canonical row from a row that merely shares that
+external_id under another namespace.
+
+The canonical namespace for a connector instance is ``resource_namespace(instance_id)`` from
+:mod:`app.services.connectors.service`, which production ingestion uses for every row an instance
+owns. CA2-A therefore authorizes a row only when its namespace is that canonical value. Any other
+namespace fails closed as UNAVAILABLE with ``namespace_not_canonical``, without a provider call
+and without spending budget, rather than treating an external_id answer as permission to serve
+alternate-namespace content.
+
+This refuses an unsupported namespace combination. It does not redesign the provider API, change
+CA1, or alter production ingestion. It does mean that synthetically retagged rows are enumerated
+correctly, because they are genuinely distinct candidates, while remaining unauthorizable,
+because their permission has not been proven.
+
 Every input and every provider budget is finite
 -----------------------------------------------
-Traversal pages are bounded by ``budget`` provider checks and a budget-proportional SQL window.
-Exact scope is bounded by ``MAX_EXACT_INPUTS`` requested identities, ``MAX_EXACT_RESOLVED_ROWS``
-resolved rows, a finite ``DEFAULT_EXACT_BUDGET`` and a hard ``MAX_EXACT_BUDGET`` that is refused
-rather than clamped. No path produces unbounded provider calls or unbounded database work.
+Traversal pages are bounded by ``budget`` provider checks and a budget-proportional SQL window,
+and the parameters themselves carry ceilings (``MAX_PAGE_BUDGET``, ``MAX_SCAN_ROWS``) so a single
+page cannot be asked for unbounded work. Exact scope is bounded by ``MAX_EXACT_INPUTS`` requested
+identities, ``MAX_EXACT_RESOLVED_ROWS`` resolved rows, a finite ``DEFAULT_EXACT_BUDGET`` and a hard
+``MAX_EXACT_BUDGET`` that is refused rather than clamped. Exact-source identity reads apply their
+row bound inside the SQL, so an oversized match set is refused from a bounded result rather than
+after materialising an unbounded one, and a truncated result is never treated as a small set of
+matches. No path produces unbounded provider calls or unbounded database work.
 
 The continuation cursor is opaque and authenticated-encrypted (Fernet, AEAD), not a readable
 signed blob, because a base64 payload would disclose tenant, principal and resource
@@ -130,6 +153,7 @@ from app.services.connectors.authorization import (
     DenialScope,
     authorize_resource,
 )
+from app.services.connectors.service import resource_namespace as canonical_resource_namespace
 from app.services.document_lifecycle import retrievable_filter
 from app.services.document_policy import DocumentAccess, document_is_visible
 
@@ -157,6 +181,12 @@ MAX_EXACT_INPUTS = 512
 MAX_EXACT_RESOLVED_ROWS = 4096
 IDENTITY_CHUNK = 256
 
+# Sensible maximums for traversal parameters. These are ceilings on a single page, not defaults
+# and not production limits: the defaults above (32 and 512) are unaffected and the current
+# production bound of 100 stays below both.
+MAX_PAGE_BUDGET = 1024
+MAX_SCAN_ROWS = 4096
+
 # A page fetches at most this multiple of its provider budget, so a small budget does not drag a
 # large window out of the database. This can only affect how many pages a traversal takes: the
 # cursor advances only past handled rows, so shrinking the window never skips a locally
@@ -170,6 +200,7 @@ REASON_CORPUS_CHANGED = "corpus_changed"
 REASON_REFERENCE_UNRESOLVED = "reference_unresolved"
 REASON_REFERENCE_AMBIGUOUS = "reference_ambiguous"
 REASON_REFERENCE_EXCLUDED = "reference_excluded_locally"
+REASON_NAMESPACE_NOT_CANONICAL = "namespace_not_canonical"
 
 # Strict exact-scope failure reasons. Precedence is budget, ambiguous, unavailable, denied, then
 # local policy, so the most structural cause is reported first.
@@ -651,6 +682,41 @@ async def _decide(
     )
 
 
+def _namespace_is_canonical(resource: ExternalResource) -> bool:
+    """Whether this row carries the namespace the connector framework assigns it.
+
+    The canonical invariant is ``resource_namespace(connector_instance_id)`` from
+    :mod:`app.services.connectors.service`, which ingestion uses to name every row a connector
+    instance owns, and which ``uq_external_resource_identity`` then includes in the identity.
+
+    This matters for permission evidence, not merely for tidiness. The established provider
+    authorization API answers about a provider ``external_id`` and has no notion of a namespace.
+    For a row whose namespace is not the canonical one for its instance, that answer is therefore
+    not sufficient evidence to serve **that row's** content, and CA2-A must not convert it into
+    an authorization. Such rows fail closed without a provider call, at no budget cost.
+
+    This does not redesign the provider API, change CA1, or touch production ingestion; it
+    refuses to treat an unsupported namespace combination as authorization.
+    """
+    return resource.resource_namespace == canonical_resource_namespace(
+        resource.connector_instance_id
+    )
+
+
+async def _bounded_identity_read(
+    db: AsyncSession, statement, *, budget_remaining: int
+) -> tuple[list[ExternalResource], bool]:
+    """One identity read under an explicit row budget.
+
+    The bound is applied in SQL, so an oversized match set is detected from a bounded result
+    rather than after materialising an unbounded one. A truncated result is never used to decide
+    uniqueness or to answer: the caller must treat overflow as a refusal, not as a smaller set of
+    matches.
+    """
+    rows = list((await db.execute(statement.limit(budget_remaining + 1))).scalars().all())
+    return rows, len(rows) > budget_remaining
+
+
 async def authorize_candidates(
     db: AsyncSession,
     *,
@@ -676,8 +742,17 @@ async def authorize_candidates(
     """
     if budget <= 0:
         raise ValueError("budget must be positive")
+    if budget > MAX_PAGE_BUDGET:
+        raise ValueError(
+            f"budget {budget} exceeds MAX_PAGE_BUDGET {MAX_PAGE_BUDGET}; a single page is bounded"
+        )
     if max_scan_rows <= 0:
         raise ValueError("max_scan_rows must be positive")
+    if max_scan_rows > MAX_SCAN_ROWS:
+        raise ValueError(
+            f"max_scan_rows {max_scan_rows} exceeds MAX_SCAN_ROWS {MAX_SCAN_ROWS}; "
+            "a single page is bounded"
+        )
 
     sealed = (
         decode_cursor(
@@ -738,6 +813,23 @@ async def authorize_candidates(
                     reason="local_policy_excluded",
                 )
             )
+            handled = list(key)
+            continue
+
+        # Permission evidence gate. The provider answers about an external_id and knows nothing
+        # of namespaces, so a row outside its instance's canonical namespace cannot be
+        # authorized on that answer. Fails closed, and spends no provider budget.
+        if not _namespace_is_canonical(resource):
+            decisions.append(
+                CandidateDecision(
+                    connector_instance_id=resource.connector_instance_id,
+                    resource_namespace=resource.resource_namespace,
+                    external_id=resource.external_id,
+                    state=CandidateState.UNAVAILABLE,
+                    reason=REASON_NAMESPACE_NOT_CANONICAL,
+                )
+            )
+            page_unavailable = True
             handled = list(key)
             continue
 
@@ -876,70 +968,55 @@ async def authorize_exact_candidates(
 
     rows: list[ExternalResource] = []
     reads = 0
+
+    def _identity_select():
+        return (
+            select(ExternalResource)
+            .join(ConnectorInstance, ConnectorInstance.id == ExternalResource.connector_instance_id)
+            .where(ExternalResource.tenant_id == access.tenant_id)
+        )
+
+    async def _resolve(statement) -> None:
+        """One bounded read. Raises if the row budget would be exceeded.
+
+        The bound is in the SQL, so an oversized match set is refused from a bounded result
+        instead of after materialising an unbounded one, and a truncated result is never used to
+        decide uniqueness or to answer.
+        """
+        nonlocal reads
+        fetched, overflowed = await _bounded_identity_read(
+            db, statement, budget_remaining=MAX_EXACT_RESOLVED_ROWS - len(rows)
+        )
+        reads += 1
+        if overflowed:
+            raise ValueError(
+                "identity resolution exceeded MAX_EXACT_RESOLVED_ROWS "
+                f"{MAX_EXACT_RESOLVED_ROWS} and was refused before materialising the full match "
+                "set; split the request"
+            )
+        rows.extend(fetched)
+
     for chunk in _chunks(namespaced_refs, IDENTITY_CHUNK):
-        rows.extend(
-            (
-                await db.execute(
-                    select(ExternalResource)
-                    .join(
-                        ConnectorInstance,
-                        ConnectorInstance.id == ExternalResource.connector_instance_id,
-                    )
-                    .where(
-                        ExternalResource.tenant_id == access.tenant_id,
-                        tuple_(
-                            ExternalResource.connector_instance_id,
-                            ExternalResource.resource_namespace,
-                            ExternalResource.external_id,
-                        ).in_(chunk),
-                    )
-                )
-            ).scalars().all()
+        await _resolve(
+            _identity_select().where(
+                tuple_(
+                    ExternalResource.connector_instance_id,
+                    ExternalResource.resource_namespace,
+                    ExternalResource.external_id,
+                ).in_(chunk)
+            )
         )
-        reads += 1
     for chunk in _chunks(bare_refs, IDENTITY_CHUNK):
-        rows.extend(
-            (
-                await db.execute(
-                    select(ExternalResource)
-                    .join(
-                        ConnectorInstance,
-                        ConnectorInstance.id == ExternalResource.connector_instance_id,
-                    )
-                    .where(
-                        ExternalResource.tenant_id == access.tenant_id,
-                        tuple_(
-                            ExternalResource.connector_instance_id,
-                            ExternalResource.external_id,
-                        ).in_(chunk),
-                    )
-                )
-            ).scalars().all()
+        await _resolve(
+            _identity_select().where(
+                tuple_(
+                    ExternalResource.connector_instance_id,
+                    ExternalResource.external_id,
+                ).in_(chunk)
+            )
         )
-        reads += 1
     for chunk in _chunks(doc_keys, IDENTITY_CHUNK):
-        rows.extend(
-            (
-                await db.execute(
-                    select(ExternalResource)
-                    .join(
-                        ConnectorInstance,
-                        ConnectorInstance.id == ExternalResource.connector_instance_id,
-                    )
-                    .where(
-                        ExternalResource.tenant_id == access.tenant_id,
-                        ExternalResource.document_id.in_(chunk),
-                    )
-                )
-            ).scalars().all()
-        )
-        reads += 1
-    # A finite bound on database work, not only on the request size.
-    if len(rows) > MAX_EXACT_RESOLVED_ROWS:
-        raise ValueError(
-            f"identity resolution returned {len(rows)} rows, above MAX_EXACT_RESOLVED_ROWS "
-            f"{MAX_EXACT_RESOLVED_ROWS}; split the request"
-        )
+        await _resolve(_identity_select().where(ExternalResource.document_id.in_(chunk)))
 
     # De-duplicate resolved rows by row id. The same row legitimately satisfies more than one
     # resolution query (a caller may name it by reference AND by document id), and counting it
@@ -982,6 +1059,17 @@ async def authorize_exact_candidates(
             return None
         if not await _local_eligible(db, access, resource):
             row_outcome[key] = (CandidateState.LOCAL_POLICY_EXCLUDED, REASON_REFERENCE_EXCLUDED, None)
+            return row_outcome[key]
+        # Same permission-evidence gate as the traversal: the provider answers about an
+        # external_id, so a row outside its instance's canonical namespace cannot be authorized
+        # on that answer. Fails closed, and spends no provider budget.
+        if not _namespace_is_canonical(resource):
+            row_outcome[key] = (
+                CandidateState.UNAVAILABLE,
+                REASON_NAMESPACE_NOT_CANONICAL,
+                None,
+            )
+            unavailable = True
             return row_outcome[key]
         decision, was_unavailable = await _decide(db, access, resource)
         checks += 1

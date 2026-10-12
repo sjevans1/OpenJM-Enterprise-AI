@@ -1336,7 +1336,14 @@ async def make_namespaced_twin(
 async def test_two_namespaces_sharing_an_external_id_are_distinct_in_a_traversal(
     file_db, connector, provider, knowledge
 ):
-    """The defect: keying on (instance, external_id) collapses two distinct rows into one."""
+    """Enumeration must distinguish the twins. Permission must not be assumed for either.
+
+    Two separate properties. The defect was that keying on ``(instance, external_id)`` collapsed
+    two distinct rows into one, and that is fixed: they stay distinct candidates. Separately, a
+    row outside its instance's canonical namespace cannot be authorized on an
+    ``external_id``-only provider answer, so only one of the two is authorizable. This test
+    asserts enumeration success and permission separately rather than as one thing.
+    """
     instance_id = await seed_resources(file_db, provider, 2, name="c-ns-distinct")
     twin = await make_namespaced_twin(
         file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
@@ -1345,15 +1352,24 @@ async def test_two_namespaces_sharing_an_external_id_are_distinct_in_a_traversal
 
     last, ids = await walk(file_db, access_for(), budget=10)
 
-    # Both rows are candidates and both documents are reachable.
-    assert len(ids) == 2, f"expected both namespaced rows, reached {len(ids)} of 2"
-    assert twin.document_id in ids
-
-    # And the result does not collapse them into a single decision.
+    # Enumeration: two distinct decisions in two distinct namespaces.
     twins = [d for d in last.decisions if d.external_id == "m000"]
     assert len(twins) == 2, "two namespaced rows must produce two decisions"
     assert {d.resource_namespace for d in twins} == {twin.original_namespace, twin.namespace}
-    assert len({d.document_id for d in twins}) == 2, "each twin keeps its own document"
+
+    # Permission: only the canonical namespace is authorizable on this evidence.
+    canonical = next(d for d in twins if d.resource_namespace == twin.original_namespace)
+    alternate = next(d for d in twins if d.resource_namespace == twin.namespace)
+    assert canonical.state is ca.CandidateState.AUTHORIZED
+    assert canonical.document_id is not None
+    assert alternate.state is ca.CandidateState.UNAVAILABLE
+    assert alternate.reason == ca.REASON_NAMESPACE_NOT_CANONICAL
+    assert alternate.document_id is None
+
+    assert ids == {canonical.document_id}
+    assert twin.document_id not in ids, "alternate-namespace content must not be served"
+    assert last.coverage is ca.CoverageStatus.PARTIAL
+    assert last.unresolved is True
 
 
 async def test_namespaced_twins_survive_a_continuation_page_boundary(
@@ -1365,6 +1381,18 @@ async def test_namespaced_twins_survive_a_continuation_page_boundary(
         file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
         external_id="m000",
     )
+    async with file_db() as db:
+        canonical_row = (
+            await db.execute(
+                select(ExternalResource).where(
+                    ExternalResource.connector_instance_id == instance_id,
+                    ExternalResource.external_id == "m000",
+                    ExternalResource.resource_namespace == twin.original_namespace,
+                )
+            )
+        ).scalars().first()
+        assert canonical_row is not None
+        canonical_document = canonical_row.document_id
 
     seen_identities: set[tuple[str, str, str]] = set()
     seen_documents: set[str] = set()
@@ -1373,7 +1401,7 @@ async def test_namespaced_twins_survive_a_continuation_page_boundary(
     for _ in range(20):
         async with file_db() as db:
             result = await ca.authorize_candidates(
-                db, access=access_for(), query="q", budget=1, cursor=cursor
+                db, access=access_for(), query="q", budget=1, cursor=cursor, max_scan_rows=1
             )
         for decision in result.decisions:
             seen_identities.add(
@@ -1386,9 +1414,11 @@ async def test_namespaced_twins_survive_a_continuation_page_boundary(
             break
 
     assert pages >= 2, "the page boundary must actually be crossed"
-    assert len(seen_documents) == 2, f"reached {len(seen_documents)} of 2 namespaced rows"
-    assert twin.document_id in seen_documents
+    # Enumeration across the boundary: both identities are seen exactly once.
     assert len(seen_identities) == 2, "a twin was duplicated or lost across the boundary"
+    # Permission: only the canonical namespace is authorized.
+    assert seen_documents == {canonical_document}
+    assert twin.document_id not in seen_documents
 
 
 async def test_a_bare_reference_matching_two_namespaces_fails_closed(
@@ -1425,14 +1455,16 @@ async def test_a_bare_reference_matching_two_namespaces_fails_closed(
 async def test_a_namespaced_reference_resolves_exactly_one_row(
     file_db, connector, provider, knowledge
 ):
+    """Each namespace resolves to its own row. Only the canonical one is authorizable."""
     instance_id = await seed_resources(file_db, provider, 2, name="c-ns-exact")
     twin = await make_namespaced_twin(
         file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
         external_id="m000",
     )
 
+    # The alternate namespace resolves to its own row, and is refused for lack of evidence.
     async with file_db() as db:
-        for_ns = await ca.authorize_exact_candidates(
+        alternate = await ca.authorize_exact_candidates(
             db,
             access=access_for(),
             resource_refs=[
@@ -1440,14 +1472,18 @@ async def test_a_namespaced_reference_resolves_exactly_one_row(
             ],
             budget=5,
         )
-    assert for_ns.provider_checks == 1
-    assert for_ns.decisions[0].state is ca.CandidateState.AUTHORIZED
-    assert for_ns.decisions[0].resource_namespace == twin.namespace
-    assert for_ns.decisions[0].document_id == twin.document_id
-    assert for_ns.strict_scope_satisfied is True
+    assert alternate.provider_checks == 0, (
+        "an external_id-only answer is not evidence for a non-canonical namespace"
+    )
+    assert alternate.decisions[0].resource_namespace == twin.namespace
+    assert alternate.decisions[0].state is ca.CandidateState.UNAVAILABLE
+    assert alternate.decisions[0].reason == ca.REASON_NAMESPACE_NOT_CANONICAL
+    assert alternate.decisions[0].document_id is None
+    assert alternate.strict_scope_satisfied is False
 
+    # The canonical namespace resolves and authorizes, and is a different document.
     async with file_db() as db:
-        for_original = await ca.authorize_exact_candidates(
+        canonical = await ca.authorize_exact_candidates(
             db,
             access=access_for(),
             resource_refs=[
@@ -1455,11 +1491,13 @@ async def test_a_namespaced_reference_resolves_exactly_one_row(
             ],
             budget=5,
         )
-    assert for_original.provider_checks == 1
-    assert for_original.decisions[0].resource_namespace == twin.original_namespace
-    assert for_original.decisions[0].document_id not in (None, twin.document_id)
+    assert canonical.provider_checks == 1
+    assert canonical.decisions[0].state is ca.CandidateState.AUTHORIZED
+    assert canonical.decisions[0].resource_namespace == twin.original_namespace
+    assert canonical.decisions[0].document_id not in (None, twin.document_id)
+    assert canonical.strict_scope_satisfied is True
 
-    # Both namespaced references together stay distinct and each is checked once.
+    # Both together: two decisions, one authorized document, one provider check.
     async with file_db() as db:
         both = await ca.authorize_exact_candidates(
             db,
@@ -1472,8 +1510,34 @@ async def test_a_namespaced_reference_resolves_exactly_one_row(
             ],
             budget=5,
         )
-    assert both.provider_checks == 2, "two distinct rows cost two checks"
-    assert len(both.authorized_document_ids) == 2
+    assert len(both.decisions) == 2, "both identities stay distinct"
+    assert both.provider_checks == 1, "only the canonical row is checkable"
+    assert len(both.authorized_document_ids) == 1
+
+
+async def test_alternate_namespace_content_is_not_authorized_by_document_id_either(
+    file_db, connector, provider, knowledge
+):
+    """D2: the evidence rule holds on the document-id path too, not only on references."""
+    instance_id = await seed_resources(file_db, provider, 2, name="c-ns-docid")
+    twin = await make_namespaced_twin(
+        file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
+        external_id="m000",
+    )
+
+    async with file_db() as db:
+        result = await ca.authorize_exact_candidates(
+            db, access=access_for(), document_ids=[twin.document_id], budget=5
+        )
+
+    assert result.provider_checks == 0
+    assert result.decisions[0].state is ca.CandidateState.UNAVAILABLE
+    assert result.decisions[0].reason == ca.REASON_NAMESPACE_NOT_CANONICAL
+    assert result.decisions[0].document_id is None
+    assert result.authorized_document_ids == frozenset()
+    assert result.strict_scope_satisfied is False
+    with pytest.raises(ca.StrictScopeError):
+        ca.require_strict_scope(result)
 
 
 async def test_the_same_resource_by_reference_and_document_id_costs_one_provider_check(
@@ -1525,3 +1589,109 @@ async def test_exact_input_size_is_bounded(file_db, connector, provider, knowled
     assert result.provider_checks == 0
     assert result.strict_scope_satisfied is False
     assert ca.MAX_EXACT_INPUTS <= ca.MAX_EXACT_RESOLVED_ROWS
+
+
+# ================= D1: the row bound is in the SQL, not applied after materialisation
+
+
+async def test_identity_resolution_applies_its_row_bound_in_sql(
+    file_db, connector, provider, knowledge
+):
+    """D1: every identity read must carry a SQL bound, so nothing unbounded is materialised."""
+    from sqlalchemy import event
+
+    instance_id = await seed_resources(file_db, provider, 4, name="c-d1-sql")
+    captured: list[str] = []
+
+    async with file_db() as db:
+        engine = db.bind.sync_engine
+
+        def _capture(conn, cursor, statement, parameters, context, executemany):
+            captured.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _capture)
+        try:
+            await ca.authorize_exact_candidates(
+                db,
+                access=access_for(),
+                resource_refs=[ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(4)],
+                budget=5,
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", _capture)
+
+    reads = [statement for statement in captured if "external_resources" in statement]
+    assert reads, "expected identity resolution reads to be captured"
+    for statement in reads:
+        assert "LIMIT" in statement.upper(), (
+            f"an identity read was issued without a SQL bound: {statement}"
+        )
+
+
+async def test_excessive_identity_matches_are_refused_before_materialisation(
+    file_db, connector, provider, knowledge, monkeypatch
+):
+    """D1: a match set above the bound is refused, and never becomes an authoritative answer."""
+    instance_id = await seed_resources(file_db, provider, 8, name="c-d1-overflow")
+    monkeypatch.setattr(ca, "MAX_EXACT_RESOLVED_ROWS", 4)
+
+    refs = [ca.CandidateRef(instance_id, f"m{i:03d}") for i in range(8)]
+    async with file_db() as db:
+        with pytest.raises(ValueError) as exc:
+            await ca.authorize_exact_candidates(
+                db, access=access_for(), resource_refs=refs, budget=8
+            )
+    assert "MAX_EXACT_RESOLVED_ROWS" in str(exc.value), (
+        "the refusal must name the row bound, not read as a smaller match set"
+    )
+
+
+async def test_a_truncated_match_set_is_never_used_to_decide_uniqueness(
+    file_db, connector, provider, knowledge, monkeypatch
+):
+    """D1: a bound that would truncate an ambiguous set must refuse, not answer.
+
+    With the row bound below the number of rows one identity matches, a result that was merely
+    truncated could look like a unique match. The contract refuses instead, so a truncated set
+    can never be read as proof that an identity is unambiguous.
+    """
+    instance_id = await seed_resources(file_db, provider, 2, name="c-d1-truncate")
+    twin = await make_namespaced_twin(
+        file_db, instance_id, source_ext="m001", namespace="ca2-other-namespace",
+        external_id="m000",
+    )
+    # One bare reference now matches two rows, and the bound is set so only one would fit.
+    monkeypatch.setattr(ca, "MAX_EXACT_RESOLVED_ROWS", 1)
+
+    async with file_db() as db:
+        with pytest.raises(ValueError) as exc:
+            await ca.authorize_exact_candidates(
+                db,
+                access=access_for(),
+                resource_refs=[ca.CandidateRef(instance_id, "m000")],
+                budget=5,
+            )
+    assert "MAX_EXACT_RESOLVED_ROWS" in str(exc.value)
+    assert twin.namespace  # the twin exists, so the match set genuinely exceeded the bound
+
+
+# ================= traversal parameter ceilings
+
+
+async def test_traversal_parameters_have_ceilings(file_db, connector, provider, knowledge):
+    """A single page cannot be asked for unbounded work, and the defaults are unchanged."""
+    async with file_db() as db:
+        with pytest.raises(ValueError):
+            await ca.authorize_candidates(
+                db, access=access_for(), query="q", budget=ca.MAX_PAGE_BUDGET + 1
+            )
+        with pytest.raises(ValueError):
+            await ca.authorize_candidates(
+                db, access=access_for(), query="q", budget=1,
+                max_scan_rows=ca.MAX_SCAN_ROWS + 1,
+            )
+    assert ca.DEFAULT_PAGE_BUDGET < ca.MAX_PAGE_BUDGET
+    assert ca.DEFAULT_MAX_SCAN_ROWS < ca.MAX_SCAN_ROWS
+    # The ceilings do not reduce the current production bound of 100.
+    assert ca.MAX_PAGE_BUDGET > 100
+    assert ca.MAX_SCAN_ROWS > 100
