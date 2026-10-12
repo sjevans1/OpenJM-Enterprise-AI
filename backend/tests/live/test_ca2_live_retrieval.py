@@ -32,6 +32,18 @@ from pathlib import Path
 
 import pytest
 
+# Gated at module level rather than by a tests/live/conftest.py. A conftest there shadows
+# tests/conftest.py for any module that does a bare `import conftest` (the report-run suites do),
+# which broke their collection. A skipif keeps the file collectible but never running unless the
+# operator asks for it.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CA2_LIVE") != "1",
+    reason=(
+        "CA2 live validation needs the real embedding model and a local Chroma; "
+        "set CA2_LIVE=1 to run it deliberately"
+    ),
+)
+
 # tests/live/ is a subdirectory, so the tests package root is added explicitly. This is the same
 # approach the existing live harness uses.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

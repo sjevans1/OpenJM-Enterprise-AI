@@ -528,6 +528,24 @@ def _stats(samples: list[float]) -> dict:
     }
 
 
+async def test_the_coverage_notice_is_cleared_before_each_chat_request(
+    file_db, connector, provider, knowledge, mode
+):
+    """Request-scoped state must not leak from one request into the next.
+
+    Without the reset, a request that produced no notice would inherit the previous request's and
+    report partial coverage for a source set it actually checked completely.
+    """
+    from app.core.context import current_coverage_notice, reset_coverage_notice, set_coverage_notice
+
+    set_coverage_notice({"code": "partial_coverage", "coverage": "partial", "reason": "stale"})
+    assert current_coverage_notice() is not None
+
+    # The chat handler resets before doing any work; this asserts the mechanism the handler uses.
+    reset_coverage_notice()
+    assert current_coverage_notice() is None, "a stale notice must not survive into a new request"
+
+
 async def test_one_exploratory_traversal_per_full_hybrid_request(
     file_db, connector, provider, knowledge, mode, monkeypatch
 ):

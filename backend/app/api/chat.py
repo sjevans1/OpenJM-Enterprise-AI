@@ -130,6 +130,14 @@ async def chat(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require(Permission.CHAT_USE)),
 ):
+    # CA2-B request-context cleanup: clear any coverage notice left by an earlier request on this
+    # task before this one runs. The notice is request-scoped state, and without an explicit reset a
+    # request that produces no notice could inherit a stale one and report partial coverage for a
+    # source set it checked completely.
+    from app.core.context import reset_coverage_notice
+
+    reset_coverage_notice()
+
     if request.conversation_id:
         conversation = await _owned_conversation(db, request.conversation_id)
         if not conversation:
