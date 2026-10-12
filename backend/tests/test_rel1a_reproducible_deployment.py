@@ -90,3 +90,50 @@ def test_production_proxy_frontend_builder_uses_node_22() -> None:
     assert not re.search(
         r"^FROM\s+node:20\S*\s+AS\s+frontend\s*$", dockerfile, re.MULTILINE
     ), "the frontend builder must not use Node 20"
+
+
+def test_production_compose_backend_obeys_locked_release_contract() -> None:
+    """The Compose backend image must install the same artifact as the release contract.
+
+    The accepted REL1 production contract is: Python 3.11, the committed
+    ``backend/requirements.lock`` as runtime dependency authority, hash-enforced
+    installation, no ``[dev]`` extras, and the application as a NON-EDITABLE wheel
+    installed with ``--no-deps`` so the runtime dependency graph is exactly the
+    locked one and never re-resolved from open-ended ``pyproject.toml`` ranges.
+
+    An editable source install in the Compose backend would let production run a
+    different dependency graph from the artifact being qualified, which would make
+    a production Compose/browser run indefensible as release evidence.
+    """
+    dockerfile = (ROOT / "deploy" / "compose" / "Dockerfile").read_text()
+
+    # Runtime is Python 3.11.
+    assert re.search(r"^FROM\s+python:3\.11", dockerfile, re.MULTILINE), (
+        "the Compose backend image must use a Python 3.11 base"
+    )
+
+    # The committed production lock is the dependency authority, hash-enforced.
+    assert "requirements.lock" in dockerfile
+    assert "--require-hashes" in dockerfile
+    assert "-r /opt/openjm/backend/requirements.lock" in dockerfile
+
+    # Production never installs the development lock or dev extras.
+    assert "requirements-dev.lock" not in dockerfile
+    assert "[dev]" not in dockerfile
+
+    # The application arrives as a wheel, installed non-editable and without
+    # re-resolving dependencies.
+    assert ".whl" in dockerfile, "the application must be installed from a wheel"
+    assert "--no-deps" in dockerfile
+    assert not re.search(r"pip install[^\n]*(-e|--editable)\s", dockerfile), (
+        "the production image must not perform an editable application install"
+    )
+    # The runtime installs the application from the build stage's wheel path,
+    # never from a source directory (a source-directory install is what
+    # re-resolves the dependency graph).
+    assert re.search(
+        r"pip install[^\n]*--no-deps[^\n]*/opt/openjm/wheels/\*\.whl", dockerfile
+    ), "the application wheel must be installed from the build stage with --no-deps"
+    assert not re.search(
+        r"pip install[^\n]*[\"'\s](/opt/openjm/backend|/build/backend)[\"'\s]", dockerfile
+    ), "the runtime must not install the application from a source directory"
