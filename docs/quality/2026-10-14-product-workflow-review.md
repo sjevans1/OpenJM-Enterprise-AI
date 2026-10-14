@@ -24,7 +24,7 @@ The backend contains substantial functionality, but several interfaces do not co
 | Controls were shown without checking their write/delete permissions | Knowledge and Data management controls reflect server-resolved permissions; backend authorization remains authoritative. |
 | Database copy referred to an internal development slice | Product guidance explains supported engines and Data/Hybrid usage; unsupported integrations are stated honestly. |
 | Operator views stopped at the first page and gave no freshness cue | Fleet, usage and audit pagination; manual refresh; last-successful-refresh time; stale asynchronous results cannot overwrite newer views. |
-| Narrow-screen CSS hid the entire navigation and admin tab labels | Mobile navigation control/drawer; readable administration tabs; tables scroll inside their container. |
+| Narrow-screen CSS hid navigation and labels; admin tabs inherited the dark sidebar's low-contrast colors and full-width sizing | Mobile navigation control/drawer; compact, readable administration tabs and consistent action buttons; tables scroll inside their container. |
 
 ## Integration and product-depth gaps that remain
 
@@ -39,11 +39,11 @@ These are separate capabilities, not fixed by adding UI labels. This change must
 
 ## Verification
 
-- Existing and new frontend tests: 114 passed locally before browser-harness additions; TypeScript and production build passed.
+- Existing and new frontend tests: 114 passed locally; final affected suites: 50 passed. TypeScript and production build passed.
 - New tests cover no write on selection/cancel; role confirmation; refusal retaining draft; duplicate-request suppression; keyboard focus; policy grant preservation; configured plan rendering; disabled source creation; source verification failure recovery; operator pagination and stale-response handling.
 - Backend regressions cover full tenant-scoped policy projection, explicit department clearing, preserved groups, audit records, authority/cross-tenant denials, and the re-provisioning bypass. Use the hosted Python 3.11 suite for execution.
 - Three Chromium browser journeys capture screenshots for administration, role review, policy editing, data setup and mobile navigation. API responses are synthetic fixtures: these prove interface behavior and layout, not live authentication, database integration or model-answer quality.
-- Browser binaries could not be downloaded in the initial local runtime. Browser execution and screenshot inspection are pending the hosted run; do not infer success from test registration.
+- Browser binaries could not be downloaded in the local runtime. Hosted CI supplies execution results and the `admin-workflow-browser-evidence` screenshot/trace artifact. The first run exposed a desktop test-helper lookup of a hidden mobile control; the helper was corrected. Mobile screenshot inspection also led to the tab-contrast and action-button styling correction. Use the final commit's CI result, recorded in the PR, for acceptance.
 - Live deployed SSO, real PostgreSQL/ERP/object-store connections and real-model evidence/denial journeys: NOT RUN in this review. They remain release acceptance gates.
 
 ## Review boundary

@@ -23,9 +23,10 @@ async function workspace(page: Page) {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(result) })
   })
   await page.goto('/')
-  await page.getByRole('button', { name: 'Open navigation' }).waitFor({ state: 'attached' })
-  if (await page.getByRole('button', { name: 'Open navigation' }).isVisible()) {
-    await page.getByRole('button', { name: 'Open navigation' }).click()
+  const navigation = page.getByRole('button', { name: 'Open navigation', includeHidden: true })
+  await navigation.waitFor({ state: 'attached' })
+  if (await navigation.isVisible()) {
+    await navigation.click()
   }
   await page.getByRole('button', { name: 'Administration', exact: true }).click()
   await expect(page.getByText('Ada Evans', { exact: true })).toBeVisible()
