@@ -233,6 +233,20 @@ jobs:
       - name: TypeScript check and production build
         run: npm run build
 
+      - name: Install browser for interaction acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser interaction acceptance
+        run: npm run test:browser
+
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: admin-workflow-browser-evidence
+          path: frontend/test-results/
+          retention-days: 7
+
       - name: Record frontend validation
         if: success()
         run: |

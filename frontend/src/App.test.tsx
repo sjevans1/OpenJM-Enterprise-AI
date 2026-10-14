@@ -129,6 +129,7 @@ test('revoked report content is cleared after a list refresh', async () => {
 
   const deleteButtons = screen.getAllByRole('button', { name: 'Delete report snapshot' })
   fireEvent.click(deleteButtons[1])
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm delete report' }))
 
   await waitFor(() => expect(screen.getByText('Source unavailable')).toBeTruthy())
   expect(screen.queryByText('Historical confidential answer')).toBeNull()
@@ -194,6 +195,7 @@ test('deleting one report does not cancel opening another report', async () => {
   await screen.findByRole('button', { name: /Concurrent report/ })
   const deleteButtons = screen.getAllByRole('button', { name: 'Delete report snapshot' })
   fireEvent.click(deleteButtons[1])
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm delete report' }))
   fireEvent.click(screen.getByRole('button', { name: /Concurrent report/ }))
 
   await act(async () => {

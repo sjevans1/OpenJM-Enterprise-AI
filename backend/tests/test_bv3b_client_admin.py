@@ -121,7 +121,7 @@ async def test_provision_role_change_and_revoke(file_db):
     # Idempotent per subject: re-provisioning reuses the same principal.
     async with file_db() as db:
         again = await client_admin.provision_member(
-            db, principal=owner, subject="oidc|hr-admin", role="editor"
+            db, principal=owner, subject="oidc|hr-admin", role="admin"
         )
         await db.commit()
     assert again.principal_id == created.principal_id
@@ -442,3 +442,27 @@ def test_migration_0013_adds_tenant_preferences(tmp_path):
     finally:
         engine.dispose()
     assert "settings_json" in columns
+
+
+async def test_provisioning_cannot_bypass_explicit_role_or_restore_actions(file_db):
+    owner = await _principal_for(file_db, subject="oidc|provision-owner", role="owner", tenant_id="tnt-local")
+    async with file_db() as db:
+        with pytest.raises(ValueError, match="already belongs"):
+            await client_admin.provision_member(db, principal=owner, subject=owner.subject, role="viewer")
+        await db.rollback()
+    # A duplicate Add user operation cannot silently change a role.
+    async with file_db() as db:
+        member = await client_admin.provision_member(db, principal=owner, subject="oidc|duplicate-member", role="viewer")
+        await db.commit()
+    async with file_db() as db:
+        with pytest.raises(ValueError, match="already belongs"):
+            await client_admin.provision_member(db, principal=owner, subject="oidc|duplicate-member", role="admin")
+        await db.rollback()
+    async with file_db() as db:
+        await client_admin.set_membership_status(db, principal=owner, member_principal_id=member.principal_id, status="revoked")
+        await db.commit()
+    async with file_db() as db:
+        with pytest.raises(ValueError, match="restore-access"):
+            await client_admin.provision_member(db, principal=owner, subject="oidc|duplicate-member", role="viewer")
+        await db.rollback()
+    assert await _resolve(file_db, principal_id=member.principal_id, tenant_id="tnt-local") is None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -522,7 +523,8 @@ async def data_access(
                 "name": row.name,
                 "classification": getattr(row, "classification", None),
                 "department_id": getattr(row, "department_id", None),
-                "tenant_visible": getattr(row, "tenant_visible", None),
+                "tenant_visible": row.tenant_visible,
+                "allowed_group_ids": json.loads(row.allowed_group_ids_json or "[]"),
             }
             for row in sources
         ],
@@ -531,6 +533,9 @@ async def data_access(
                 "id": row.id,
                 "title": getattr(row, "original_name", None),
                 "classification": getattr(row, "classification", None),
+                "department_id": row.department_id,
+                "tenant_visible": row.tenant_visible,
+                "allowed_group_ids": json.loads(row.allowed_group_ids_json or "[]"),
             }
             for row in documents
         ],

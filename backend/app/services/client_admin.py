@@ -153,6 +153,15 @@ async def provision_member(
     account = await identity_service.get_or_create_principal(
         db, subject=subject, issuer=issuer, email=email, display_name=display_name
     )
+    existing = await _membership(db, tenant_id=principal.tenant_id, principal_id=account.id)
+    if existing is not None:
+        # Provisioning must not be an alternate path around the self-change,
+        # last-owner and revocation guards on the dedicated lifecycle actions.
+        if existing.role != role or existing.status != "active":
+            raise ValueError(
+                "This user already belongs to the workspace. Use the role or restore-access action."
+            )
+        return await _member_record(db, tenant_id=principal.tenant_id, membership=existing)
     membership = await identity_service.add_membership(
         db, tenant_id=principal.tenant_id, principal_id=account.id, role=role
     )
