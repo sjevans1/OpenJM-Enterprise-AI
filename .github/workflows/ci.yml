@@ -5,6 +5,10 @@ name: OpenJM CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    # Pure Markdown PRs use docs-check.yml, avoiding builds and expensive suites.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
   push:
     branches: [main]
   workflow_dispatch:
