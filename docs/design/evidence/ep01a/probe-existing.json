@@ -1,0 +1,30 @@
+{
+  "implementation": {
+    "id": "existing",
+    "label": "OpenJM pattern (current)"
+  },
+  "aria": {
+    "role": "dialog",
+    "ariaModal": "true",
+    "labelledbyText": "Probe: reviewed action",
+    "describedbyText": "Standard probe content for the dialog comparison.",
+    "tag": "div"
+  },
+  "focusAfterOpen": "Cancel",
+  "focusOrder": [
+    "Cancel",
+    "Confirm probe action",
+    "Cancel",
+    "Confirm probe action",
+    "Cancel",
+    "Confirm probe action",
+    "Cancel"
+  ],
+  "afterShiftTab": "Confirm probe action",
+  "focusAfterClose": "Open OpenJM pattern (current) probe",
+  "focusRestored": true,
+  "busy": {
+    "cancelDisabled": true,
+    "escapeIgnoredWhileBusy": true
+  }
+}

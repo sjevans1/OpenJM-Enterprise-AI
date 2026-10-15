@@ -1,0 +1,30 @@
+{
+  "implementation": {
+    "id": "baseui",
+    "label": "Base UI"
+  },
+  "aria": {
+    "role": "dialog",
+    "ariaModal": null,
+    "labelledbyText": "Probe: reviewed action",
+    "describedbyText": "Standard probe content for the dialog comparison.",
+    "tag": "div"
+  },
+  "focusAfterOpen": "Cancel",
+  "focusOrder": [
+    "Cancel",
+    "Confirm probe action",
+    "Cancel",
+    "Confirm probe action",
+    "Cancel",
+    "Confirm probe action",
+    "Cancel"
+  ],
+  "afterShiftTab": "Confirm probe action",
+  "focusAfterClose": "Open Base UI probe",
+  "focusRestored": true,
+  "busy": {
+    "cancelDisabled": true,
+    "escapeIgnoredWhileBusy": true
+  }
+}

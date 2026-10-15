@@ -1,0 +1,11 @@
+{
+  "method": "clean room: temp dir, npm init -y, npm install --no-audit --no-fund react@18.3.1 react-dom@18.3.1 (baseline 5 MB), then each library installed sequentially with exact pins; deltas measured with du -sm node_modules and package-count diffs",
+  "baselineNodeModulesMB": 5,
+  "libraries": {
+    "@radix-ui/react-dialog@1.3.1": { "packagesAdded": 25, "nodeModulesDeltaMB": 3 },
+    "react-aria-components@1.22.1": { "packagesAdded": 11, "nodeModulesDeltaMB": 64 },
+    "@base-ui/react@1.9.0": { "packagesAdded": 8, "nodeModulesDeltaMB": 24 }
+  },
+  "note": "Sequential installs: shared transitive packages are counted once, in the first library that pulled them, so later deltas are lower bounds. Ratios stated in the ADR use these measured values (Base UI about 8x Radix, React Aria about 21x Radix).",
+  "measuredAt": "2026-10-15"
+}

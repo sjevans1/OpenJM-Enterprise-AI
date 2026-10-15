@@ -1,0 +1,802 @@
+/**
+ * EP-01A prototype styles. Scoped under .ep01a-* so no production selector is
+ * touched. Composes the existing OpenJM tokens (--navy/--teal/--ink/--line and
+ * friends) with prototype-local additions. Contrast pairs are chosen to meet
+ * WCAG 2.2 AA for their text sizes; motion is short and honors
+ * prefers-reduced-motion.
+ */
+
+.ep01a-root {
+  --ep01a-muted: #5a6d76;
+  --ep01a-radius: 14px;
+  --ep01a-focus: #087c88;
+  min-height: 100vh;
+  background: #eef3f5;
+  color: var(--ink);
+  overflow-x: clip;
+}
+
+.ep01a-boot {
+  padding: 40px;
+  color: var(--ink);
+  font: inherit;
+}
+
+/* ---------------------------------------------------------------- banner */
+
+.ep01a-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: baseline;
+  padding: 10px 22px;
+  background: var(--navy);
+  color: #dce8ec;
+  font-size: 13px;
+}
+.ep01a-banner strong {
+  color: #ffffff;
+  letter-spacing: 0.01em;
+}
+.ep01a-banner-mock {
+  margin-left: auto;
+  color: #9fb6c0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ep01a-shell {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 22px 26px 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.ep01a-page-head h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--navy);
+}
+
+.ep01a-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+.ep01a-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.ep01a-tabs button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 14px;
+  min-height: 44px;
+  font-weight: 600;
+  color: var(--ep01a-muted);
+  border-radius: 8px 8px 0 0;
+}
+.ep01a-tabs button:hover {
+  background: rgba(8, 124, 136, 0.08);
+  color: var(--navy);
+}
+.ep01a-tabs button.active {
+  color: var(--navy);
+  border-bottom-color: var(--teal);
+}
+.ep01a-tabs button:focus-visible,
+.ep01a-btn:focus-visible,
+.ep01a-field input:focus-visible,
+.ep01a-field select:focus-visible,
+.ep01a-segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--ep01a-focus);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------- panels */
+
+.ep01a-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--ep01a-radius);
+  padding: 20px 22px 24px;
+  box-shadow: 0 1px 2px rgba(7, 25, 35, 0.04);
+  min-width: 0;
+}
+
+.ep01a-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.ep01a-section-head h2 {
+  margin: 0 0 4px;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+}
+
+.ep01a-help {
+  margin: 4px 0;
+  color: var(--ep01a-muted);
+  font-size: 13.5px;
+  max-width: 72ch;
+}
+
+.ep01a-note {
+  margin: 8px 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #fdf6e8;
+  border: 1px solid #e6c98f;
+  font-size: 13px;
+}
+
+.ep01a-pending {
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--teal-soft);
+  color: #0b5f68;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ep01a-notice {
+  margin: 12px 0 4px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #e3f2e9;
+  color: #0a5c33;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ep01a-stale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0 4px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fdf6e8;
+  border: 1px solid #e6c98f;
+  font-size: 13.5px;
+}
+.ep01a-stale p {
+  margin: 0;
+}
+
+.ep01a-panel-inline {
+  margin: 14px 0 4px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+.ep01a-panel-inline h3,
+.ep01a-panel-inline h4 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.ep01a-panel-inline p {
+  margin: 4px 0 10px;
+  color: var(--ep01a-muted);
+  font-size: 13.5px;
+}
+
+/* -------------------------------------------------------------- toolbar */
+
+.ep01a-toolbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 14px;
+  align-items: end;
+  margin: 16px 0 10px;
+}
+
+.ep01a-field {
+  display: grid;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ep01a-muted);
+}
+.ep01a-field input,
+.ep01a-field select {
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #c8d5db;
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 400;
+}
+.ep01a-field.inline {
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 8px;
+}
+.ep01a-field.inline select {
+  min-height: 38px;
+}
+
+.ep01a-count {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--ep01a-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- buttons */
+
+.ep01a-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid #c8d5db;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 14px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.ep01a-btn:hover:not(:disabled) {
+  background: #f4f8f9;
+}
+.ep01a-btn.primary {
+  background: var(--teal);
+  border-color: transparent;
+  color: #ffffff;
+}
+.ep01a-btn.primary:hover:not(:disabled) {
+  background: #06656f;
+}
+.ep01a-btn.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: #0b6a74;
+  padding: 0 10px;
+}
+.ep01a-btn.quiet:hover:not(:disabled) {
+  background: rgba(8, 124, 136, 0.1);
+}
+.ep01a-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------- table */
+
+.ep01a-table-scroll {
+  overflow: auto;
+  max-height: 72vh;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.ep01a-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.ep01a-table th {
+  position: sticky;
+  top: 0;
+  background: #f7fafa;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ep01a-muted);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  z-index: 1;
+}
+.ep01a-table td {
+  padding: 10px 12px;
+  border-top: 1px solid #e9eff2;
+  vertical-align: top;
+}
+.ep01a-table tbody tr:hover {
+  background: #f6fafb;
+}
+.ep01a-table tbody tr.selected {
+  background: var(--teal-soft);
+}
+.ep01a-table small {
+  display: block;
+  color: var(--ep01a-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.ep01a-strong {
+  font-weight: 600;
+}
+.ep01a-name-cell {
+  min-width: 250px;
+  max-width: 420px;
+}
+.ep01a-table.wide .ep01a-name-cell {
+  min-width: 280px;
+}
+
+.ep01a-tag {
+  display: inline-block;
+  margin: 3px 4px 0 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef3f5;
+  color: #40525c;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- chips */
+
+.ep01a-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.ep01a-chip.role-owner {
+  background: var(--navy);
+  color: #e8eef2;
+}
+.ep01a-chip.role-admin {
+  background: #d8eef0;
+  color: #0b5f68;
+}
+.ep01a-chip.role-steward {
+  background: #e6e9f7;
+  color: #35439a;
+}
+.ep01a-chip.role-viewer {
+  background: #eceff1;
+  color: #40525c;
+}
+.ep01a-chip.status-active {
+  background: #e3f2e9;
+  color: #0a5c33;
+}
+.ep01a-chip.status-suspended {
+  background: #fdf1e3;
+  color: #7a4a06;
+}
+.ep01a-chip.status-invited {
+  background: #eceff1;
+  color: #40525c;
+}
+.ep01a-chip.class-public {
+  background: #e3f2e9;
+  color: #0a5c33;
+}
+.ep01a-chip.class-internal {
+  background: #e0eef7;
+  color: #14506e;
+}
+.ep01a-chip.class-confidential {
+  background: #fdf1e3;
+  color: #7a4a06;
+}
+.ep01a-chip.class-highly_restricted {
+  background: #fbe9e7;
+  color: #8f1d12;
+}
+
+/* ---------------------------------------------------------- split layout */
+
+.ep01a-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+  margin-top: 8px;
+  align-items: start;
+}
+
+.ep01a-editor {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 16px 18px 18px;
+  display: grid;
+  gap: 12px;
+}
+.ep01a-editor h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.ep01a-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* --------------------------------------------------------------- empty */
+
+.ep01a-empty {
+  padding: 28px 20px;
+  text-align: left;
+}
+.ep01a-empty h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+/* ----------------------------------------------------------- skeleton */
+
+.ep01a-skeleton {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+.ep01a-skeleton-row {
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #eef3f5 0%, #e2eaee 40%, #eef3f5 80%);
+  background-size: 200% 100%;
+  animation: ep01a-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes ep01a-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
+}
+
+/* -------------------------------------------------------------- pager */
+
+.ep01a-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  margin-top: 12px;
+  font-size: 13.5px;
+  color: var(--ep01a-muted);
+}
+
+/* -------------------------------------------------------------- dialog */
+
+.ep01a-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 25, 35, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  z-index: 40;
+  overflow: auto;
+}
+.ep01a-dialog {
+  /* Radix and Base UI render the dialog as a SIBLING of the backdrop inside
+     their portal, so the dialog centres itself on the viewport and paints
+     above the full-screen overlay; wrapper implementations (the existing
+     pattern, React Aria ModalOverlay) keep working with the same rule. */
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
+  max-height: min(86vh, 760px);
+  overflow: auto;
+  z-index: 41;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 22px 24px;
+  width: min(600px, calc(100% - 32px));
+  box-shadow: 0 24px 64px rgba(3, 12, 18, 0.45);
+}
+.ep01a-dialog-body {
+  display: contents;
+}
+.ep01a-dialog-title {
+  margin: 0 0 6px;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+.ep01a-dialog-description {
+  margin: 0 0 8px;
+  color: var(--ep01a-muted);
+  font-size: 14px;
+}
+.ep01a-dialog-rows {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+.ep01a-dialog-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px;
+}
+.ep01a-dialog-row dt {
+  color: var(--ep01a-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding-top: 1px;
+}
+.ep01a-dialog-row dd {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.ep01a-dialog-row dd.emphasis {
+  font-weight: 700;
+  color: var(--navy);
+}
+.ep01a-dialog-impact {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  border-left: 3px solid var(--teal);
+  color: #2a3b44;
+  font-size: 13px;
+}
+.ep01a-dialog-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.ep01a-alert {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fdecea;
+  border: 1px solid #f3c2bd;
+  color: #8f1d12;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ep01a-conflict {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fdf6e8;
+  border: 1px solid #e6c98f;
+  display: grid;
+  gap: 10px;
+  font-size: 13.5px;
+}
+.ep01a-conflict p {
+  margin: 0;
+}
+.ep01a-conflict .ep01a-btn {
+  justify-self: start;
+}
+
+/* ---------------------------------------------------------- detail view */
+
+.ep01a-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 25, 35, 0.45);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 30;
+}
+.ep01a-detail {
+  background: #ffffff;
+  width: min(580px, 100%);
+  height: 100%;
+  overflow: auto;
+  padding: 20px 22px 40px;
+  box-shadow: -18px 0 48px rgba(3, 12, 18, 0.35);
+}
+.ep01a-detail-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.ep01a-detail-head h3 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.ep01a-detail-meta,
+.ep01a-metadata {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13.5px;
+}
+.ep01a-detail-meta > div,
+.ep01a-metadata > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 10px;
+  border-bottom: 1px solid #eef3f5;
+  padding-bottom: 6px;
+}
+.ep01a-detail-meta dt,
+.ep01a-metadata dt {
+  color: var(--ep01a-muted);
+  font-weight: 600;
+}
+.ep01a-detail-meta dd,
+.ep01a-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------- probes */
+
+.ep01a-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 6px;
+}
+.ep01a-segmented label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 14px;
+  border: 1px solid #c8d5db;
+  border-radius: 999px;
+  background: #ffffff;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ep01a-segmented label.active {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: #ffffff;
+}
+.ep01a-segmented input {
+  accent-color: var(--teal);
+}
+
+.ep01a-probe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.ep01a-probe-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.ep01a-probe-card h3 {
+  margin: 0;
+  font-size: 15.5px;
+}
+.ep01a-package {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #2a3b44;
+}
+.ep01a-license {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ep01a-muted);
+}
+.ep01a-probe-result {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0b5f68;
+}
+.ep01a-focus-log {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+  color: #2a3b44;
+  max-height: 150px;
+  overflow: auto;
+}
+
+.ep01a-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------- responsive */
+
+@media (max-width: 1080px) {
+  .ep01a-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .ep01a-shell {
+    padding: 14px 14px 40px;
+  }
+  .ep01a-panel {
+    padding: 16px 14px 18px;
+  }
+  .ep01a-table {
+    min-width: 560px;
+  }
+  /* People & roles: fit the identifying name, role, status and action into the
+     viewport instead of clipping the name behind a scrolled table. The two
+     secondary columns remain available in the editor and on wider screens. */
+  .ep01a-table.people {
+    min-width: 0;
+  }
+  .ep01a-table.people th:nth-child(4),
+  .ep01a-table.people td:nth-child(4),
+  .ep01a-table.people th:nth-child(5),
+  .ep01a-table.people td:nth-child(5) {
+    display: none;
+  }
+  .ep01a-table.people td {
+    overflow-wrap: anywhere;
+  }
+  .ep01a-table.people td:first-child {
+    min-width: 164px;
+  }
+  .ep01a-table.wide {
+    min-width: 960px;
+  }
+  .ep01a-dialog-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .ep01a-detail-meta > div,
+  .ep01a-metadata > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .ep01a-banner {
+    padding: 10px 14px;
+  }
+  .ep01a-banner-mock {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ep01a-skeleton-row {
+    animation: none;
+    background: #e8eef1;
+  }
+  .ep01a-btn {
+    transition: none;
+  }
+}

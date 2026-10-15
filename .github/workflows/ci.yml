@@ -239,6 +239,12 @@ jobs:
       - name: Browser interaction acceptance
         run: npm run test:browser
 
+      - name: Production exclusion gate (EP-01A prototype surfaces)
+        # Proves the dev-only ?prototype=ep01a mount is compile-time excluded
+        # from the release build: no prototype chunks/tokens in dist and the
+        # production preview serves the normal app for the prototype URL.
+        run: node scripts/ep01a-production-gate.mjs
+
       - name: Preserve browser evidence
         if: always()
         uses: actions/upload-artifact@v7.0.2

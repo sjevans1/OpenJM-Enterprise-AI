@@ -1,0 +1,30 @@
+{
+  "implementation": {
+    "id": "aria",
+    "label": "React Aria Components"
+  },
+  "aria": {
+    "role": "dialog",
+    "ariaModal": null,
+    "labelledbyText": "Probe: reviewed action",
+    "describedbyText": "Standard probe content for the dialog comparison.",
+    "tag": "section"
+  },
+  "focusAfterOpen": "EP-01A prototypeFixture data only — not connected to OpenJM services or customer",
+  "focusOrder": [
+    "EP-01A prototypeFixture data only — not connected to OpenJM services or customer",
+    "Cancel",
+    "Confirm probe action",
+    "Cancel",
+    "Confirm probe action",
+    "Cancel",
+    "Confirm probe action"
+  ],
+  "afterShiftTab": "Cancel",
+  "focusAfterClose": "Open React Aria Components probe",
+  "focusRestored": true,
+  "busy": {
+    "cancelDisabled": true,
+    "escapeIgnoredWhileBusy": true
+  }
+}
