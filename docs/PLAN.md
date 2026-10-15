@@ -1,27 +1,36 @@
 # OpenJM Enterprise AI — Active Plan
 
-Observed at accepted `main@c5ed073a332da7a8dd120dc3d85bf8e2328a0511` on 2026-10-10.
+Planning snapshot: `main@b45ca8dad5fa79d12eba20fefd4d7d6c76df24b9` on 2026-10-15. New programme status: **PLANNED**, not implemented or accepted by this document.
 
 ## Active objective
 
-Move from accepted feature functionality to a commercially deployable, maintainable and handoff-ready product without reopening accepted feature lanes.
+Complete practical enterprise workflows and apply one premium UI standard across the employee workspace, company administration and OpenJM provider Control Center. The owner's manual review identified accidental changes and incomplete workflows despite the substantial accepted backend foundation.
 
-Issue #45 remains the historical/functionality umbrella. `docs/ACCEPTANCE_MATRIX.md` is the current evidence map. The active focus is REL1.
+Issue #45 and REL1 retain their historical acceptance. This is an explicitly requested advancement programme, not a restart of those milestones. Start with:
+
+- [Enterprise productization plan](plan/ENTERPRISE_PRODUCTIZATION.md): requirements, sequence, bounded EP-00–14 packages, decisions and handoff.
+- [UI quality standard](design/UI_QUALITY_STANDARD.md): shared components, reviewed actions, visual/accessibility rules and every UI surface.
+- [Enterprise journey acceptance](qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md): positive/failure journeys, fixture/live distinction and evidence requirements.
+- [Acceptance matrix](ACCEPTANCE_MATRIX.md): historical capability and deployment evidence at its recorded candidates.
 
 ## Execution order
 
-1. **REL1-A — reproducible deployment:** normalize version identity; reconcile release inputs; prove Linux/Windows delivery; deterministic bootstrap and health verification.
-2. **REL1-B — packaging:** installer/package experience; release manifest + SHA-256 checksums; offline bundle where required; blocked-registry install proof.
-3. **REL1-C — lifecycle:** upgrade/rollback; backup/restore; doctor/support-bundle; repeatable diagnosis.
-4. **REL1-D — handoff:** documentation normalization; threat model; API/integration index; troubleshooting/incident/release runbooks; final persona/browser journeys; zero-tribal-knowledge rehearsal.
-5. **Rahkia specialist integration — after REL1:** preserve the stable inference contract; verify M1/M2/M3 attribution, runtime routing, hardware/security/performance and production topology gates.
+1. **EP-00:** record the accepted workflow correction from [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109). It is still a draft/unmerged dependency at this snapshot; do not assume its components are on main.
+2. **EP-01–03:** approve shared reference journeys/components, then migrate every existing workspace, tenant-admin and provider UI with rendered-state review.
+3. **EP-04–09:** versioned policy/effective access, tenant resource lifecycle, policy-first Knowledge intake, identity onboarding, common source contract and guided company setup. EP-09's common source contract precedes EP-08 setup acceptance; see the detailed dependencies.
+4. **EP-10–12:** qualify real SQL Server, MinIO/S3 and separately selected ERP/warehouse integrations. Support claims are per verified source/version/auth combination.
+5. **EP-13:** complete provider tenant, commercial/service and bounded-support journeys. It can follow EP-03/04 and the applicable identity package before all adapters finish.
+6. **EP-14:** frozen integrated candidate, all-screen review, live governance/source/model journeys, affected REL1 lifecycle checks and independent handoff.
+7. **Rahkia specialist integration remains deferred:** preserve the inference seam and later qualify routing, M1/M2/M3 attribution and production topology with the specialist team.
 
 ## Required discipline
 
-- Do not reopen accepted BV/INF/M/E functionality without a reproduced defect or explicit product decision.
-- Use focused verification during iteration, one fast CI on the final integrated head, and one full exact-head CI at a true acceptance boundary.
+- Preserve accepted BV/INF/M/E and REL1 behavior except for the explicit product changes and reproduced defects documented in this programme.
+- Follow [CI_TIERS](CI_TIERS.md): focused/FAST iteration, STANDARD package qualification, FULL plus applicable live gates at a frozen acceptance boundary.
 - Do not run duplicate CI merely for another green result.
 - Keep Workspace isolated.
 - Preserve fail-closed authorization and evidence-before-model invariants.
 - Mark live/manual gates NOT RUN until actually executed.
-- Product complete means feature complete, installable, upgradable, recoverable, documented, maintainable and handoff-ready.
+- All new UI must use the shared experience contract; visual consistency and usable failure/recovery paths are required for completion.
+- Product complete means usable business journeys, consistent UI, enforced governance, real integration proof, install/upgrade/recovery and maintainable handoff.
+- Keep reviewable candidates separate from accepted main. Merge and deployment require explicit owner authority.

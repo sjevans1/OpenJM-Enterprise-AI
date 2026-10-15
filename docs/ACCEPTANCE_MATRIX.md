@@ -29,6 +29,20 @@ implementation evidence and the remaining manual/runtime qualification.
 
 A PASS never upgrades a separately identified live/manual gate to PASS.
 
+## New enterprise workflow and UI programme — planned
+
+On 2026-10-15, the owner's manual review led to a separate
+[enterprise productization plan](plan/ENTERPRISE_PRODUCTIZATION.md),
+[UI quality standard](design/UI_QUALITY_STANDARD.md) and
+[journey acceptance contract](qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md).
+Those packages and journeys are **PLANNED / NOT RUN**. The historical persona
+and feature-area passes below retain their original scope and evidence; for
+example, an accepted platform API walkthrough does not prove a complete new
+provider UI journey, and a PostgreSQL pass does not qualify SQL Server or an ERP.
+
+PR #109's initial workflow correction is an unmerged dependency at this planning
+snapshot. Neither that correction nor these documents complete the new programme.
+
 ## Persona: End user
 
 | ID | Acceptance statement (#45) | Current evidence | Remaining qualification | Status |

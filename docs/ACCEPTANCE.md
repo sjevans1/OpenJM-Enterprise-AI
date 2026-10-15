@@ -2,6 +2,13 @@
 
 A feature is not considered complete because code exists. It must pass the relevant gate.
 
+The 15 October 2026 enterprise workflow/UI programme adds the
+[enterprise journey acceptance contract](qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md)
+and [whole-application UI standard](design/UI_QUALITY_STANDARD.md). These apply
+to new work in the [productization plan](plan/ENTERPRISE_PRODUCTIZATION.md)
+alongside the applicable historical gates below. New journeys are **NOT RUN**;
+this addendum does not invalidate or extend earlier candidate-specific passes.
+
 > **VS8** adds operational acceptance (deployment profiles, production config,
 > install, health/observability, backup/restore, retention, upgrade/rollback,
 > hardening, load and release). See `docs/VS8_ACCEPTANCE.md` and the recorded

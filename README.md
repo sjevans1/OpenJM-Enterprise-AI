@@ -9,11 +9,22 @@ readiness, logs, metrics), `docs/BACKUP_RESTORE.md`, `docs/UPGRADE_ROLLBACK.md`,
 `docs/SECURITY_POSTURE.md`, and the acceptance/handoff map in
 `docs/ACCEPTANCE_MATRIX.md` and `docs/ZTK1_ACCEPTANCE.md`.
 
-Current status: the product programme is complete through the REL1 release train.
+The historical product programme is accepted through the REL1 release train.
 Enterprise identity and tenant isolation (VS5), Administration and provisioning
 (#40), knowledge ingestion UX (#42), chat artifacts (#43) and chat-first
-stewardship UX (#44) are delivered and accepted, not future work. The only
-explicitly deferred specialist phase is the Rahkia application cutover.
+stewardship UX (#44) are delivered foundations. The subsequent manual product
+review identified practical workflow and UI consistency gaps; those are now a
+separate **planned enterprise productization programme**. Rahkia application
+cutover remains a deferred specialist phase.
+
+Start with the [active plan](docs/PLAN.md), [phased implementation packages](docs/plan/ENTERPRISE_PRODUCTIZATION.md),
+[whole-application UI quality standard](docs/design/UI_QUALITY_STANDARD.md) and
+[journey acceptance contract](docs/qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md). These cover
+the employee workspace, tenant administration, OpenJM Control Center and real
+source integrations. Planned SQL Server, ERP, warehouse and MinIO/S3 connectors
+must not be read as current supported capabilities. The initial workflow fixes
+in [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) are a review
+dependency, not assumed merged by this plan.
 
 The previous Hermes-generated repository is treated as reference material only. This repository establishes the product and architecture from scratch around a proven vertical slice rather than a collection of disconnected screens.
 
@@ -49,7 +60,10 @@ DB-GPT is used behind an OpenJM-owned knowledge interface. It is not exposed as 
 
 The vertical-slice history below is retained for context. The accepted baseline has moved well past it: VS1 through VS8, the BV/M/INF/E lanes, and the REL1 release train are merged and accepted, and the final clean-production-host and browser/persona qualification is complete.
 
-See `docs/PRODUCT_ROADMAP.md` for history and `docs/ACCEPTANCE_MATRIX.md` for the current evidence map.
+See [PRODUCT_ROADMAP](docs/PRODUCT_ROADMAP.md) for the next programme and retained
+history, and [ACCEPTANCE_MATRIX](docs/ACCEPTANCE_MATRIX.md) for evidence at its
+recorded candidate/artifact. Historical acceptance does not qualify new workflows
+or adapters without their own evidence.
 
 ## VS8 — self-hosted commercialization readiness
 
