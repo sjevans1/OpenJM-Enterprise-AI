@@ -4,6 +4,7 @@
  * return; the busy guard prevents any dismissal while a request is in flight.
  */
 import * as Dialog from '@radix-ui/react-dialog'
+import { useEffect, useRef } from 'react'
 import {
   DialogButtons,
   DialogError,
@@ -19,6 +20,30 @@ export default function RadixDialog(props: ReviewedActionDialogProps) {
   const { open, title, description, rows, impact, confirmLabel, busy, error } = props
   const { titleId, descId } = useDialogIds()
 
+  // Deterministic focus return for a triggerless, controlled Radix dialog.
+  // Radix's focus-scope teardown has no trigger to restore to, and relying on
+  // `onCloseAutoFocus` alone raced the unmount in CI (focus occasionally
+  // settled on `body`). Instead: after the dialog closes, restore focus on a
+  // macrotask so it happens after every Radix unmount effect has settled —
+  // the last writer wins, every time.
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true
+      return
+    }
+    if (!wasOpen.current) return
+    wasOpen.current = false
+    const target = props.returnFocusTo
+    if (!target) return
+    const handle = window.setTimeout(() => {
+      if (target.isConnected) target.focus()
+    }, 0)
+    return () => window.clearTimeout(handle)
+    // returnFocusTo is captured per close; adding it would refocus spuriously.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   return (
     <Dialog.Root
       open={open}
@@ -33,16 +58,6 @@ export default function RadixDialog(props: ReviewedActionDialogProps) {
           aria-busy={busy}
           aria-labelledby={titleId}
           aria-describedby={descId}
-          onCloseAutoFocus={(event) => {
-            // Radix cannot restore focus to a trigger we do not render (the
-            // dialog is opened by ordinary buttons), so the opener is passed
-            // in explicitly and focused here.
-            const target = props.returnFocusTo
-            if (target && target.isConnected) {
-              event.preventDefault()
-              target.focus()
-            }
-          }}
           onEscapeKeyDown={(event) => {
             if (busy) event.preventDefault()
           }}
