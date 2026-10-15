@@ -51,6 +51,8 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
   const [conflictCurrent, setConflictCurrent] = useState<Member | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const reviewTrigger = useRef<HTMLElement | null>(null)
+  const tableScroll = useRef<HTMLDivElement | null>(null)
+  const selectedRow = useRef<HTMLTableRowElement | null>(null)
 
   const loadMembers = useCallback(async () => {
     setLoad({ phase: 'loading' })
@@ -104,6 +106,21 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [dirty])
+
+  // On narrow screens the directory table scrolls horizontally (it keeps true
+  // table semantics). When a member is selected, bring their identifying row
+  // back into view and reset the horizontal position so the name is clearly
+  // visible, not left behind the scroll.
+  useEffect(() => {
+    if (!selectedId) return
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 720px)').matches
+    ) {
+      if (tableScroll.current) tableScroll.current.scrollLeft = 0
+      selectedRow.current?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [selectedId])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -287,7 +304,12 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
 
       {load.phase === 'ready' && (
         <div className="ep01a-split">
-          <div className="ep01a-table-scroll" role="region" aria-label="Member directory">
+          <div
+            className="ep01a-table-scroll"
+            role="region"
+            aria-label="Member directory"
+            ref={tableScroll}
+          >
             <table className="ep01a-table people">
               <thead>
                 <tr>
@@ -303,7 +325,11 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
               </thead>
               <tbody>
                 {filtered.map((member) => (
-                  <tr key={member.id} className={member.id === selectedId ? 'selected' : ''}>
+                  <tr
+                    key={member.id}
+                    className={member.id === selectedId ? 'selected' : ''}
+                    ref={member.id === selectedId ? selectedRow : undefined}
+                  >
                     <td>
                       <span className="ep01a-strong">{member.name}</span>
                       <small>{member.email}</small>

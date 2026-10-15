@@ -107,21 +107,24 @@ Integration findings that change real effort:
 
 ### 3.3 Production bundle (Vite 6.4.3, same toolchain as CI)
 
+Corrected head: prototype surfaces are compile-time excluded from production
+(`import.meta.env.DEV` gate), verified by `scripts/ep01a-production-gate.mjs`.
+
 | Chunk | Raw | Gzip |
 | --- | --- | --- |
-| Entry `index-*.js` — this branch | 303.29 kB | 85.40 kB |
-| Entry `index-*.js` — baseline `bc8f02e` | 301.16 kB | 84.48 kB |
-| Entry delta | **+2.13 kB** | **+0.92 kB** |
-| Entry `index-*.css` | 44.11 kB — byte-identical to baseline | 9.34 kB |
-| `PrototypeApp-*.js` (lazy, prototype-only) | 44.18 kB | 13.54 kB |
-| `PrototypeApp-*.css` (lazy) | 10.86 kB | 2.86 kB |
-| `RadixDialog-*.js` (lazy) | 41.05 kB | 13.89 kB |
-| `AriaDialog-*.js` (lazy) | 59.14 kB | 19.92 kB |
-| `BaseUiDialog-*.js` (lazy) | 59.20 kB | 20.46 kB |
+| Production entry `index-*.js` — corrected head | 301.22 kB | 84.52 kB |
+| Production entry `index-*.js` — baseline `bc8f02e` | 301.16 kB | 84.48 kB |
+| Production entry delta | **+0.06 kB** | **+0.04 kB** |
+| Production CSS | 44.11 kB — byte-identical to baseline | 9.34 kB |
+| Prototype chunks in production | **none** (excluded) | — |
 
-The only production-bundle growth is the +2.13 kB (+0.92 kB gzip) lazy mount
-hook in `main.tsx`; all prototype and library code sits in chunks that are
-never fetched without `?prototype=ep01a`. Production CSS is byte-identical.
+Dev-server/test-grade chunks (never shipped): `PrototypeApp-*.js` 44.2 kB
+(13.5 gzip) + 10.9 kB CSS, `RadixDialog-*.js` 41.1 kB (13.9 gzip),
+`AriaDialog-*.js` 59.1 kB (19.9 gzip), `BaseUiDialog-*.js` 59.2 kB (20.5 gzip).
+
+The production entry cost of this packet is effectively zero (+0.06 kB raw):
+all prototype and library code is excluded from release builds and loaded
+lazily only in development/testing.
 
 ### 3.4 Accessibility scans (axe-core)
 
@@ -215,6 +218,24 @@ introduced by any candidate.
 
 This packet stops at component selection and visual acceptance. No production
 surface, authorization behaviour, backend route or release artifact was
-changed. The prototype surfaces are inert without `?prototype=ep01a`, are not
-navigable from the product, and must be deleted or gated before any release
-cut that does not list them as an approved developer surface.
+changed. The prototype surfaces are development/test-only: they are compiled
+out of release builds entirely (verified by
+`frontend/scripts/ep01a-production-gate.mjs` against both the built asset graph
+and the production preview server), and they remain inert in dev without
+`?prototype=ep01a`.
+
+## 9. Post-review corrections (second head)
+
+- CI: a STANDARD-run failure (Vite dependency re-optimization full-reloading a
+  parallel test page, detaching the element under test) was root-caused and
+  fixed at the configuration level (`optimizeDeps.include`, dev-only) plus a
+  bounded retry in the prototype loader; no test was weakened.
+- Mobile: at `≤720px` the People & Roles table drops two secondary columns,
+  the selected row is brought back into view with the name fully readable, and
+  a browser visibility assertion guards it.
+- axe: `th-has-data-cells` (empty catalog) resolved by omitting the empty
+  table; `aria-hidden-focus` (Radix focus guards / modal-hidden background)
+  explicitly qualified with focus-containment and focus-return test evidence.
+- The correction cost one shared repair cycle (of the framework's single
+  2-cycle budget); the per-tier declaration and corrected-head runs are
+  recorded in the workflow state, the PR and issue #111.

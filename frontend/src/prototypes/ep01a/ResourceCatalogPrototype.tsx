@@ -337,7 +337,8 @@ export default function ResourceCatalogPrototype() {
           </p>
 
           <div className="ep01a-table-scroll" role="region" aria-label="Resource table">
-            <table className="ep01a-table wide">
+            {items.length > 0 && (
+              <table className="ep01a-table wide">
               <thead>
                 <tr>
                   <th scope="col">Name</th>
@@ -397,6 +398,7 @@ export default function ResourceCatalogPrototype() {
                 ))}
               </tbody>
             </table>
+            )}
 
             {!items.length && (
               <div className="ep01a-empty">

@@ -15,6 +15,14 @@ cd frontend
 npm run dev
 ```
 
+The prototype surfaces are **development/test-only**. `main.tsx` gates the
+entire branch behind `import.meta.env.DEV`, so production release builds
+contain no prototype code, no mock API and no `ep01a` tokens: requesting
+`?prototype=ep01a` against a release build serves the normal application.
+`node scripts/ep01a-production-gate.mjs` verifies both the built asset graph
+and the production preview server and writes
+`docs/design/evidence/ep01a/production-gate.json`.
+
 - `http://127.0.0.1:5173/?prototype=ep01a&view=roles` — P1: governed user and
   role administration (draft → review → confirm; zero writes on selection,
   cancel or Escape).

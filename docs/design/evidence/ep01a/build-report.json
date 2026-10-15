@@ -1,5 +1,5 @@
 {
-  "producedAt": "2026-10-15T05:35:35.821Z",
+  "producedAt": "2026-10-15T06:19:53.800Z",
   "packageVersions": {
     "@radix-ui/react-dialog": "1.3.1",
     "react-aria-components": "1.22.1",
@@ -8,24 +8,9 @@
   },
   "assets": [
     {
-      "file": "assets/index-DMWnSF5n.js",
-      "bytes": 303287,
-      "gzipBytes": 85398
-    },
-    {
-      "file": "assets/BaseUiDialog-rG8uuIKY.js",
-      "bytes": 59198,
-      "gzipBytes": 20462
-    },
-    {
-      "file": "assets/AriaDialog-C9Y7g5yY.js",
-      "bytes": 59135,
-      "gzipBytes": 19919
-    },
-    {
-      "file": "assets/PrototypeApp-DOt7_tR2.js",
-      "bytes": 44175,
-      "gzipBytes": 13537
+      "file": "assets/index-C3XMWqDp.js",
+      "bytes": 301219,
+      "gzipBytes": 84521
     },
     {
       "file": "assets/index-DRiyyhcm.css",
@@ -33,25 +18,15 @@
       "gzipBytes": 9344
     },
     {
-      "file": "assets/RadixDialog-CceyIV4p.js",
-      "bytes": 41051,
-      "gzipBytes": 13888
-    },
-    {
-      "file": "assets/PrototypeApp-BViBxMnk.css",
-      "bytes": 10861,
-      "gzipBytes": 2856
-    },
-    {
       "file": "index.html",
       "bytes": 455,
-      "gzipBytes": 293
+      "gzipBytes": 294
     }
   ],
   "totals": {
-    "jsBytes": 506846,
-    "jsGzipBytes": 153204,
-    "cssBytes": 54971,
-    "cssGzipBytes": 12200
+    "jsBytes": 301219,
+    "jsGzipBytes": 84521,
+    "cssBytes": 44110,
+    "cssGzipBytes": 9344
   }
 }

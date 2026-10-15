@@ -1,6 +1,27 @@
 {
   "url": "http://127.0.0.1:5173/?prototype=ep01a&view=roles&latency=0",
   "violations": [],
-  "incomplete": 1,
+  "incomplete": [
+    {
+      "id": "aria-hidden-focus",
+      "impact": "serious",
+      "nodes": 7,
+      "targets": [
+        "span[data-radix-focus-guard=\"\"][data-aria-hidden=\"true\"][aria-hidden=\"true\"]:nth-child(1)",
+        "nav",
+        ".ep01a-section-head",
+        ".ep01a-field[data-aria-hidden=\"true\"][aria-hidden=\"true\"]:nth-child(1)",
+        ".ep01a-field[data-aria-hidden=\"true\"][aria-hidden=\"true\"]:nth-child(2)",
+        ".ep01a-split",
+        "span[data-radix-focus-guard=\"\"][data-aria-hidden=\"true\"][aria-hidden=\"true\"]:nth-child(6)"
+      ],
+      "summary": [
+        "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+        "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+        "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+        "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state"
+      ]
+    }
+  ],
   "passes": 33
 }
