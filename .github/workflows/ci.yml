@@ -23,9 +23,12 @@ on:
       - 'docs/CI_TIERS.md'
       - 'docs/FRAMEWORK_ADOPTION.md'
       - 'docs/SECURITY_POSTURE.md'
-      - 'docs/RELEASE_*.md'
-      - 'docs/POLICY_*.md'
-      - 'docs/SECURITY_*.md'
+      - 'docs/RELEASE*.md'
+      - 'docs/POLICY*.md'
+      - 'docs/SECURITY*.md'
+      - 'docs/**/RELEASE*.md'
+      - 'docs/**/POLICY*.md'
+      - 'docs/**/SECURITY*.md'
       - 'SECURITY.md'
   push:
     branches: [main]
