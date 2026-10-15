@@ -6,9 +6,26 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     # Pure Markdown PRs use docs-check.yml, avoiding builds and expensive suites.
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.mdx'
+    paths:
+      # Run FAST on all non-Markdown paths and protected governance documents.
+      - '**'
+      - '!**/*.md'
+      - '!**/*.mdx'
+      - '.github/**'
+      - 'doctrine/**'
+      - 'prompts/**'
+      - 'docs/security/**'
+      - 'docs/policy/**'
+      - 'docs/governance/**'
+      - 'docs/PLAN.md'
+      - 'docs/ACCEPTANCE.md'
+      - 'docs/CI_TIERS.md'
+      - 'docs/FRAMEWORK_ADOPTION.md'
+      - 'docs/SECURITY_POSTURE.md'
+      - 'docs/RELEASE_*.md'
+      - 'docs/POLICY_*.md'
+      - 'docs/SECURITY_*.md'
+      - 'SECURITY.md'
   push:
     branches: [main]
   # Reusable entrypoint for distinct, authoritative qualification run identities.
