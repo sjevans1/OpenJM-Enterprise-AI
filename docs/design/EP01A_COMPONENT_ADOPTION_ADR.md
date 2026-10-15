@@ -73,7 +73,7 @@ session; windows at 1440x900 / 768x1024 / 390x844 plus 320px reflow and a
 
 | Measurement | Existing pattern | Radix 1.3.1 | React Aria 1.22.1 | Base UI 1.9.0 |
 | --- | --- | --- | --- | --- |
-| Initial focus on open | Cancel | Cancel | **stays on the opener** (no initial focus wiring) | Cancel |
+| Initial focus on open | Cancel | Cancel | **page/opener area** (as recorded; no initial-focus wiring; a wired-autofocus variant was not separately probed) | Cancel |
 | Tab cycle / Shift+Tab wrap | contained | contained | contained after manual first Tab | contained |
 | Escape closes when idle | yes | yes | yes | yes |
 | Focus returns to opener | yes | yes, with explicit wiring (see below) | yes | yes |
@@ -104,6 +104,8 @@ Integration findings that change real effort:
 | `@radix-ui/react-dialog@1.3.1` | 25 | +3 MB |
 | `react-aria-components@1.22.1` | 11 | +64 MB |
 | `@base-ui/react@1.9.0` | 8 | +24 MB |
+
+Raw method and numbers: `install-measurements.json`.
 
 ### 3.3 Production bundle (Vite 6.4.3, same toolchain as CI)
 
@@ -137,12 +139,14 @@ Contrast-sensitive pairs (chips, alerts, buttons, muted text) were chosen at
 
 ## 4. Decision
 
-**Recommendation: ADOPT Radix Primitives as the single accessible primitive
-foundation for EP-01B, starting with dialog/drawer (reviewed actions), dropdown
-menu and tooltip. Build the OpenJM component layer (tokens, fields, tables,
-status/notice, pagination, review-summary) on top of it and on the accepted
-#109 behaviours. Do not adopt a full visual framework, Tailwind, Motion or
-React 19 as part of this decision.**
+**Recommendation (bounded to the tested reviewed-action dialog contract):
+provisionally ADOPT Radix Primitives as the dialog/drawer foundation for
+EP-01B. Extending the adoption to dropdown menu, tooltip or other primitives
+requires comparable probes in EP-01B first; this ADR does not cover them.
+Build the OpenJM component layer (tokens, fields, tables, status/notice,
+pagination, review-summary) on top of it and on the accepted #109 behaviours.
+Do not adopt a full visual framework, Tailwind, Motion or React 19 as part of
+this decision.**
 
 Why Radix:
 
@@ -156,8 +160,9 @@ Why Radix:
    known, small, documented wiring, already proven in the prototype.
 
 Runner-up: **Base UI 1.9.0** — MIT, healthy, close behavioural parity, but
-~2.4x install delta, ~1.5x chunk size and a younger API surface still settling
-post-rename. Keep it as the fallback if Radix direction changes.
+~8x the clean-room install delta (24 MB vs 3 MB), ~1.4x the dialog chunk size
+and a younger API surface still settling post-rename. Keep it as the fallback
+if Radix direction changes.
 
 Rejected for this gate:
 
@@ -190,8 +195,10 @@ Rejected for this gate:
 
 ## 6. Offline/REL1 and packaging
 
-Exact versions are pinned (no ranges) and the lockfile is committed; the
-prototype libraries are runtime dependencies of lazy chunks only. REL1's
+Exact versions are pinned (no ranges) and the lockfile is committed; the three
+prototype libraries are declared as **devDependencies** — they are imported
+only by the dev-only prototype path, which the production build excludes — so
+the release install input is unchanged. REL1's
 offline npm cache and registry-blocked gate were **not run** for this packet
 (FULL tier is reserved for a frozen candidate); before any release that ships
 the adopted primitive, regenerate the npm offline cache and run the REL1

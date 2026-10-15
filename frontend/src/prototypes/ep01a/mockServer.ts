@@ -71,7 +71,6 @@ type MockState = {
   catalogRevision: number
   behavior: Behavior
   latencyMs: number
-  installed: boolean
 }
 
 let state: MockState | null = null
@@ -284,7 +283,6 @@ export function installMockServer(): Ep01aMockHandle {
     catalogRevision: 4,
     behavior: 'ok',
     latencyMs: 140,
-    installed: true,
     handle: undefined as unknown as Ep01aMockHandle,
   }
 

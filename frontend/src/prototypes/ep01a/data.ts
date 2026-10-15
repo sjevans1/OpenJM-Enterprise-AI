@@ -63,7 +63,6 @@ export function roleLabel(id: RoleId): string {
 export function roleCapabilities(id: RoleId): string {
   return ROLES.find((role) => role.id === id)?.capabilities || ''
 }
-
 /** Deterministic 26-member directory. One owner so the last-owner guard is provable. */
 export const MEMBERS: Member[] = [
   { id: 'm-001', name: 'Morgan James', email: 'morgan.james@northwind.example', subject: 'sub-8f21-morgan', role: 'owner', status: 'active', department: 'Executive', lastActive: '2026-10-14T09:12:00Z', revision: 4 },
@@ -309,8 +308,4 @@ export function metadataFor(resource: Resource): MetadataEntry[] {
 /** Total metadata rows across the whole catalog (asserted in tests, shown in evidence). */
 export function catalogMetadataTotal(resources: Resource[]): number {
   return resources.reduce((sum, resource) => sum + metadataFor(resource).length, 0)
-}
-
-export function memberById(members: Member[], id: string): Member | undefined {
-  return members.find((member) => member.id === id)
 }

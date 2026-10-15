@@ -185,9 +185,15 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
         return
       }
       const name = selected.name
+      const roleChanged = draftRole !== selected.role
+      const statusChanged = draftStatus !== selected.status
+      const changes: string[] = []
+      if (roleChanged) changes.push(`role changed to ${roleLabel(draftRole)}`)
+      if (statusChanged)
+        changes.push(`account status set to ${STATUS_LABELS[draftStatus]}`)
       setReviewOpen(false)
       setSelectedId(null)
-      setNotice(`${name}'s role was changed to ${roleLabel(draftRole)}.`)
+      setNotice(`${name}'s ${changes.join(' and ')}.`)
       await loadMembers()
     } catch {
       setDialogError(
@@ -200,8 +206,14 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
 
   async function reloadLatest() {
     if (!selected) return
-    const response = await fetch('/api/ep01a/admin/members')
-    if (response.ok) {
+    try {
+      const response = await fetch('/api/ep01a/admin/members')
+      if (!response.ok) {
+        setDialogError(
+          `The latest version could not be loaded (${response.status}). Your review is unchanged; retry or cancel.`,
+        )
+        return
+      }
       const body = (await response.json()) as { members: Member[] }
       setMembers(body.members)
       const fresh = body.members.find((member) => member.id === selected.id)
@@ -210,13 +222,17 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
         setDraftRole(fresh.role)
         setDraftStatus(fresh.status)
       }
+      setReviewOpen(false)
+      setDialogError(null)
+      setConflictCurrent(null)
+      setNotice(
+        `Loaded the latest version of ${selected.name}. Review your change again.`,
+      )
+    } catch {
+      setDialogError(
+        'The latest version could not be loaded. Your review is unchanged; retry or cancel.',
+      )
     }
-    setReviewOpen(false)
-    setDialogError(null)
-    setConflictCurrent(null)
-    setNotice(
-      `Loaded the latest version of ${selected.name}. Review your change again.`,
-    )
   }
 
   return (
@@ -351,6 +367,7 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
                         type="button"
                         className="ep01a-btn quiet"
                         aria-label={`Manage ${member.name}`}
+                        disabled={dirty && member.id !== selectedId}
                         onClick={() => selectMember(member)}
                       >
                         Manage
@@ -430,6 +447,7 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
                   {draftStatus !== selected.status
                     ? ` · ${STATUS_LABELS[selected.status]} → ${STATUS_LABELS[draftStatus]}`
                     : ''}
+                  {' '}Save or discard the change before managing another member.
                 </p>
               )}
               <div className="ep01a-editor-actions">

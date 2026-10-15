@@ -63,7 +63,7 @@ test('draft, cancel and Escape issue zero requests; confirm writes once and reco
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Confirm role change' }).click()
   await expect(dialog).not.toBeVisible()
-  await expect(page.getByText("Ada Evans's role was changed to Administrator.")).toBeVisible()
+  await expect(page.getByText("Ada Evans's role changed to Administrator.")).toBeVisible()
 
   const log = await requests(page)
   const writes = mutations(log)
@@ -121,10 +121,13 @@ test('a failed save keeps the draft and retry succeeds', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Confirm role change' }).click()
   await expect(dialog.getByRole('alert')).toContainText('could not be saved')
   await expect(dialog).toBeVisible()
+  expect(await page.getByLabel('Role', { exact: true }).inputValue()).toBe('admin')
+  expect(mutations(await requests(page))).toHaveLength(1)
   await setBehavior(page, 'ok')
   await dialog.getByRole('button', { name: 'Confirm role change' }).click()
   await expect(dialog).not.toBeVisible()
-  await expect(page.getByText("Ada Evans's role was changed to Administrator.")).toBeVisible()
+  await expect(page.getByText("Ada Evans's role changed to Administrator.")).toBeVisible()
+  expect(mutations(await requests(page))).toHaveLength(2)
 })
 
 test('load failure and permission denial render recoverable panels', async ({ page }, testInfo) => {
@@ -151,7 +154,55 @@ test('the same flow works under the current OpenJM dialog implementation', async
   await expect(page.getByRole('button', { name: 'Review and save role' })).toBeFocused()
   await page.getByRole('button', { name: 'Review and save role' }).click()
   await dialog.getByRole('button', { name: 'Confirm role change' }).click()
-  await expect(page.getByText("Ada Evans's role was changed to Administrator.")).toBeVisible()
+  await expect(page.getByText("Ada Evans's role changed to Administrator.")).toBeVisible()
+})
+
+test('a status-only change is announced accurately and writes once', async ({ page }) => {
+  await openRoles(page)
+  await page.getByRole('button', { name: 'Manage Ada Evans' }).click()
+  await page.getByLabel('Account status', { exact: true }).selectOption('suspended')
+  const dialog = page.getByRole('dialog')
+  await page.getByRole('button', { name: 'Review and save role' }).click()
+  await expect(dialog).toContainText('Active → Suspended')
+  await dialog.getByRole('button', { name: 'Confirm role change' }).click()
+  await expect(
+    page.getByText("Ada Evans's account status set to Suspended."),
+  ).toBeVisible()
+  const writes = mutations(await requests(page))
+  expect(writes).toHaveLength(1)
+  expect(writes[0].body).toEqual({
+    role: 'viewer',
+    status: 'suspended',
+    expected_revision: 2,
+  })
+})
+
+test('a dirty draft blocks switching members until it is discarded', async ({ page }) => {
+  await openRoles(page)
+  await page.getByRole('button', { name: 'Manage Ada Evans' }).click()
+  await page.getByLabel('Role', { exact: true }).selectOption('admin')
+  await expect(page.getByRole('button', { name: 'Manage Priya Raman' })).toBeDisabled()
+  await expect(
+    page.getByText('Save or discard the change before managing another member.'),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Discard changes' }).click()
+  await expect(page.getByRole('button', { name: 'Manage Priya Raman' })).toBeEnabled()
+})
+
+test('a failed conflict reload keeps the review intact and reports the error', async ({ page }) => {
+  await openRoles(page, '&mock=conflict')
+  await startDraft(page)
+  const dialog = page.getByRole('dialog')
+  await page.getByRole('button', { name: 'Review and save role' }).click()
+  await dialog.getByRole('button', { name: 'Confirm role change' }).click()
+  await expect(dialog.getByRole('region', { name: 'Conflict details' })).toBeVisible()
+  await setBehavior(page, 'fail_load')
+  await dialog.getByRole('button', { name: 'Reload the latest version' }).click()
+  await expect(dialog.getByRole('alert')).toContainText('could not be loaded')
+  await expect(dialog).toBeVisible()
+  await expect(page.getByText(/Loaded the latest version/)).toHaveCount(0)
+  expect(await page.getByLabel('Role', { exact: true }).inputValue()).toBe('admin')
+  expect(mutations(await requests(page))).toHaveLength(1)
 })
 
 test('tablet 768 and mobile 390 layouts hold with the selected person visible', async ({ page }, testInfo) => {

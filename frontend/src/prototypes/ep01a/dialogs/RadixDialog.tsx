@@ -50,11 +50,11 @@ export default function RadixDialog(props: ReviewedActionDialogProps) {
             if (busy) event.preventDefault()
           }}
         >
-          <Dialog.Title asChild>
-            <DialogHeading id={titleId}>{title}</DialogHeading>
+          <Dialog.Title id={titleId} className="ep01a-dialog-title">
+            {title}
           </Dialog.Title>
-          <Dialog.Description asChild>
-            <DialogText id={descId}>{description}</DialogText>
+          <Dialog.Description id={descId} className="ep01a-dialog-description">
+            {description}
           </Dialog.Description>
           <DialogRows rows={rows} />
           <DialogImpact>{impact}</DialogImpact>

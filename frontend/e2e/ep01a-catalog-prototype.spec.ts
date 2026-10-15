@@ -87,8 +87,35 @@ test('detail view shows metadata, closes on Escape and restores focus', async ({
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText(/Metadata \(\d+ entries\)/)).toBeVisible()
   await shot(page, testInfo, 'ep01a-p2-detail-1440', false)
+  // Modal containment: the background is inert and Tab cannot leave the drawer.
+  expect(
+    await page.evaluate(() =>
+      document.querySelector('.ep01a-shell > nav')?.hasAttribute('inert'),
+    ),
+  ).toBe(true)
+  for (let step = 0; step < 6; step += 1) {
+    await page.keyboard.press('Tab')
+  }
+  expect(
+    await page.evaluate(() =>
+      Boolean((document.activeElement as HTMLElement | null)?.closest('.ep01a-detail')),
+    ),
+  ).toBe(true)
+  await page.keyboard.press('Shift+Tab')
+  expect(
+    await page.evaluate(() =>
+      Boolean((document.activeElement as HTMLElement | null)?.closest('.ep01a-detail')),
+    ),
+  ).toBe(true)
   await page.keyboard.press('Escape')
   await expect(dialog).not.toBeVisible()
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.querySelector('.ep01a-shell > nav')?.hasAttribute('inert') ?? true,
+      ),
+    )
+    .toBe(false)
   const focusedLabel = await page.evaluate(
     () => (document.activeElement as HTMLElement | null)?.getAttribute('aria-label') ?? '',
   )

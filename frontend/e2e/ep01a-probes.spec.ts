@@ -60,6 +60,15 @@ for (const impl of IMPLS) {
     await page.keyboard.press('Shift+Tab')
     const afterShiftTab = await activeDescriptor(page)
 
+    // Tab containment: after the first hop into the dialog, every stop is one
+    // of the dialog's own controls, and reverse wrap also stays inside.
+    const dialogControls = ['Cancel', 'Confirm probe action']
+    expect(
+      focusOrder.slice(1).every((entry) => dialogControls.includes(entry)),
+      `tab cycle left the dialog: ${JSON.stringify(focusOrder)}`,
+    ).toBe(true)
+    expect(dialogControls).toContain(afterShiftTab)
+
     await page.keyboard.press('Escape')
     await expect(dialog).not.toBeVisible()
     const focusAfterClose = await activeDescriptor(page)
@@ -77,6 +86,9 @@ for (const impl of IMPLS) {
     await page.keyboard.press('Escape')
     await page.waitForTimeout(150)
     const escapeIgnoredWhileBusy = await dialog.isVisible()
+    await page.mouse.click(4, 4)
+    await page.waitForTimeout(150)
+    const outsideIgnoredWhileBusy = await dialog.isVisible()
     await shot(page, testInfo, `ep01a-probe-${impl.id}`, false)
     await expect(dialog).not.toBeVisible()
 
@@ -88,13 +100,17 @@ for (const impl of IMPLS) {
       afterShiftTab,
       focusAfterClose,
       focusRestored,
-      busy: { cancelDisabled, escapeIgnoredWhileBusy },
+      busy: { cancelDisabled, escapeIgnoredWhileBusy, outsideIgnoredWhileBusy },
     })
 
     expect(aria.role).toBe('dialog')
     expect(aria.labelledbyText).toBe('Probe: reviewed action')
+    expect(aria.describedbyText).toBe(
+      'Standard probe content for the dialog comparison.',
+    )
     expect(focusRestored, `focus should return to the opener (was: ${focusAfterClose})`).toBe(true)
     expect(cancelDisabled).toBe(true)
     expect(escapeIgnoredWhileBusy).toBe(true)
+    expect(outsideIgnoredWhileBusy).toBe(true)
   })
 }

@@ -66,9 +66,29 @@ export default function ResourceCatalogPrototype() {
 
   const [detail, setDetail] = useState<DetailState>({ phase: 'closed' })
   const detailTrigger = useRef<HTMLElement | null>(null)
+  const detailPanel = useRef<HTMLDivElement | null>(null)
   const detailSeq = useRef(0)
   const requestSeq = useRef(0)
   const [debouncedQuery, setDebouncedQuery] = useState('')
+
+  // Modal containment for the detail drawer: everything except the drawer is
+  // inert while it is open, and Tab cycles inside the drawer (asserted in the
+  // browser spec).
+  useEffect(() => {
+    const background = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '.ep01a-banner, .ep01a-shell > nav, .ep01a-panel > *:not(.ep01a-detail-overlay)',
+      ),
+    )
+    const isOpen = detail.phase !== 'closed'
+    for (const element of background) {
+      if (isOpen) element.setAttribute('inert', '')
+      else element.removeAttribute('inert')
+    }
+    return () => {
+      for (const element of background) element.removeAttribute('inert')
+    }
+  }, [detail.phase])
 
   useEffect(() => {
     const handle = window.setTimeout(() => setDebouncedQuery(query), 120)
@@ -177,10 +197,16 @@ export default function ResourceCatalogPrototype() {
 
   function closeDetail() {
     detailSeq.current += 1 // invalidate any in-flight detail request
-    setDetail({ phase: 'closed' })
     const trigger = detailTrigger.current
-    if (trigger?.isConnected) trigger.focus()
     detailTrigger.current = null
+    setDetail({ phase: 'closed' })
+    if (trigger) {
+      // After the containment effect has removed `inert` from the background,
+      // so the trigger can actually receive focus.
+      window.setTimeout(() => {
+        if (trigger.isConnected) trigger.focus()
+      }, 0)
+    }
   }
 
   const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1
@@ -472,13 +498,40 @@ export default function ResourceCatalogPrototype() {
               event.stopPropagation()
               closeDetail()
             }
+            if (event.key === 'Tab') {
+              const items = detailPanel.current?.querySelectorAll<HTMLElement>(
+                'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex="0"]',
+              )
+              if (!items?.length) {
+                event.preventDefault()
+                detailPanel.current?.focus()
+                return
+              }
+              const first = items[0]
+              const last = items[items.length - 1]
+              if (
+                event.shiftKey &&
+                (document.activeElement === first || document.activeElement === detailPanel.current)
+              ) {
+                event.preventDefault()
+                last.focus()
+              } else if (
+                !event.shiftKey &&
+                (document.activeElement === last || document.activeElement === detailPanel.current)
+              ) {
+                event.preventDefault()
+                first.focus()
+              }
+            }
           }}
         >
           <div
+            ref={detailPanel}
             className="ep01a-detail"
             role="dialog"
             aria-modal="true"
             aria-labelledby="ep01a-detail-title"
+            tabIndex={-1}
           >
             <div className="ep01a-detail-head">
               <h3 id="ep01a-detail-title">{detail.resource.name}</h3>

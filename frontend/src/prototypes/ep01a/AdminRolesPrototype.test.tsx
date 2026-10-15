@@ -88,7 +88,7 @@ test('confirm issues exactly one write with the expected revision and reconciles
       name: 'Confirm role change',
     }),
   )
-  await screen.findByText("Ada Evans's role was changed to Administrator.")
+  await screen.findByText("Ada Evans's role changed to Administrator.")
   const writes = mutations()
   expect(writes).toHaveLength(1)
   expect(writes[0].path).toBe('/api/ep01a/admin/members/m-002/role')

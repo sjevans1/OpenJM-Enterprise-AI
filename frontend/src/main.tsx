@@ -5,8 +5,15 @@ import { applyBranding, loadPublicConfig } from './branding'
 import './styles.css'
 
 // Apply white-label/release metadata before first paint when it is available.
-// The fetch is best-effort and never blocks rendering.
-void loadPublicConfig().then((config) => applyBranding(config))
+// The fetch is best-effort and never blocks rendering. The prototype route
+// skips it entirely, so a manual prototype session issues no non-mock API
+// traffic at all.
+const params = new URLSearchParams(window.location.search)
+const prototypeRoute = import.meta.env.DEV && params.get('prototype') === 'ep01a'
+if (!prototypeRoute) {
+  void loadPublicConfig().then((config) => applyBranding(config))
+}
+const root = ReactDOM.createRoot(document.getElementById('root')!)
 
 // EP-01A prototype surfaces are a development/test-only tool. `import.meta.env.DEV`
 // is statically false in a production build, so this whole branch — including
@@ -14,9 +21,6 @@ void loadPublicConfig().then((config) => applyBranding(config))
 // compiled away: a release build cannot expose the prototype even when
 // `?prototype=ep01a` is requested. scripts/ep01a-production-gate.mjs verifies
 // this against the built output and the production preview server.
-const params = new URLSearchParams(window.location.search)
-const root = ReactDOM.createRoot(document.getElementById('root')!)
-
 // Bounded retry: a transient dev-server response (e.g. a re-optimization or an
 // aborted module request under parallel test workers) must not leave the
 // loading fallback up forever.
