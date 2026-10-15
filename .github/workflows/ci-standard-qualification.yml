@@ -1,0 +1,14 @@
+# Authenticated CI tier identity for framework v1.8.3+.
+# Manually dispatch on the frozen candidate ref; no automatic duplicate FULL runs.
+name: OpenJM STANDARD qualification
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      suite: standard

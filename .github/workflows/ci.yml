@@ -32,6 +32,12 @@ on:
       - 'SECURITY.md'
   push:
     branches: [main]
+  # Reusable entrypoint for distinct, authoritative qualification run identities.
+  workflow_call:
+    inputs:
+      suite:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       suite:
@@ -89,11 +95,11 @@ jobs:
         run: ruff check . --select E9,F63,F7,F82
 
       - name: Fast backend regression (pull requests)
-        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'fast') }}
+        if: ${{ github.event_name == 'pull_request' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.suite == 'fast') }}
         run: python -m pytest -q --tb=short --maxfail=3 --ignore=tests/test_upload_source_name_integration.py
 
       - name: Full backend regression (STANDARD/FULL)
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
+        if: ${{ github.event_name == 'push' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
         # The upload/source integration test runs a real isolated server and may
         # need a public embedding-model download. It never uses local Gemma.
         run: python -m pytest -q --tb=short --maxfail=3
@@ -101,7 +107,7 @@ jobs:
       - name: Record validation tier
         if: success()
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] || { [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.suite }}" = "fast" ]; }; then
+          if [ "${{ github.event_name }}" = "pull_request" ] || { { [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "workflow_call" ]; } && [ "${{ inputs.suite }}" = "fast" ]; }; then
             echo "Backend: FAST deterministic tests (real embedding integration deferred)." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Backend: STANDARD/FULL repository pytest suite, including isolated embedding integration." >> "$GITHUB_STEP_SUMMARY"
@@ -111,7 +117,7 @@ jobs:
   # CI-3L STANDARD: dependency/lock reproducibility is required before
   # candidate freeze, but not on every small pull-request iteration.
   rel1_lock_drift_gate:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
+    if: ${{ github.event_name == 'push' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && (inputs.suite == 'standard' || inputs.suite == 'full')) }}
     name: REL1 / lock drift gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -159,7 +165,7 @@ jobs:
   # CI-3L FULL: release/offline packaging is expensive acceptance evidence
   # and runs only for an explicitly frozen FULL candidate.
   rel1_offline_bundle_gate:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'full' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.suite == 'full' }}
     name: REL1 / offline bundle + registry-blocked acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 30
