@@ -15,7 +15,7 @@
  * useful operator presentation, and every payload is already projected
  * server-side (no content, no prompts, no secrets).
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -74,7 +74,10 @@ const STATUS_CLASS: Record<string, string> = {
 function StatusDot({ status }: { status?: string | null }) {
   const key = (status || 'unknown').toLowerCase()
   return (
-    <span className={`status-dot ${STATUS_CLASS[key] || 'status-disabled'}`} aria-hidden="true" />
+    <span
+      className={`status-dot ${STATUS_CLASS[key] || 'status-disabled'}`}
+      aria-hidden="true"
+    />
   )
 }
 
@@ -98,12 +101,20 @@ function when(value?: string | null): string {
 }
 
 function count(value?: unknown): string {
-  if (typeof value === 'number' && Number.isFinite(value)) return value.toLocaleString()
+  if (typeof value === 'number' && Number.isFinite(value))
+    return value.toLocaleString()
   return '0'
 }
 
 export default function OperatorConsole() {
   const [tab, setTab] = useState<OpsTab>('overview')
+  const sequence = useRef(0)
+  const [updatedAt, setUpdatedAt] = useState<Partial<Record<OpsTab, string>>>(
+    {},
+  )
+  const [fleetOffset, setFleetOffset] = useState(0)
+  const [usageOffset, setUsageOffset] = useState(0)
+  const [auditOffset, setAuditOffset] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
 
@@ -111,29 +122,49 @@ export default function OperatorConsole() {
   const [fleet, setFleet] = useState<PlatformFleet | null>(null)
   const [usage, setUsage] = useState<PlatformTenantUsage[]>([])
   const [audit, setAudit] = useState<PlatformAuditPage | null>(null)
-  const [auditSummary, setAuditSummary] = useState<PlatformAuditSummary | null>(null)
+  const [auditSummary, setAuditSummary] = useState<PlatformAuditSummary | null>(
+    null,
+  )
   const [auditFamily, setAuditFamily] = useState('')
   const [auditDecision, setAuditDecision] = useState('')
-  const [selectedEvent, setSelectedEvent] = useState<PlatformAuditEvent | null>(null)
-  const [diagnostics, setDiagnostics] = useState<PlatformDiagnostics | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<PlatformAuditEvent | null>(
+    null,
+  )
+  const [diagnostics, setDiagnostics] = useState<PlatformDiagnostics | null>(
+    null,
+  )
   const [correlation, setCorrelation] = useState('')
   const [security, setSecurity] = useState<PlatformSecurity | null>(null)
   const [releases, setReleases] = useState<PlatformReleaseView | null>(null)
 
   const fail = useCallback((exc: unknown) => {
-    setError(exc instanceof ApiError ? exc.message : 'The control center request failed.')
+    setError(
+      exc instanceof ApiError
+        ? exc.message
+        : 'The control center request failed.',
+    )
   }, [])
 
   const loadTab = useCallback(
     async (next: OpsTab) => {
+      const request = ++sequence.current
       setBusy(true)
       setError(null)
       try {
-        if (next === 'overview') setOverview(await api.platformOverview())
-        if (next === 'tenants') setFleet(await api.platformFleet())
+        // Apply only the latest request. Slow responses must not overwrite newer
+        // filters or clear another tab's loading/error state.
+        let commit: () => void = () => undefined
+        if (next === 'overview') {
+          const data = await api.platformOverview()
+          commit = () => setOverview(data)
+        }
+        if (next === 'tenants') {
+          const data = await api.platformFleet(fleetOffset)
+          commit = () => setFleet(data)
+        }
         if (next === 'usage') {
-          const payload = await api.platformUsage()
-          setUsage(payload.tenants ?? [])
+          const data = await api.platformUsage(usageOffset)
+          commit = () => setUsage(data.tenants ?? [])
         }
         if (next === 'audit') {
           const [page, summary] = await Promise.all([
@@ -141,32 +172,60 @@ export default function OperatorConsole() {
               family: auditFamily || undefined,
               decision: auditDecision || undefined,
               limit: 25,
+              offset: auditOffset,
             }),
             api.platformAuditSummary(),
           ])
-          setAudit(page)
-          setAuditSummary(summary)
+          commit = () => {
+            setAudit(page)
+            setAuditSummary(summary)
+          }
         }
         if (next === 'diagnostics') {
-          setDiagnostics(
-            await api.platformDiagnostics({ correlation_id: correlation || undefined, limit: 25 }),
-          )
+          const data = await api.platformDiagnostics({
+            correlation_id: correlation || undefined,
+            limit: 25,
+          })
+          commit = () => setDiagnostics(data)
         }
-        if (next === 'security') setSecurity(await api.platformSecurity())
-        if (next === 'releases') setReleases(await api.platformReleases())
+        if (next === 'security') {
+          const data = await api.platformSecurity()
+          commit = () => setSecurity(data)
+        }
+        if (next === 'releases') {
+          const data = await api.platformReleases()
+          commit = () => setReleases(data)
+        }
+        if (request === sequence.current) {
+          commit()
+          setUpdatedAt((current) => ({
+            ...current,
+            [next]: new Date().toLocaleTimeString(),
+          }))
+        }
       } catch (exc) {
-        fail(exc)
+        if (request === sequence.current) fail(exc)
       } finally {
-        setBusy(false)
+        if (request === sequence.current) setBusy(false)
       }
     },
-    [auditDecision, auditFamily, correlation, fail],
+    [
+      auditDecision,
+      auditFamily,
+      auditOffset,
+      correlation,
+      fail,
+      fleetOffset,
+      usageOffset,
+    ],
   )
 
   useEffect(() => {
     void loadTab(tab)
-    // Reload when a filter the tab uses changes.
-  }, [tab, auditFamily, auditDecision, correlation, loadTab])
+    return () => {
+      sequence.current += 1
+    }
+  }, [tab, loadTab])
 
   return (
     <section className="ops-surface" aria-label="OpenJM Control Center">
@@ -179,6 +238,9 @@ export default function OperatorConsole() {
           <ShieldCheck size={14} />
           Platform operator
         </span>
+        <button type="button" disabled={busy} onClick={() => void loadTab(tab)}>
+          Refresh view
+        </button>
       </header>
 
       <nav className="admin-tabs" aria-label="Control center sections">
@@ -195,28 +257,78 @@ export default function OperatorConsole() {
         ))}
       </nav>
 
+      <p className="admin-help" role="status">
+        {busy
+          ? 'Updating view…'
+          : updatedAt[tab]
+            ? `Last successful refresh: ${updatedAt[tab]}. Use Refresh view for current status.`
+            : 'This view has not loaded successfully.'}
+      </p>
       {error && (
         <p className="auth-error" role="alert">
           {error}
         </p>
       )}
 
-      {tab === 'overview' && (
-        <OverviewPanel data={overview} busy={busy} />
+      {tab === 'overview' && <OverviewPanel data={overview} busy={busy} />}
+      {tab === 'tenants' && (
+        <>
+          <TenantsPanel data={fleet} busy={busy} />
+          <PageControls
+            offset={fleetOffset}
+            limit={50}
+            hasMore={fleet?.has_more ?? false}
+            busy={busy}
+            onPage={setFleetOffset}
+            label="Tenant fleet"
+          />
+        </>
       )}
-      {tab === 'tenants' && <TenantsPanel data={fleet} busy={busy} />}
-      {tab === 'usage' && <UsagePanel tenants={usage} busy={busy} />}
+      {tab === 'usage' && (
+        <>
+          <UsagePanel tenants={usage} busy={busy} />
+          <PageControls
+            offset={usageOffset}
+            limit={50}
+            hasMore={usage.length === 50}
+            busy={busy}
+            onPage={setUsageOffset}
+            label="Usage"
+          />
+        </>
+      )}
       {tab === 'audit' && (
-        <AuditPanel
-          page={audit}
-          summary={auditSummary}
-          family={auditFamily}
-          decision={auditDecision}
-          onFamily={setAuditFamily}
-          onDecision={setAuditDecision}
-          onSelect={setSelectedEvent}
-          selected={selectedEvent}
-        />
+        <>
+          <AuditPanel
+            page={audit}
+            summary={auditSummary}
+            family={auditFamily}
+            decision={auditDecision}
+            onFamily={(value) => {
+              setAuditFamily(value)
+              setAuditOffset(0)
+              setSelectedEvent(null)
+            }}
+            onDecision={(value) => {
+              setAuditDecision(value)
+              setAuditOffset(0)
+              setSelectedEvent(null)
+            }}
+            onSelect={setSelectedEvent}
+            selected={selectedEvent}
+          />
+          <PageControls
+            offset={auditOffset}
+            limit={25}
+            hasMore={audit?.has_more ?? false}
+            busy={busy}
+            onPage={(offset) => {
+              setAuditOffset(offset)
+              setSelectedEvent(null)
+            }}
+            label="Audit"
+          />
+        </>
       )}
       {tab === 'diagnostics' && (
         <DiagnosticsPanel
@@ -235,8 +347,19 @@ export default function OperatorConsole() {
 // Overview
 // ---------------------------------------------------------------------------
 
-function OverviewPanel({ data, busy }: { data: PlatformOverview | null; busy: boolean }) {
-  if (!data) return <p className="admin-help">{busy ? 'Loading overview…' : 'No overview available.'}</p>
+function OverviewPanel({
+  data,
+  busy,
+}: {
+  data: PlatformOverview | null
+  busy: boolean
+}) {
+  if (!data)
+    return (
+      <p className="admin-help">
+        {busy ? 'Loading overview…' : 'No overview available.'}
+      </p>
+    )
   const release = data.release as Record<string, string | null>
   return (
     <>
@@ -247,29 +370,36 @@ function OverviewPanel({ data, busy }: { data: PlatformOverview | null; busy: bo
             <StatusLabel status={data.ready ? 'healthy' : 'error'} />
           </div>
           <p className="admin-help">
-            {data.components.database?.status === 'ok' ? 'Database reachable. ' : ''}
-            {data.components.migrations?.drift ? 'Schema drift detected.' : 'Schema at head.'}
+            {data.components.database?.status === 'ok'
+              ? 'Database reachable. '
+              : ''}
+            {data.components.migrations?.drift
+              ? 'Schema drift detected.'
+              : 'Schema at head.'}
           </p>
         </div>
         <div className="ops-card">
           <div className="ops-card-label">Release</div>
           <div className="ops-card-value">{release.version || 'unknown'}</div>
           <p className="admin-help">
-            {release.release_train || 'n/a'} · {release.release_id || 'n/a'} · {data.profile}
+            {release.release_train || 'n/a'} · {release.release_id || 'n/a'} ·{' '}
+            {data.profile}
           </p>
         </div>
         <div className="ops-card">
           <div className="ops-card-label">Model</div>
           <div className="ops-card-value">{data.model.model_name}</div>
           <p className="admin-help">
-            {data.model.provider_mode} · fallback {humanise(data.model.fallback_policy || 'n/a')}
+            {data.model.provider_mode} · fallback{' '}
+            {humanise(data.model.fallback_policy || 'n/a')}
           </p>
         </div>
         <div className="ops-card">
           <div className="ops-card-label">Tenants</div>
           <div className="ops-card-value">{count(data.fleet.tenants)}</div>
           <p className="admin-help">
-            {count(data.fleet.suspended)} suspended · {count(data.fleet.operators)} operators
+            {count(data.fleet.suspended)} suspended ·{' '}
+            {count(data.fleet.operators)} operators
           </p>
         </div>
       </div>
@@ -279,13 +409,16 @@ function OverviewPanel({ data, busy }: { data: PlatformOverview | null; busy: bo
           <Siren size={16} /> Findings
         </h2>
         {data.alerts.length === 0 ? (
-          <p className="admin-help">No operator findings. All reported components are healthy.</p>
+          <p className="admin-help">
+            No operator findings. All reported components are healthy.
+          </p>
         ) : (
           <ul className="admin-list">
             {data.alerts.map((alert) => (
               <li key={alert.code}>
-                <AlertTriangle size={14} /> <strong>{humanise(alert.code)}</strong> ·{' '}
-                {alert.severity} · {alert.detail}
+                <AlertTriangle size={14} />{' '}
+                <strong>{humanise(alert.code)}</strong> · {alert.severity} ·{' '}
+                {alert.detail}
               </li>
             ))}
           </ul>
@@ -324,13 +457,19 @@ function OverviewPanel({ data, busy }: { data: PlatformOverview | null; busy: bo
 function describeComponent(component: Record<string, unknown>): string {
   const parts: string[] = []
   if (typeof component.backend === 'string') parts.push(component.backend)
-  if (typeof component.revision === 'string') parts.push(`rev ${component.revision}`)
+  if (typeof component.revision === 'string')
+    parts.push(`rev ${component.revision}`)
   if (typeof component.head === 'string') parts.push(`head ${component.head}`)
-  if (typeof component.free_mb === 'number') parts.push(`${component.free_mb} MB free`)
-  if (typeof component.active_schedules === 'number') parts.push(`${component.active_schedules} schedules`)
-  if (typeof component.instances === 'number') parts.push(`${component.instances} connectors`)
-  if (typeof component.pending === 'number') parts.push(`${component.pending} pending`)
-  if (typeof component.latency_ms === 'number') parts.push(`${component.latency_ms} ms`)
+  if (typeof component.free_mb === 'number')
+    parts.push(`${component.free_mb} MB free`)
+  if (typeof component.active_schedules === 'number')
+    parts.push(`${component.active_schedules} schedules`)
+  if (typeof component.instances === 'number')
+    parts.push(`${component.instances} connectors`)
+  if (typeof component.pending === 'number')
+    parts.push(`${component.pending} pending`)
+  if (typeof component.latency_ms === 'number')
+    parts.push(`${component.latency_ms} ms`)
   if (typeof component.detail === 'string') parts.push(component.detail)
   return parts.join(' · ') || '—'
 }
@@ -339,9 +478,20 @@ function describeComponent(component: Record<string, unknown>): string {
 // Tenants
 // ---------------------------------------------------------------------------
 
-function TenantsPanel({ data, busy }: { data: PlatformFleet | null; busy: boolean }) {
+function TenantsPanel({
+  data,
+  busy,
+}: {
+  data: PlatformFleet | null
+  busy: boolean
+}) {
   const [needle, setNeedle] = useState('')
-  if (!data) return <p className="admin-help">{busy ? 'Loading fleet…' : 'No fleet available.'}</p>
+  if (!data)
+    return (
+      <p className="admin-help">
+        {busy ? 'Loading fleet…' : 'No fleet available.'}
+      </p>
+    )
   const filtered = data.tenants.filter((tenant) =>
     `${tenant.name} ${tenant.slug} ${tenant.status}`
       .toLowerCase()
@@ -353,7 +503,7 @@ function TenantsPanel({ data, busy }: { data: PlatformFleet | null; busy: boolea
         <Building2 size={16} /> Tenant fleet ({count(data.total)})
       </h2>
       <label className="admin-form">
-        <span>Search</span>
+        <span>Search this page</span>
         <input
           type="search"
           value={needle}
@@ -385,7 +535,9 @@ function TenantsPanel({ data, busy }: { data: PlatformFleet | null; busy: boolea
           ))}
         </tbody>
       </table>
-      {filtered.length === 0 && <p className="admin-help">No tenant matches that search.</p>}
+      {filtered.length === 0 && (
+        <p className="admin-help">No tenant matches that search.</p>
+      )}
     </div>
   )
 }
@@ -394,7 +546,13 @@ function TenantsPanel({ data, busy }: { data: PlatformFleet | null; busy: boolea
 // Usage
 // ---------------------------------------------------------------------------
 
-function UsagePanel({ tenants, busy }: { tenants: PlatformTenantUsage[]; busy: boolean }) {
+function UsagePanel({
+  tenants,
+  busy,
+}: {
+  tenants: PlatformTenantUsage[]
+  busy: boolean
+}) {
   if (!busy && tenants.length === 0) {
     return <p className="admin-help">No aggregate usage recorded yet.</p>
   }
@@ -404,7 +562,8 @@ function UsagePanel({ tenants, busy }: { tenants: PlatformTenantUsage[]; busy: b
         <Activity size={16} /> Cross-tenant usage
       </h2>
       <p className="admin-help">
-        Aggregate metering only. No prompt, message or response content is available here.
+        Aggregate metering only. No prompt, message or response content is
+        available here.
       </p>
       <table className="admin-table">
         <thead>
@@ -418,7 +577,7 @@ function UsagePanel({ tenants, busy }: { tenants: PlatformTenantUsage[]; busy: b
         </thead>
         <tbody>
           {tenants.map((row) => (
-            <tr key={String(row.tenant_id ?? row.slug ?? Math.random())}>
+            <tr key={String(row.tenant_id ?? row.slug ?? 'unknown')}>
               <td>{String(row.tenant_id ?? 'n/a')}</td>
               <td>{count(row.requests)}</td>
               <td>{count(row.input_tokens)}</td>
@@ -475,12 +634,16 @@ function AuditPanel({
           <div className="ops-card">
             <div className="ops-card-label">Audit records</div>
             <div className="ops-card-value">{count(summary.total)}</div>
-            <p className="admin-help">Persisted governance and security trail.</p>
+            <p className="admin-help">
+              Persisted governance and security trail.
+            </p>
           </div>
           <div className="ops-card">
             <div className="ops-card-label">Denied decisions</div>
             <div className="ops-card-value">{count(summary.denied)}</div>
-            <p className="admin-help">Authorization decisions recorded as deny.</p>
+            <p className="admin-help">
+              Authorization decisions recorded as deny.
+            </p>
           </div>
         </div>
       )}
@@ -492,7 +655,10 @@ function AuditPanel({
         <div className="admin-form ops-filters">
           <label>
             <span>Family</span>
-            <select value={family} onChange={(event) => onFamily(event.target.value)}>
+            <select
+              value={family}
+              onChange={(event) => onFamily(event.target.value)}
+            >
               <option value="">All families</option>
               {AUDIT_FAMILIES.map((item) => (
                 <option key={item} value={item}>
@@ -503,7 +669,10 @@ function AuditPanel({
           </label>
           <label>
             <span>Decision</span>
-            <select value={decision} onChange={(event) => onDecision(event.target.value)}>
+            <select
+              value={decision}
+              onChange={(event) => onDecision(event.target.value)}
+            >
               <option value="">All decisions</option>
               <option value="allow">allow</option>
               <option value="deny">deny</option>
@@ -529,15 +698,25 @@ function AuditPanel({
               </thead>
               <tbody>
                 {page.events.map((event) => (
-                  <tr key={event.id} className={selected?.id === event.id ? 'selected' : undefined}>
+                  <tr
+                    key={event.id}
+                    className={
+                      selected?.id === event.id ? 'selected' : undefined
+                    }
+                  >
                     <td>
-                      <button className="link-button" onClick={() => onSelect(event)}>
+                      <button
+                        className="link-button"
+                        onClick={() => onSelect(event)}
+                      >
                         {when(event.created_at)}
                       </button>
                     </td>
                     <td>{event.action}</td>
                     <td>
-                      <StatusLabel status={event.decision === 'deny' ? 'error' : 'ok'} />{' '}
+                      <StatusLabel
+                        status={event.decision === 'deny' ? 'error' : 'ok'}
+                      />{' '}
                       {event.decision}
                     </td>
                     <td>{event.tenant_id}</td>
@@ -547,8 +726,8 @@ function AuditPanel({
               </tbody>
             </table>
             <p className="admin-note">
-              Showing {page.events.length} of {count(page.total)} records (page size capped
-              server-side at {page.limit}).
+              Showing {page.events.length} of {count(page.total)} records (page
+              size capped server-side at {page.limit}).
             </p>
           </>
         )}
@@ -610,8 +789,8 @@ function DiagnosticsPanel({
           <Siren size={16} /> Diagnostics
         </h2>
         <p className="admin-help">
-          Runtime telemetry and safe metadata. Prompt, message and document bodies are never
-          available here, and neither is raw SQL.
+          Runtime telemetry and safe metadata. Prompt, message and document
+          bodies are never available here, and neither is raw SQL.
         </p>
         <label className="admin-form">
           <span>Follow a correlation id</span>
@@ -644,13 +823,23 @@ function DiagnosticsPanel({
                   <td>{when(trace.created_at)}</td>
                   <td>{trace.tool_name}</td>
                   <td>
-                    <StatusLabel status={trace.status === 'failed' ? 'error' : 'ok'} />{' '}
+                    <StatusLabel
+                      status={trace.status === 'failed' ? 'error' : 'ok'}
+                    />{' '}
                     {trace.status}
                   </td>
-                  <td>{trace.duration_ms !== null && trace.duration_ms !== undefined ? `${trace.duration_ms} ms` : '—'}</td>
+                  <td>
+                    {trace.duration_ms !== null &&
+                    trace.duration_ms !== undefined
+                      ? `${trace.duration_ms} ms`
+                      : '—'}
+                  </td>
                   <td>{trace.error_class || '—'}</td>
                   <td>
-                    <button className="link-button" onClick={() => onCorrelation(trace.request_id)}>
+                    <button
+                      className="link-button"
+                      onClick={() => onCorrelation(trace.request_id)}
+                    >
                       {trace.request_id.slice(0, 8)}
                     </button>
                   </td>
@@ -667,16 +856,18 @@ function DiagnosticsPanel({
           <ul className="admin-list">
             {data.failure_categories.map((row) => (
               <li key={`${row.tool_name}-${row.error_class}`}>
-                <strong>{row.tool_name}</strong> · {row.error_class} · {count(row.count)}
+                <strong>{row.tool_name}</strong> · {row.error_class} ·{' '}
+                {count(row.count)}
               </li>
             ))}
           </ul>
         )}
 
         <div className="admin-note">
-          <strong>Operational logs.</strong> {data.operational_logs.guidance} (persistence:{' '}
-          {data.operational_logs.persistence}, format: {data.operational_logs.format}, aggregated
-          into the metadata database: {data.operational_logs.aggregated_into_metadata_db ? 'yes' : 'no'}.)
+          <strong>Operational logs.</strong> {data.operational_logs.guidance}{' '}
+          (persistence: {data.operational_logs.persistence}, format:{' '}
+          {data.operational_logs.format}, aggregated into the metadata database:{' '}
+          {data.operational_logs.aggregated_into_metadata_db ? 'yes' : 'no'}.)
         </div>
       </div>
     </>
@@ -687,19 +878,34 @@ function DiagnosticsPanel({
 // Security
 // ---------------------------------------------------------------------------
 
-function SecurityPanel({ data, busy }: { data: PlatformSecurity | null; busy: boolean }) {
-  if (!data) return <p className="admin-help">{busy ? 'Loading security view…' : 'No security data.'}</p>
+function SecurityPanel({
+  data,
+  busy,
+}: {
+  data: PlatformSecurity | null
+  busy: boolean
+}) {
+  if (!data)
+    return (
+      <p className="admin-help">
+        {busy ? 'Loading security view…' : 'No security data.'}
+      </p>
+    )
   return (
     <>
       <div className="ops-cards">
         <div className="ops-card">
           <div className="ops-card-label">Platform operators</div>
           <div className="ops-card-value">{count(data.operator_count)}</div>
-          <p className="admin-help">Explicit capability grants. Never derived from a tenant role.</p>
+          <p className="admin-help">
+            Explicit capability grants. Never derived from a tenant role.
+          </p>
         </div>
         <div className="ops-card">
           <div className="ops-card-label">Active content delegations</div>
-          <div className="ops-card-value">{count(data.active_content_delegations)}</div>
+          <div className="ops-card-value">
+            {count(data.active_content_delegations)}
+          </div>
           <p className="admin-help">
             {count(data.expiring_delegations)} expiring within 7 days.
           </p>
@@ -734,7 +940,9 @@ function SecurityPanel({ data, busy }: { data: PlatformSecurity | null; busy: bo
                   <td>
                     <StatusLabel status={operator.status} />
                   </td>
-                  <td>{operator.expires_at ? when(operator.expires_at) : 'none'}</td>
+                  <td>
+                    {operator.expires_at ? when(operator.expires_at) : 'none'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -766,7 +974,9 @@ function SecurityPanel({ data, busy }: { data: PlatformSecurity | null; busy: bo
                   <td>{row.principal_id}</td>
                   <td>{row.scope}</td>
                   <td>
-                    <StatusLabel status={row.effective ? 'active' : 'disabled'} />
+                    <StatusLabel
+                      status={row.effective ? 'active' : 'disabled'}
+                    />
                   </td>
                   <td>{row.expires_at ? when(row.expires_at) : 'none'}</td>
                 </tr>
@@ -786,8 +996,8 @@ function SecurityPanel({ data, busy }: { data: PlatformSecurity | null; busy: bo
           <ul className="admin-list">
             {data.recent_privileged_actions.map((event) => (
               <li key={event.id}>
-                {when(event.created_at)} · <strong>{event.action}</strong> · {event.decision} ·{' '}
-                {event.tenant_id}
+                {when(event.created_at)} · <strong>{event.action}</strong> ·{' '}
+                {event.decision} · {event.tenant_id}
               </li>
             ))}
           </ul>
@@ -814,8 +1024,19 @@ function SecurityPanel({ data, busy }: { data: PlatformSecurity | null; busy: bo
 // Releases
 // ---------------------------------------------------------------------------
 
-function ReleasesPanel({ data, busy }: { data: PlatformReleaseView | null; busy: boolean }) {
-  if (!data) return <p className="admin-help">{busy ? 'Loading releases…' : 'No release data.'}</p>
+function ReleasesPanel({
+  data,
+  busy,
+}: {
+  data: PlatformReleaseView | null
+  busy: boolean
+}) {
+  if (!data)
+    return (
+      <p className="admin-help">
+        {busy ? 'Loading releases…' : 'No release data.'}
+      </p>
+    )
   const release = data.release as Record<string, string | null>
   return (
     <>
@@ -857,7 +1078,9 @@ function ReleasesPanel({ data, busy }: { data: PlatformReleaseView | null; busy:
                 <td>{deployment.migration_revision || 'n/a'}</td>
                 <td>{deployment.migration_head || 'n/a'}</td>
                 <td>
-                  <StatusLabel status={deployment.migration_drift ? 'degraded' : 'ok'} />
+                  <StatusLabel
+                    status={deployment.migration_drift ? 'degraded' : 'ok'}
+                  />
                 </td>
                 <td>{deployment.model_name}</td>
               </tr>
@@ -865,10 +1088,46 @@ function ReleasesPanel({ data, busy }: { data: PlatformReleaseView | null; busy:
           </tbody>
         </table>
         <p className="admin-note">
-          A single deployment is shown because only one exists today. No synthetic fleet is
-          rendered.
+          A single deployment is shown because only one exists today. No
+          synthetic fleet is rendered.
         </p>
       </div>
     </>
+  )
+}
+
+function PageControls({
+  offset,
+  limit,
+  hasMore,
+  busy,
+  onPage,
+  label,
+}: {
+  offset: number
+  limit: number
+  hasMore: boolean
+  busy: boolean
+  onPage: (offset: number) => void
+  label: string
+}) {
+  return (
+    <nav className="admin-toolbar" aria-label={`${label} pages`}>
+      <button
+        type="button"
+        disabled={busy || offset === 0}
+        onClick={() => onPage(Math.max(0, offset - limit))}
+      >
+        Previous page
+      </button>
+      <span>Page {Math.floor(offset / limit) + 1}</span>
+      <button
+        type="button"
+        disabled={busy || !hasMore}
+        onClick={() => onPage(offset + limit)}
+      >
+        Next page
+      </button>
+    </nav>
   )
 }

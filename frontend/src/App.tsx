@@ -50,6 +50,7 @@ import OperationsPanel from './OperationsPanel'
 import OperatorConsole from './OperatorConsole'
 import AdminPanel from './AdminPanel'
 import ArtifactCard from './ArtifactCard'
+import { useConfirmation } from './ConfirmAction'
 
 const CALLBACK_PATH = '/auth/callback'
 
@@ -379,7 +380,24 @@ function displayMessageContent(message: Message): string {
 }
 
 export default function App() {
+  const confirmation = useConfirmation()
+  const [adminDirty, setAdminDirty] = useState(false)
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  const [knowledgeNotice, setKnowledgeNotice] = useState<string | null>(null)
+  const [dataNotice, setDataNotice] = useState<string | null>(null)
+  const [deletingDocument, setDeletingDocument] = useState(false)
+  const sourceActionInFlight = useRef(false)
   const [view, setView] = useState<View>('chat')
+  const runNavigation = (action: () => void) => {
+    const leave = () => { setMobileNavigationOpen(false); action() }
+    if (view === 'admin' && adminDirty) {
+      confirmation.request({ title: 'Discard unsaved administration changes?', description: 'Your role or policy edits have not been saved. Stay here to review them, or discard them to leave Administration.', confirmLabel: 'Discard changes and leave', onConfirm: async () => { setAdminDirty(false); leave() } })
+    } else leave()
+  }
+  const navigate = (next: View) => {
+    if (next !== view) runNavigation(() => setView(next))
+    else setMobileNavigationOpen(false)
+  }
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -395,7 +413,7 @@ export default function App() {
   const [dataBusyId, setDataBusyId] = useState<string | null>(null)
   const [creatingSource, setCreatingSource] = useState(false)
   const [sourceName, setSourceName] = useState('')
-  const [sourceEngine, setSourceEngine] = useState<'sqlite' | 'postgresql'>('sqlite')
+  const [sourceEngine, setSourceEngine] = useState<'sqlite' | 'postgresql'>('postgresql')
   const [sourceUri, setSourceUri] = useState('')
   const [reports, setReports] = useState<SavedReportSummary[]>([])
   const [activeReport, setActiveReport] = useState<SavedReportDetail | null>(null)
@@ -439,6 +457,10 @@ export default function App() {
     authState.status === 'dev' ||
     (authState.status === 'authenticated' &&
       authState.principal.permissions.includes('reports:write'))
+  const hasPermission = (permission: string) => authState.status === 'dev' || (authState.status === 'authenticated' && authState.principal.permissions.includes(permission))
+  const canUploadKnowledge = hasPermission('knowledge:write')
+  const canDeleteKnowledge = hasPermission('knowledge:delete')
+  const canManageData = hasPermission('data:write')
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -641,12 +663,14 @@ export default function App() {
   }
 
   const uploadDocument = async (file?: File) => {
-    if (!file || uploading) return
+    if (!file || uploading || !canUploadKnowledge) return
+    setKnowledgeNotice(null)
     setUploading(true)
     setUploadingName(file.name)
     setKnowledgeError(null)
     try {
       await api.uploadDocument(file)
+      setKnowledgeNotice(`${file.name} has been indexed. ${nav.administration ? 'Review its classification and sharing in Administration → Data Access.' : 'Ask your workspace administrator to review its classification and sharing.'}`)
       await loadDocuments()
     } catch (error) {
       setKnowledgeError(error instanceof Error ? error.message : 'Upload failed')
@@ -658,40 +682,48 @@ export default function App() {
   }
 
   const deleteDocument = async (id: string) => {
+    setDeletingDocument(true)
+    setKnowledgeNotice(null)
     setKnowledgeError(null)
     try {
       await api.deleteDocument(id)
+      setDocuments((current) => current.filter((document) => document.id !== id))
+      setKnowledgeNotice('Document deleted.')
       await loadDocuments()
     } catch (error) {
       setKnowledgeError(error instanceof Error ? error.message : 'Delete failed')
-    }
+      throw error
+    } finally { setDeletingDocument(false) }
   }
 
   const createDataSource = async (event: FormEvent) => {
     event.preventDefault()
-    if (!sourceName.trim() || !sourceUri.trim() || creatingSource) return
-
+    if (!sourceName.trim() || !sourceUri.trim() || creatingSource || !canManageData) return
     setCreatingSource(true)
     setDataError(null)
+    setDataNotice(null)
+    let created: DataSourceRecord | null = null
     try {
-      const created = await api.createDataSource({
-        name: sourceName.trim(),
-        engine: sourceEngine,
-        connection_uri: sourceUri.trim(),
-        enabled: true,
+      created = await api.createDataSource({
+        name: sourceName.trim(), engine: sourceEngine, connection_uri: sourceUri.trim(), enabled: false,
       })
-      const test = await api.testDataSource(created.id)
-      if (test.ok) {
-        await api.refreshDataSource(created.id)
-      } else {
-        setDataError(test.detail)
-      }
+      // Creation has succeeded: clear the form before testing, so a failed test
+      // cannot invite a duplicate POST with the same credentials.
       setSourceName('')
       setSourceUri('')
-      await loadDataSources()
+      setDataSources((current) => [created!, ...current.filter((source) => source.id !== created!.id)])
+      const test = await api.testDataSource(created.id)
+      if (!test.ok) {
+        setDataError(`${created.name} was saved but its connection test failed. ${test.detail} Use Test connection on the saved source to retry.`)
+      } else {
+        await api.refreshDataSource(created.id)
+      }
+      setDataNotice(`${created.name} is saved and disabled. Review its access policy, then enable it when it is ready for questions.`)
     } catch (error) {
-      setDataError(error instanceof Error ? error.message : 'Unable to connect data source')
+      const detail = error instanceof Error ? error.message : 'Connection setup failed'
+      setDataError(created ? `${created.name} was saved, but verification did not finish. Use its Test connection or Refresh schema action to retry. ${detail}` : detail)
     } finally {
+      if (created) await loadDataSources()
       setCreatingSource(false)
     }
   }
@@ -700,27 +732,55 @@ export default function App() {
     sourceId: string,
     action: 'test' | 'refresh' | 'toggle' | 'delete',
     enabled?: boolean,
+    propagateFailure = false,
   ) => {
+    if (sourceActionInFlight.current) return
+    sourceActionInFlight.current = true
+    setDataNotice(null)
     setDataBusyId(sourceId)
     setDataError(null)
     try {
       if (action === 'test') {
         const result = await api.testDataSource(sourceId)
         if (!result.ok) setDataError(result.detail)
+        else setDataNotice('Connection verified successfully.')
       } else if (action === 'refresh') {
         await api.refreshDataSource(sourceId)
+        setDataNotice('Schema refreshed successfully.')
       } else if (action === 'toggle') {
         await api.setDataSourceEnabled(sourceId, Boolean(enabled))
+        setDataNotice(enabled ? 'Source enabled for authorized questions.' : 'Source disabled.')
       } else if (action === 'delete') {
         await api.deleteDataSource(sourceId)
+        setDataNotice('Data source removed. The external database was not changed.')
       }
       await loadDataSources()
     } catch (error) {
       setDataError(error instanceof Error ? error.message : 'Data source action failed')
+      if (propagateFailure) throw error
     } finally {
       setDataBusyId(null)
+      sourceActionInFlight.current = false
     }
   }
+
+  const reviewDocumentRemoval = (document: DocumentRecord) => confirmation.request({
+    title: 'Delete document?',
+    description: `Delete ${document.original_name} from Knowledge. It will no longer be available as evidence and reports using it may become unavailable.`,
+    confirmLabel: 'Confirm delete document',
+    onConfirm: () => deleteDocument(document.id),
+  })
+
+  const reviewSourceChange = (source: DataSourceRecord, remove = false) => confirmation.request({
+    title: remove ? 'Remove data source?' : source.enabled ? 'Disable data source?' : 'Enable data source?',
+    description: remove
+      ? `Remove ${source.name} and its saved connection from this workspace. The external database will remain intact. Reports using this source may become unavailable.`
+      : `${source.name}: ${source.enabled
+        ? 'This source will no longer be available for new questions.'
+        : 'This source will become available to users allowed by its access policy. Review its classification and sharing before enabling.'}`,
+    confirmLabel: remove ? 'Confirm remove source' : source.enabled ? 'Confirm disable source' : 'Confirm enable source',
+    onConfirm: () => runSourceAction(source.id, remove ? 'delete' : 'toggle', !source.enabled, true),
+  })
 
   const saveReport = async (message: Message, title?: string) => {
     if (reportBusyId || !message.evidence?.length) return
@@ -1018,6 +1078,7 @@ export default function App() {
       await loadReports()
     } catch (error) {
       setReportError(error instanceof Error ? error.message : 'Unable to delete report')
+      throw error
     } finally {
       setReportBusyId((current) => current === id ? null : current)
     }
@@ -1126,7 +1187,8 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside id="workspace-navigation" className={`sidebar${mobileNavigationOpen ? ' mobile-nav-open' : ''}`}>
+        <button type="button" className="mobile-nav-close" onClick={() => setMobileNavigationOpen(false)}>Close navigation</button>
         <div className="brand">
           <div className="brand-mark">
             <BrainCircuit size={20} />
@@ -1137,7 +1199,7 @@ export default function App() {
           </div>
         </div>
 
-        <button className="new-chat-button" onClick={newConversation}>
+        <button className="new-chat-button" onClick={() => runNavigation(newConversation)}>
           <Plus size={16} />
           New conversation
         </button>
@@ -1146,7 +1208,7 @@ export default function App() {
           {nav.chat && (
             <button
               className={view === 'chat' ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView('chat')}
+              onClick={() => navigate('chat')}
             >
               <MessageSquareText size={17} />
               Chat
@@ -1155,7 +1217,7 @@ export default function App() {
           {nav.knowledge && (
             <button
               className={view === 'knowledge' ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView('knowledge')}
+              onClick={() => navigate('knowledge')}
             >
               <FolderOpen size={17} />
               Knowledge
@@ -1165,7 +1227,7 @@ export default function App() {
           {nav.data && (
             <button
               className={view === 'data' ? 'nav-item active' : 'nav-item'}
-              onClick={() => setView('data')}
+              onClick={() => navigate('data')}
             >
               <Database size={17} />
               Data
@@ -1179,7 +1241,7 @@ export default function App() {
               onClick={() => {
                 reportOpenSequence.current += 1
                 pendingReportId.current = null
-                setView('reports')
+                navigate('reports')
                 setActiveReport(null)
                 clearReportExecution()
                 setReportError(null)
@@ -1200,7 +1262,7 @@ export default function App() {
               <div className="nav-divider" />
               <button
                 className={view === 'admin' ? 'nav-item active' : 'nav-item'}
-                onClick={() => setView('admin')}
+                onClick={() => navigate('admin')}
               >
                 <Settings size={17} />
                 Administration
@@ -1213,7 +1275,7 @@ export default function App() {
               <div className="nav-divider" />
               <button
                 className={view === 'platform' ? 'nav-item active' : 'nav-item'}
-                onClick={() => setView('platform')}
+                onClick={() => navigate('platform')}
               >
                 <Radar size={17} />
                 OpenJM Control Center
@@ -1231,7 +1293,7 @@ export default function App() {
               conversations.map((conversation) => (
                 <button
                   key={conversation.id}
-                  onClick={() => openConversation(conversation.id)}
+                  onClick={() => runNavigation(() => { void openConversation(conversation.id) })}
                   className={
                     activeConversationId === conversation.id
                       ? 'conversation-link selected'
@@ -1263,7 +1325,7 @@ export default function App() {
               </div>
               <button
                 className="icon-button"
-                onClick={() => void endSession()}
+                onClick={() => runNavigation(() => { void endSession() })}
                 disabled={authBusy}
                 aria-label="Sign out"
                 title="Sign out"
@@ -1284,6 +1346,7 @@ export default function App() {
       </aside>
 
       <main className="workspace">
+        <button type="button" className="mobile-nav-toggle" aria-controls="workspace-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen((open) => !open)}>Open navigation</button>
         {view === 'chat' ? (
           <>
             <header className="workspace-header">
@@ -1488,7 +1551,7 @@ export default function App() {
                 <div className="eyebrow">Governed knowledge</div>
                 <h1>Knowledge</h1>
               </div>
-              <button className="primary-action" onClick={() => fileRef.current?.click()} disabled={uploading}>
+              <button className="primary-action" onClick={() => fileRef.current?.click()} disabled={uploading || !canUploadKnowledge}>
                 <Upload size={16} />
                 {uploading ? 'Indexing…' : 'Add document'}
               </button>
@@ -1496,6 +1559,7 @@ export default function App() {
                 ref={fileRef}
                 className="hidden-input"
                 type="file"
+                disabled={uploading || !canUploadKnowledge}
                 accept=".pdf,.docx,.pptx,.txt,.md,.html,.htm"
                 onChange={(event) => uploadDocument(event.target.files?.[0])}
               />
@@ -1507,8 +1571,7 @@ export default function App() {
                   <div className="eyebrow">Evidence layer</div>
                   <h2>Documents available to OpenJM</h2>
                   <p>
-                    Files uploaded here are parsed, chunked and indexed into OpenJM’s governed
-                    knowledge layer. Chat retrieves from this evidence layer automatically.
+                    Add policies, procedures and other business documents here. Use Knowledge mode to ask questions grounded in documents, or Hybrid to combine documents with business data. Answers follow your company’s access policies.
                   </p>
                 </div>
                 <div className="metric-card">
@@ -1517,7 +1580,9 @@ export default function App() {
                 </div>
               </div>
 
-              {knowledgeError && <div className="error-banner">{knowledgeError}</div>}
+              {knowledgeNotice && <p className="admin-success" role="status">{knowledgeNotice}</p>}
+              {uploading && <p role="status">Indexing {uploadingName}… Keep this page open until processing finishes.</p>}
+              {knowledgeError && <div role="alert" className="error-banner">{knowledgeError}</div>}
 
               <div className="document-table">
                 <div className="table-head">
@@ -1531,7 +1596,7 @@ export default function App() {
                     <FileText size={28} />
                     <strong>No documents indexed yet</strong>
                     <span>Add a document to make it available to OpenJM Chat.</span>
-                    <button onClick={() => fileRef.current?.click()} disabled={uploading}>
+                    <button onClick={() => fileRef.current?.click()} disabled={uploading || !canUploadKnowledge}>
                       <Upload size={15} />
                       Add first document
                     </button>
@@ -1554,8 +1619,9 @@ export default function App() {
                       <button
                         className="icon-button danger"
                         title="Delete document"
-                        disabled={uploading}
-                        onClick={() => deleteDocument(document.id)}
+                        aria-label={`Delete document ${document.original_name}`}
+                        disabled={uploading || deletingDocument || !canDeleteKnowledge}
+                        onClick={() => reviewDocumentRemoval(document)}
                       >
                         <Trash2 size={15} />
                       </button>
@@ -1604,7 +1670,7 @@ export default function App() {
                         title="Delete report snapshot"
                         aria-label="Delete report snapshot"
                         disabled={Boolean(reportBusyId)}
-                        onClick={() => deleteReport(report.id)}
+                        onClick={() => confirmation.request({ title: 'Delete saved report?', description: `Delete “${report.title}” and its saved snapshot. This cannot be undone.`, confirmLabel: 'Confirm delete report', onConfirm: () => deleteReport(report.id) })}
                       ><Trash2 size={15} /></button>
                     </div>
                   ))}
@@ -1841,7 +1907,7 @@ export default function App() {
         ) : view === 'operations' ? (
           <OperationsPanel />
         ) : view === 'admin' ? (
-          <AdminPanel />
+          <AdminPanel onDirtyChange={setAdminDirty} principalId={authState.status === 'authenticated' ? authState.principal.principal_id : undefined} actorRole={authState.status === 'authenticated' ? authState.principal.role : 'owner'} />
         ) : (
           <>
             <header className="workspace-header">
@@ -1861,9 +1927,7 @@ export default function App() {
                   <div className="eyebrow">Authorized sources</div>
                   <h2>Connect business data to OpenJM</h2>
                   <p>
-                    OpenJM stores source credentials encrypted, discovers schema metadata, and
-                    executes only validated read-only queries through its governed data layer.
-                    Saved credentials are never returned to the browser.
+                    Connect a supported database using a read-only account, verify its schema, then review who can use it. Ask questions in Data mode, or combine data with company documents in Hybrid mode.
                   </p>
                 </div>
                 <div className="data-metrics">
@@ -1878,13 +1942,15 @@ export default function App() {
                 </div>
               </div>
 
-              {dataError && <div className="error-banner data-error">{dataError}</div>}
+              {dataNotice && <p className="admin-success" role="status">{dataNotice}</p>}
+              {dataError && <div role="alert" className="error-banner data-error">{dataError}</div>}
 
               <form className="source-form" onSubmit={createDataSource}>
+                <fieldset disabled={creatingSource || !canManageData}>
                 <div className="source-form-heading">
                   <div>
                     <strong>Add data source</strong>
-                    <span>SQLite and PostgreSQL are supported in Vertical Slice 2.</span>
+                    <span>PostgreSQL and SQLite are supported. New sources stay disabled until you enable them.</span>
                   </div>
                 </div>
                 <label>
@@ -1907,22 +1973,27 @@ export default function App() {
                   </select>
                 </label>
                 <label className="source-uri-field">
-                  <span>Connection URI</span>
+                  <span id="source-uri-label">Connection URI</span>
                   <input
                     type="password"
+                    aria-labelledby="source-uri-label"
+                    aria-describedby="source-uri-help"
                     autoComplete="new-password"
                     value={sourceUri}
                     onChange={(event) => setSourceUri(event.target.value)}
                     placeholder={sourceEngine === 'sqlite' ? 'sqlite:///data/client.db' : 'postgresql://user:password@host/database'}
                     required
                   />
-                  <small>The URI is encrypted server-side and is not displayed again after submission.</small>
+                  <small id="source-uri-help">The URI is encrypted server-side and is not displayed again after submission.</small>
                 </label>
                 <button className="primary-action source-submit" type="submit" disabled={creatingSource}>
                   <Plus size={16} />
                   {creatingSource ? 'Connecting…' : 'Connect source'}
                 </button>
+                </fieldset>
               </form>
+              <p className="admin-help">SQL Server, ERP-specific and MinIO/S3 integrations are not available in this connection form. A supported integration must be configured before those systems can provide evidence.</p>
+              {nav.administration && <button type="button" className="secondary-action" onClick={() => navigate('admin')}>Manage classification and sharing</button>}
 
               <div className="source-list">
                 {dataSources.length === 0 ? (
@@ -1955,31 +2026,32 @@ export default function App() {
                       <div className="source-actions">
                         <button
                           onClick={() => runSourceAction(source.id, 'test')}
-                          disabled={dataBusyId === source.id}
+                          disabled={dataBusyId !== null || creatingSource || !canManageData}
                         >
                           Test connection
                         </button>
                         <button
                           onClick={() => runSourceAction(source.id, 'refresh')}
-                          disabled={dataBusyId === source.id}
+                          disabled={dataBusyId !== null || creatingSource || !canManageData}
                         >
                           Refresh schema
                         </button>
                         <button
-                          onClick={() => runSourceAction(source.id, 'toggle', !source.enabled)}
-                          disabled={dataBusyId === source.id}
+                          onClick={() => reviewSourceChange(source)}
+                          disabled={dataBusyId !== null || creatingSource || !canManageData}
                         >
                           {source.enabled ? 'Disable' : 'Enable'}
                         </button>
                         <button
                           className="danger-text"
-                          onClick={() => runSourceAction(source.id, 'delete')}
-                          disabled={dataBusyId === source.id}
+                          onClick={() => reviewSourceChange(source, true)}
+                          disabled={dataBusyId !== null || creatingSource || !canManageData}
                         >
                           Delete
                         </button>
                       </div>
 
+                      <p className="admin-help">Last schema refresh: {source.last_schema_refresh ? new Date(source.last_schema_refresh).toLocaleString() : 'Not yet refreshed'}</p>
                       <div className="source-schema">
                         {source.tables.length === 0 ? (
                           <span className="schema-empty">No schema discovered yet. Test the connection and refresh schema.</span>
@@ -2071,6 +2143,7 @@ export default function App() {
           </div>
         )}
       </main>
+      {confirmation.dialog}
     </div>
   )
 }

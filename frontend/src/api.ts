@@ -998,6 +998,10 @@ export const api = {
       ),
 
     dataAccess: () => request<AdminDataAccess>('/api/admin/data-access'),
+    updatePolicy: (kind: 'source' | 'document', id: string, policy: GovernancePolicyInput) =>
+      request<unknown>(`${kind === 'source' ? '/api/data/sources' : '/api/knowledge/documents'}/${encodeURIComponent(id)}/policy`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(policy),
+      }),
 
     preferences: () => request<AdminPreferences>('/api/admin/preferences'),
     updatePreferences: (preferences: Record<string, unknown>) =>
@@ -1058,19 +1062,27 @@ export type AdminStewardInput = {
   scope_id: string
 }
 
+export type GovernancePolicyInput = {
+  classification: string
+  department_id?: string | null
+  clear_department?: boolean
+  tenant_visible: boolean
+  allowed_group_ids: string[]
+}
+
+export type GovernedResource = {
+  id: string
+  name?: string | null
+  title?: string | null
+  classification?: string | null
+  department_id?: string | null
+  tenant_visible?: boolean | null
+  allowed_group_ids: string[]
+}
+
 export type AdminDataAccess = {
-  sources: {
-    id: string
-    name?: string | null
-    classification?: string | null
-    department_id?: string | null
-    tenant_visible?: boolean | null
-  }[]
-  documents: {
-    id: string
-    title?: string | null
-    classification?: string | null
-  }[]
+  sources: GovernedResource[]
+  documents: GovernedResource[]
 }
 
 export type AdminPreferences = {
@@ -1080,8 +1092,11 @@ export type AdminPreferences = {
 export type AdminUsageSummary = {
   tenant_id: string
   usage: Record<string, unknown>
-  plan: unknown | null
-  entitlements: unknown | null
+  plan: { plan_name?: string | null; included_allowance_units?: number | null } | null
+  entitlements: {
+    subscription_status?: string | null
+    allowance?: { available_units: number; consumed_units: number; held_units: number } | null
+  } | null
   note: string
 }
 

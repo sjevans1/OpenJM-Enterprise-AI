@@ -946,6 +946,7 @@ async def set_document_policy(
     document_id: str,
     classification: str,
     department_id: str | None = None,
+    clear_department: bool = False,
     tenant_visible: bool | None = None,
     allowed_group_ids: list[str] | None = None,
 ) -> Document | None:
@@ -957,6 +958,8 @@ async def set_document_policy(
     a foreign document is never revealed and never mutated. Every change is
     audited.
     """
+    if clear_department and department_id is not None:
+        raise ValueError("Choose a department or clear it, not both")
     if not is_known_classification(classification):
         raise ValueError(f"Unsupported classification: {classification!r}")
 
@@ -1018,6 +1021,9 @@ async def set_document_policy(
     if department_id is not None:
         document.department_id = department_id
         audit_metadata["department_id"] = department_id
+    if clear_department:
+        document.department_id = None
+        audit_metadata["department_id"] = None
     if tenant_visible is not None:
         document.tenant_visible = bool(tenant_visible)
         audit_metadata["tenant_visible"] = bool(tenant_visible)
@@ -1231,6 +1237,7 @@ async def set_data_source_policy(
     source_id: str,
     classification: str,
     department_id: str | None = None,
+    clear_department: bool = False,
     tenant_visible: bool | None = None,
     allowed_group_ids: list[str] | None = None,
 ) -> DataSource | None:
@@ -1239,6 +1246,8 @@ async def set_data_source_policy(
     Same authorization and audit discipline as :func:`set_document_policy`. A
     source outside the actor's tenant is neither revealed nor mutated.
     """
+    if clear_department and department_id is not None:
+        raise ValueError("Choose a department or clear it, not both")
     if not is_known_classification(classification):
         raise ValueError(f"Unsupported classification: {classification!r}")
 
@@ -1300,6 +1309,9 @@ async def set_data_source_policy(
     if department_id is not None:
         source.department_id = department_id
         audit_metadata["department_id"] = department_id
+    if clear_department:
+        source.department_id = None
+        audit_metadata["department_id"] = None
     if tenant_visible is not None:
         source.tenant_visible = bool(tenant_visible)
         audit_metadata["tenant_visible"] = bool(tenant_visible)

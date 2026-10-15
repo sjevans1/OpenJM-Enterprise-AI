@@ -12,6 +12,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 PROD_LOCK = BACKEND / "requirements.lock"
@@ -104,7 +106,23 @@ def test_workflow_contains_lock_drift_comparison_gate() -> None:
     assert "requirements-dev.lock" in workflow or "requirements.lock" in workflow
     # The candidate-artifact upload is gone: committed locks are authoritative.
     assert "rel1-python-lock-candidate" not in workflow
-    assert "upload-artifact" not in workflow
+    jobs = yaml.safe_load(workflow)["jobs"]
+    assert not any(
+        "upload-artifact" in step.get("uses", "")
+        for name, job in jobs.items()
+        if name != "frontend"
+        for step in job.get("steps", [])
+    )
+    # Browser evidence uses synthetic API fixtures. Permit only that bounded
+    # frontend output, never generated locks, wheelhouses or customer datasets.
+    uploads = [
+        step for step in jobs["frontend"]["steps"]
+        if "upload-artifact" in step.get("uses", "")
+    ]
+    assert len(uploads) == 1
+    assert uploads[0]["with"]["name"] == "admin-workflow-browser-evidence"
+    assert uploads[0]["with"]["path"] == "frontend/test-results/"
+    assert int(uploads[0]["with"]["retention-days"]) <= 7
 
 
 def _write_locks(directory: Path, prod: str, dev: str) -> None:

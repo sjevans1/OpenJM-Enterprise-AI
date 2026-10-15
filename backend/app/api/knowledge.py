@@ -172,6 +172,7 @@ async def list_documents_page(
 class DocumentPolicyUpdate(BaseModel):
     classification: Literal["public", "internal", "confidential", "highly_restricted"]
     department_id: str | None = Field(default=None, max_length=36)
+    clear_department: bool = False
     tenant_visible: bool | None = None
     allowed_group_ids: list[str] | None = Field(default=None, max_length=200)
 

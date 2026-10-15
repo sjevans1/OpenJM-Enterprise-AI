@@ -6,7 +6,7 @@
  * presentation rather than raw JSON, and that the browser never receives the
  * monitoring `OPENJM_OPS_TOKEN` in any form.
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import OperatorConsole from './OperatorConsole'
@@ -217,4 +217,42 @@ test('no frontend source module references the OPS monitoring token', () => {
     .map(([file]) => file)
 
   expect(offenders).toEqual([])
+})
+
+
+test('tenant fleet can load another page and refresh without returning customer content', async () => {
+  const fallback = platformFetchMock()
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/platform/operations/tenants')) {
+      const offset = Number(new URL(url, 'https://test.local').searchParams.get('offset'))
+      return jsonResponse({ tenants: [{ id: `t-${offset}`, name: offset ? 'Second page company' : 'First company', slug: `company-${offset}`, status: 'active', usage: { requests: 20, total_tokens: 200 } }], total: 51, limit: 50, offset, has_more: offset === 0 })
+    }
+    return fallback(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<OperatorConsole />)
+  await screen.findByText('All reported components are healthy.', { exact: false })
+  fireEvent.click(screen.getByRole('button', { name: 'Tenants' }))
+  await screen.findByText('First company')
+  fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+  await screen.findByText('Second page company')
+  expect(screen.getByText('Page 2')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh view' }))
+  await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('offset=50')).length).toBe(2))
+})
+
+test('a late failed response cannot replace a newer tab status', async () => {
+  let rejectOverview!: (reason: Error) => void
+  const fallback = platformFetchMock()
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    if (String(input).includes('/overview')) return new Promise<Response>((_resolve, reject) => { rejectOverview = reject })
+    return fallback(input)
+  }))
+  render(<OperatorConsole />)
+  fireEvent.click(screen.getByRole('button', { name: 'Tenants' }))
+  await screen.findByText('No tenant matches that search.')
+  await act(async () => rejectOverview(new Error('late error')))
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.getByText(/Last successful refresh/)).toBeTruthy()
 })

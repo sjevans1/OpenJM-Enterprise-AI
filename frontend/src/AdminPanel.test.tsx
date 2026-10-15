@@ -175,14 +175,15 @@ test('a client administrator can create a department from the surface', async ()
   await screen.findByText('Finance')
 })
 
-test('usage section states that plan data is not yet available', async () => {
+test('usage section accurately identifies an unconfigured plan', async () => {
   vi.stubGlobal('fetch', adminFetchMock())
   render(<AdminPanel />)
 
   await screen.findByRole('heading', { name: 'Administration' })
   fireEvent.click(screen.getByRole('button', { name: 'Usage / Plan' }))
 
-  await screen.findByText(/Plan and entitlement data arrive with M2\/M3/)
+  await screen.findByText('No plan configured for this workspace.')
+  expect(screen.queryByText(/M2\/M3/)).toBeNull()
 })
 
 test('the workspace exposes Administration on demand and keeps raw surfaces out of the nav', async () => {
