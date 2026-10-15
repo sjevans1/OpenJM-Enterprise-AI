@@ -27,6 +27,12 @@ These are product defaults to validate on the reference views, not a claim that 
 
 Proposed token families: `surface`, `text`, `border`, `action`, `status`, `space`, `radius`, `type`, `shadow`, `focus`, `layer` and `motion`. Map current CSS into those tokens before migrating consumers. New feature CSS may compose tokens, not invent a second palette or control system.
 
+### External component evaluation is mandatory, not automatic adoption
+
+At EP-01 entry, inspect [Watermelon UI](https://ui.watermelon.sh/) and its [source/registry](https://github.com/WatermelonCorp/watermelon-platform) as a candidate for reusable interactive components, dashboard patterns and visual reference. Compare with maintained alternatives, including [Radix](https://www.radix-ui.com/primitives), [React Aria](https://react-spectrum.adobe.com/react-aria/), [Base UI](https://base-ui.com/) and [shadcn/ui](https://ui.shadcn.com/), plus adaptation of existing OpenJM components. See the [EP-01 reuse decision gate](../plan/ENTERPRISE_PRODUCTIZATION.md#ep-01-component-reuse-decision-gate).
+
+No library is presumed selected. Verify current licenses and transitive license obligations, accessibility/focus handling, maintenance and security, source ownership, rendering quality, React/Vite/CSS integration, package weight and REL1 offline-install requirements. Adopt only the smallest justified subset after two realistic interaction prototypes, an ADR and product-owner visual review. Reused components must meet the same behavior, authorization-facing feedback and failure-recovery requirements as locally built components.
+
 ## 3. Shared component and state contract
 
 Create a compact gallery of real rendered states using the project's chosen mechanism. A Storybook installation is optional; accessible examples and reviewable evidence are required. Evaluate maintained primitives in EP-01 and record the decision before adding dependencies.

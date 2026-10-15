@@ -23,8 +23,9 @@ Start with the [active plan](docs/PLAN.md), [phased implementation packages](doc
 the employee workspace, tenant administration, OpenJM Control Center and real
 source integrations. Planned SQL Server, ERP, warehouse and MinIO/S3 connectors
 must not be read as current supported capabilities. The initial workflow fixes
-in [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) are a review
-dependency, not assumed merged by this plan.
+in [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) are merged
+at `bc8f02e5662378a6c954871c042233c635e43e63`. The next UI phase evaluates reuse of Watermelon UI and
+maintained accessible alternatives before building new primitives from scratch.
 
 The previous Hermes-generated repository is treated as reference material only. This repository establishes the product and architecture from scratch around a proven vertical slice rather than a collection of disconnected screens.
 

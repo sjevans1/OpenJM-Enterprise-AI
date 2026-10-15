@@ -4,7 +4,7 @@ Status: **PLANNED — implementation and acceptance pending.** Recorded 15 Octob
 
 This programme follows the owner's manual review: the product must complete practical business tasks, and the premium interaction quality must extend across every UI. This document is the execution backlog; the [UI quality standard](../design/UI_QUALITY_STANDARD.md) defines the experience contract, and the [journey acceptance contract](../qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md) defines proof of completion. [PLAN](../PLAN.md) is the current entry point.
 
-The accepted VS/BV/M/INF/E/REL1 work remains the foundation. Historical passes in the [acceptance matrix](../ACCEPTANCE_MATRIX.md) retain their original scope and candidate identity. They do not accept the new programme. The initial workflow correction, [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109), is an **unmerged dependency at this planning snapshot**, with candidate `e3854d1e84230afb639cef4e3ed53a2ad515a203`. Its [review](https://github.com/sjevans1/OpenJM-Enterprise-AI/blob/e3854d1e84230afb639cef4e3ed53a2ad515a203/docs/quality/2026-10-14-product-workflow-review.md) explains the reproduced defects and remaining gaps. This planning change does not merge or deploy that candidate.
+The accepted VS/BV/M/INF/E/REL1 work remains the foundation. Historical passes in the [acceptance matrix](../ACCEPTANCE_MATRIX.md) retain their original scope and candidate identity. They do not accept the new programme. The initial workflow correction, [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109), was **merged on 2026-10-14** at `bc8f02e5662378a6c954871c042233c635e43e63` from reviewed head `e3854d1e84230afb639cef4e3ed53a2ad515a203`. Its [review](https://github.com/sjevans1/OpenJM-Enterprise-AI/blob/e3854d1e84230afb639cef4e3ed53a2ad515a203/docs/quality/2026-10-14-product-workflow-review.md) explains the reproduced defects and remaining gaps. The post-merge STANDARD result and any residual EP-00 reconciliation must be recorded before marking EP-00 accepted; neither this planning change nor historical evidence accepts EP-01–14.
 
 ## 1. Product outcome and boundaries
 
@@ -65,7 +65,7 @@ All packages below start **PLANNED**. Acceptance evidence is **NOT RUN** for thi
 
 ### EP-00 — establish the correction baseline
 
-- **Depends on:** product-owner disposition of PR #109.
+- **Depends on:** accepted [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109), merged at `bc8f02e5662378a6c954871c042233c635e43e63`. Record the exact post-merge STANDARD result before the EP-00 closeout.
 - **Deliver:** record the accepted commit; reconcile any base movement; inventory remaining immediate mutations, misleading labels, partial failures and permission assumptions. Keep the role/policy draft-save-review behavior and mobile/readability corrections as the reference.
 - **Pass:** selection and cancellation cause zero writes; refused writes retain drafts; successful writes refresh from persisted state. Confirm UI and backend authorization cases covered by #109 remain valid on the accepted base.
 - **Evidence / scope:** reuse exact applicable #109 evidence; rerun only invalidated checks. Do not declare its synthetic browser fixtures to be real SSO/model acceptance. No merge without owner authorization.
@@ -73,10 +73,22 @@ All packages below start **PLANNED**. Acceptance evidence is **NOT RUN** for thi
 ### EP-01 — shared experience foundation and reference journeys
 
 - **Depends on:** EP-00. **Owns:** all three planes; ER-01/02.
-- **Deliver:** semantic design tokens, reusable accessible primitives, a component/state gallery, and three integrated reference views: employee answer + evidence, tenant user/policy review, provider tenant detail + reviewed action. Start from the existing navy/teal/light workspace and #109 behavior. Decide build/adapt/reuse with a short ADR covering accessibility, maintenance, dependency cost, licenses and offline compatibility; no library chosen solely for attractive screenshots.
+- **Deliver:** semantic design tokens, reusable accessible primitives, a component/state gallery, and three integrated reference views: employee answer + evidence, tenant user/policy review, provider tenant detail + reviewed action. Start from the existing navy/teal/light workspace and #109 behavior. **Mandatory repository/library discovery:** evaluate Watermelon UI and at least two maintained accessible alternatives (for example Radix, React Aria, Base UI and shadcn/ui), alongside adapting existing code. Decide build/adapt/reuse with a short ADR covering accessibility, maintenance, integration effort, licensing, dependency cost, offline compatibility and visual fit; no library chosen solely for attractive screenshots.
 - **Implementation seams:** `frontend/src/styles.css`, `App.tsx`, `AdminPanel.tsx`, `OperatorConsole.tsx`; reuse/refine `ConfirmAction.tsx` and `PolicyEditor.tsx` after #109 acceptance. Proposed shared code under `frontend/src/ui/`; extract feature views incrementally.
 - **Pass:** one implementation for buttons, fields, statuses, dialogs and review/save state; normal/loading/empty/error/denied/conflict states in the gallery; keyboard/mobile checks; product-owner review of the three reference journeys before broad migration.
-- **Handoff:** component usage guide, token definitions, approved screenshot references and recorded exceptions. **Excludes:** backend authority changes and wholesale application rewrite.
+- **Handoff:** component usage guide, token definitions, approved screenshot references, component-source evaluation/ADR and recorded exceptions. **Excludes:** backend authority changes and wholesale application rewrite.
+
+#### EP-01 component reuse decision gate
+
+Before creating a new primitive, review reusable projects rather than rebuilding a design system from scratch. The starting shortlist (not a preapproved dependency) is:
+
+- [Watermelon UI](https://ui.watermelon.sh/) and its [open-source platform](https://github.com/WatermelonCorp/watermelon-platform) / registry for editable components, blocks and dashboard references.
+- [Radix Primitives](https://www.radix-ui.com/primitives), [React Aria Components](https://react-spectrum.adobe.com/react-aria/), [Base UI](https://base-ui.com/) and [shadcn/ui](https://ui.shadcn.com/) as potential accessible primitive/composition layers.
+- Existing OpenJM components, especially the accepted `ConfirmAction` and `PolicyEditor`, for minimal-dependency adaptation.
+
+For each shortlisted option, identify repository URL/commit or package version, license(s) and any attribution obligations, maintenance/security posture, keyboard/focus/ARIA behavior, theming/token fit, React/Vite/CSS compatibility, package size/dependency graph, offline packaging and long-term ownership. A public showcase is not itself an accessibility or security qualification. Confirm whether a registry asset is a reusable source component, a decorative demo, or a dependency that must be maintained.
+
+Prototype at least one consequential interaction (reviewed role/policy change) and one information-dense interaction (searchable/paginated tenant list or evidence table) with realistic error/denial and narrow-screen states. Compare the rendered prototypes to the accepted OpenJM navy/teal direction and document the choice: **reuse**, **adapt** or **build**, with explicit rejection reasons. Prefer source-owned, composable components where appropriate; do not install entire UI kits or animation stacks merely because a demo looks polished. Record screenshots, keyboard findings, tested versions and the owner-approved component strategy before migrating EP-02/03 surfaces.
 
 ### EP-02 — complete the employee workspace migration
 

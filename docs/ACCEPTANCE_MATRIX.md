@@ -40,8 +40,9 @@ and feature-area passes below retain their original scope and evidence; for
 example, an accepted platform API walkthrough does not prove a complete new
 provider UI journey, and a PostgreSQL pass does not qualify SQL Server or an ERP.
 
-PR #109's initial workflow correction is an unmerged dependency at this planning
-snapshot. Neither that correction nor these documents complete the new programme.
+PR #109's workflow correction has been merged at `bc8f02e5662378a6c954871c042233c635e43e63`.
+The new EP-01–14 enterprise programme remains planned; neither the #109 correction
+nor these documents complete its new acceptance journeys.
 
 ## Persona: End user
 

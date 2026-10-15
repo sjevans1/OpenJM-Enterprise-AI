@@ -15,8 +15,8 @@ Issue #45 and REL1 retain their historical acceptance. This is an explicitly req
 
 ## Execution order
 
-1. **EP-00:** record the accepted workflow correction from [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109). It is still a draft/unmerged dependency at this snapshot; do not assume its components are on main.
-2. **EP-01–03:** approve shared reference journeys/components, then migrate every existing workspace, tenant-admin and provider UI with rendered-state review.
+1. **EP-00:** [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) merged at `bc8f02e5662378a6c954871c042233c635e43e63`; record the exact post-merge STANDARD result and reconcile any residual behavior before declaring this baseline accepted.
+2. **EP-01–03:** first compare Watermelon UI, Radix/React Aria/Base UI/shadcn and existing code; approve the reuse/adapt/build ADR, component strategy and shared reference journeys; then migrate every existing workspace, tenant-admin and provider UI with rendered-state review.
 3. **EP-04–09:** versioned policy/effective access, tenant resource lifecycle, policy-first Knowledge intake, identity onboarding, common source contract and guided company setup. EP-09's common source contract precedes EP-08 setup acceptance; see the detailed dependencies.
 4. **EP-10–12:** qualify real SQL Server, MinIO/S3 and separately selected ERP/warehouse integrations. Support claims are per verified source/version/auth combination.
 5. **EP-13:** complete provider tenant, commercial/service and bounded-support journeys. It can follow EP-03/04 and the applicable identity package before all adapters finish.

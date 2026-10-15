@@ -11,14 +11,14 @@ Use [PLAN](PLAN.md) for execution order, the [package backlog](plan/ENTERPRISE_P
 ## Current acceptance evidence
 
 - [ACCEPTANCE_MATRIX](ACCEPTANCE_MATRIX.md), [REL1-B4](REL1_B4_ACCEPTANCE.md) and [ZTK1](ZTK1_ACCEPTANCE.md) retain the original accepted heads/artifacts and live evidence. Later code does not automatically inherit those passes.
-- [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109), candidate `e3854d1e84230afb639cef4e3ed53a2ad515a203`, contains the initial reviewed-action, policy-editor, source-setup, operator-pagination and mobile/readability corrections. It is **draft / unmerged** at this snapshot.
+- [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109), reviewed head `e3854d1e84230afb639cef4e3ed53a2ad515a203`, delivered the initial reviewed-action, policy-editor, source-setup, operator-pagination and mobile/readability corrections. It is **merged** as `bc8f02e5662378a6c954871c042233c635e43e63`. Its PR-tier CI passed; post-merge STANDARD should be recorded separately.
 - That candidate's [FAST CI run 38678716580](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38678716580) passed backend/frontend checks and three synthetic Chromium journeys. Live SSO/source/model acceptance was **NOT RUN for that change**.
 - New programme journeys in [ENTERPRISE_PRODUCT_ACCEPTANCE](qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md) are **NOT RUN**. Planning documents are not implementation evidence.
 
 ## Next work
 
-1. EP-00: obtain owner disposition of #109 and record the accepted baseline.
-2. EP-01: shared primitives/tokens and three reference journeys; then EP-02/03 migrate every existing UI surface.
+1. EP-00: #109 is merged; confirm post-merge STANDARD and record the accepted correction baseline.
+2. EP-01: evaluate Watermelon UI and maintained accessible alternatives versus adapting existing code, prototype realistic interactions, approve the reuse ADR, shared primitives/tokens and three reference journeys; then EP-02/03 migrate every existing UI surface.
 3. Follow the explicit dependencies for governance, Knowledge intake, company setup, adapters and provider management. Resolve vendor/identity/publication decisions at the relevant package entry.
 4. Qualify the integrated candidate and handoff under EP-14. Keep implementation status and evidence truthful; merge/deploy only with explicit authority.
 
