@@ -21,7 +21,13 @@ async function scan(page: Page, name: string): Promise<void> {
       nodes: violation.nodes.length,
       targets: violation.nodes.map((node) => node.target.join(' ')).slice(0, 8),
     })),
-    incomplete: results.incomplete.length,
+    incomplete: results.incomplete.map((item) => ({
+      id: item.id,
+      impact: item.impact,
+      nodes: item.nodes.length,
+      targets: item.nodes.map((node) => node.target.join(' ')).slice(0, 8),
+      summary: item.nodes.map((node) => node.failureSummary ?? '').slice(0, 4),
+    })),
     passes: results.passes.length,
   })
   const serious = results.violations.filter(

@@ -753,6 +753,24 @@
   .ep01a-table {
     min-width: 560px;
   }
+  /* People & roles: fit the identifying name, role, status and action into the
+     viewport instead of clipping the name behind a scrolled table. The two
+     secondary columns remain available in the editor and on wider screens. */
+  .ep01a-table.people {
+    min-width: 0;
+  }
+  .ep01a-table.people th:nth-child(4),
+  .ep01a-table.people td:nth-child(4),
+  .ep01a-table.people th:nth-child(5),
+  .ep01a-table.people td:nth-child(5) {
+    display: none;
+  }
+  .ep01a-table.people td {
+    overflow-wrap: anywhere;
+  }
+  .ep01a-table.people td:first-child {
+    min-width: 164px;
+  }
   .ep01a-table.wide {
     min-width: 960px;
   }

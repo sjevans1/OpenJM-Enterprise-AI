@@ -154,16 +154,22 @@ test('the same flow works under the current OpenJM dialog implementation', async
   await expect(page.getByText("Ada Evans's role was changed to Administrator.")).toBeVisible()
 })
 
-test('tablet 768 and mobile 390 layouts hold without page overflow', async ({ page }, testInfo) => {
+test('tablet 768 and mobile 390 layouts hold with the selected person visible', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 768, height: 1024 })
   await openRoles(page)
   await startDraft(page)
   await shot(page, testInfo, 'ep01a-p1-roles-768')
 
   await page.setViewportSize({ width: 390, height: 844 })
+  await openRoles(page)
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true)
+  await page.getByRole('button', { name: 'Manage Ada Evans' }).click()
+  const nameCell = page.locator('tr.selected td').first()
+  await expect(nameCell).toContainText('Ada Evans')
+  await expect(nameCell).toBeInViewport({ ratio: 0.6 })
+  await page.getByLabel('Role', { exact: true }).selectOption('admin')
   await shot(page, testInfo, 'ep01a-p1-roles-390')
   await page.getByRole('button', { name: 'Review and save role' }).click()
   const dialog = page.getByRole('dialog')

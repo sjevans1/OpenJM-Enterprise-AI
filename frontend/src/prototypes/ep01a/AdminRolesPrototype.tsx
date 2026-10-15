@@ -288,7 +288,7 @@ export default function AdminRolesPrototype({ dialogImpl }: { dialogImpl: Dialog
       {load.phase === 'ready' && (
         <div className="ep01a-split">
           <div className="ep01a-table-scroll" role="region" aria-label="Member directory">
-            <table className="ep01a-table">
+            <table className="ep01a-table people">
               <thead>
                 <tr>
                   <th scope="col">Member</th>
