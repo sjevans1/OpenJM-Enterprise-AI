@@ -1,0 +1,15 @@
+{
+  "cancelWorkflow": "Escape closed the review with zero requests; the draft was preserved",
+  "confirmWrite": {
+    "method": "POST",
+    "path": "/api/ep01a/admin/members/m-002/role",
+    "query": "",
+    "body": {
+      "role": "admin",
+      "status": "active",
+      "expected_revision": 2
+    },
+    "status": 200
+  },
+  "reconciledWithGet": true
+}
