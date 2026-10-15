@@ -1993,7 +1993,7 @@ export default function App() {
                 </fieldset>
               </form>
               <p className="admin-help">SQL Server, ERP-specific and MinIO/S3 integrations are not available in this connection form. A supported integration must be configured before those systems can provide evidence.</p>
-              {nav.administration && <button type="button" onClick={() => navigate('admin')}>Manage classification and sharing</button>}
+              {nav.administration && <button type="button" className="secondary-action" onClick={() => navigate('admin')}>Manage classification and sharing</button>}
 
               <div className="source-list">
                 {dataSources.length === 0 ? (
