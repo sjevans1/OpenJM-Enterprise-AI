@@ -1,5 +1,7 @@
 # OpenJM Enterprise AI
 
+**Development governance:** [OpenJM Development Framework v1.8.3 adoption](docs/FRAMEWORK_ADOPTION.md) · [version lock](framework.lock). This is a reference pin; live controller activation is separately gated and existing product work is unchanged.
+
 Clean rebuild of the OpenJM enterprise AI platform.
 
 **New here? Start with orientation, not this ledger.** The authoritative operator
