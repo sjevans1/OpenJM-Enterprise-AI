@@ -1,0 +1,37 @@
+# OpenJM Development Framework v1.8.3 — project reference lock.
+# This file pins approved doctrine; it does NOT activate the Hermes controller,
+# migrate live workflow state, authorize a product merge, or alter GitHub Actions.
+lock_schema_version: "1.0"
+
+framework:
+  repository: "sjevans1/OpenJM-Development-Framework"
+  version: "1.8.3"
+  commit: "b9cc14d708311417d6945e074799f4cb3d46cf8b"
+
+model_roles:
+  planner: "OpenAI Astra (manual, human-directed)"
+  engineering_supervisor: "GPT-6 Luna"
+  implementer: "DeepSeek v4.1 Flash"
+  ci_repair: "DeepSeek v4.1 Flash"
+  acceptance: "Claude Haiku 5.5"
+  final_reviewer: "GPT-6 Luna (distinct verified session)"
+
+authority:
+  github: true
+  honcho: "non_authoritative"
+  human_merge_required: true
+
+assurance:
+  quality_profile: "docs/CI_TIERS.md"
+  control_mode: "procedural"
+  paid_github_required: false
+
+execution:
+  mode: "manual"
+  resumption_contract: "docs/FRAMEWORK_ADOPTION.md"
+
+adoption:
+  phase: "reference_pinned_not_controller_activated"
+  activation: "new_authorized_package_after_ci_identity_compatibility"
+  migrate_existing_repair_or_approval_state: false
+  modify_existing_product_ci: false
