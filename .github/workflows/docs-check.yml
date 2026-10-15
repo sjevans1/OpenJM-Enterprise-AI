@@ -1,0 +1,50 @@
+name: Documentation checks
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**/*.md'
+      - '**/*.mdx'
+permissions:
+  contents: read
+jobs:
+  docs:
+    name: Docs / whitespace and integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate changed documents
+        env:
+          BASE_SHA: '${{ github.event.pull_request.base.sha }}'
+          HEAD_SHA: '${{ github.event.pull_request.head.sha }}'
+        run: |
+          set -euo pipefail
+          git diff --check "$BASE_SHA" "$HEAD_SHA"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          base, head = os.environ['BASE_SHA'], os.environ['HEAD_SHA']
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '-z', '--diff-filter=ACMR', base, head]).split(b'\0')
+          checked = 0
+          for name in changed:
+              if not name:
+                  continue
+              path = Path(os.fsdecode(name))
+              if path.suffix.lower() not in {'.md', '.mdx'} or not path.is_file():
+                  continue
+              content = path.read_text(encoding='utf-8')
+              if '\x00' in content:
+                  raise SystemExit(f'Invalid NUL character in {path}')
+              if any(line.startswith(('<<<<<<< ', '=======', '>>>>>>> ')) for line in content.splitlines()):
+                  raise SystemExit(f'Unresolved merge conflict marker in {path}')
+              checked += 1
+          if checked == 0:
+              raise SystemExit('Expected at least one changed Markdown document')
+          print(f'Document integrity verified: {checked} changed Markdown file(s)')
+          PY
