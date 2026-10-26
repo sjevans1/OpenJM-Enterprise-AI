@@ -88,7 +88,7 @@ mode, no tool traces, no auto-send from UI, and no stale evidence display after
 a 409 response.
 
 When implementation changes require real Gemma/Chroma/DB acceptance, run it
-**once in isolated local fixtures** via Hermes, not blindly on every commit.
+**once in isolated local fixtures** using the approved test environment, not blindly on every commit.
 The existing VS3 policy and read-only SQL execution gates apply to actual
 new Chat submissions; the preflight endpoint itself performs no execution.
 

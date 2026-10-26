@@ -101,7 +101,7 @@ These are acceptance/test observations, not production usage or capacity measure
 
 ## 8. Interruption/resume outcome
 
-The VS4 lifecycle pilot included a mandatory real Hermes restart/resume during B2C1. The resumed session reconciled the existing branch/PR and continued without duplicate branch/PR creation or unrelated-file loss. A stale committed pre-resume checkpoint was identified as a process limitation; subsequent batches used explicit GitHub/head reconciliation and exact-head CI evidence.
+The VS4-B2C1 implementation continued across an interruption on the same issue and pull request, without duplicate branches or changes to unrelated files. A stale intermediate checkpoint was identified; final acceptance relies on recorded GitHub revisions and exact-head CI, not the intermediate checkpoint. This is a historical process outcome, not an instruction for the receiving team.
 
 ## 9. Final verdict
 

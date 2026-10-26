@@ -52,7 +52,7 @@ A definition points to its SavedReport by a SQLite-enforced cascading foreign ke
 
 - [ ] GitHub CI backend fast test + Ruff green, frontend build green.
 - [ ] Deterministic tests demonstrate Data/Knowledge/Hybrid source pins, no executed traces or SQL, idempotency, read/list behavior, unknown-field rejection, post-save table/document revocation, stale schema, question tampering and cascade only for definitions.
-- [ ] Validate against temporary copy of pre-B2A SQLite database and verify existing records and idempotent restart (Hermes local acceptance; not on production data).
+- [ ] Validate against temporary copy of pre-B2A SQLite database and verify existing records and idempotent restart (isolated local acceptance; not on production data).
 - [ ] Review current source/permission scope race restrictions.
 - [ ] Full main-branch regression after authorized merge.
 - [ ] Maintainer authorizes merge.

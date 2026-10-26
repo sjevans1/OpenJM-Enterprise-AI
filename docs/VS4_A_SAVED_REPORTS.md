@@ -2,7 +2,7 @@
 
 **Branch:** `feature/vs4-a-saved-report-snapshots` (based on merged VS3-C3 main `5f5821f6ad1b4e3368e95a5898508e892f530588`).
 
-**Status:** Implemented and committed for review, **not yet executed/accepted**. Treat all tests as pending until Hermes runs them. Do not merge this draft just because files exist.
+**Status:** Implemented and committed for review, **not yet executed/accepted**. At this dated snapshot, treat unexecuted tests as pending and do not merge merely because code exists. For current status, consult the accepted main and acceptance matrix.
 
 ## What is implemented
 
@@ -21,7 +21,7 @@
 4. Snapshots are intentionally **not live** and retain only bounded previously persisted answer/evidence; no report rerun/export in VS4-A. VS4-B is a separate gated effort.
 5. No local Gemma, Chroma, frontend or full regression test has been executed in this remote GitHub editing session.
 
-## Acceptance plan for Hermes
+## Historical acceptance plan (not current execution instructions)
 
 Use the branch and do not touch protected untracked `scripts/serve_frontend.py` or `test-documents/`.
 
