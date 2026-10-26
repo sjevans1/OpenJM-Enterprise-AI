@@ -2,7 +2,7 @@
 
 ## VS4-B2C2 final-review correction checkpoint
 
-PR #29 is open on `milestone/vs4-b2c2-manual-execution`. Hermes final pre-review
+Historical PR #29 on `milestone/vs4-b2c2-manual-execution` had final pre-review
 head `8948825fd4f4341e5224b9f31048e469781bc31b` passed fast hosted CI run
 37408679705, local regression (504 passed, 19 subtests), and isolated real
 Gemma acceptance (30/30 checks).
@@ -45,7 +45,7 @@ reserve no second row, and perform no execution. Different intent under the same
 key returns a bounded 409; unknown/foreign report or version returns 404. A new
 Phase-1 reservation remains `running` with no result. Public revoke remains absent.
 
-Local evidence: `/home/sjeva/openjm-enterprise-ai/backend/.venv/bin/python -m
+Local evidence: `python -m
 pytest -q tests/test_report_run_submission_api.py tests/test_report_run_regressions.py
 tests/test_report_runs.py tests/test_report_runs_api.py tests/test_report_definitions.py
 --maxfail=3` returned `102 passed in 15.92s`. The matching focused Ruff critical
@@ -76,10 +76,14 @@ Preserved boundaries: no public run-submission or revoke endpoint; no model, ret
 ## Production startup and recovery evidence
 `test_synthetic_pre_b2c1_upgrade_preserves_data` creates a disposable file with nonempty conversations, two related messages, a saved report, immutable definition and execution trace. It removes only the B2C1 `report_runs` table, then monkeypatches the production database module's engine to that path and calls the actual `init_db()` twice. Fresh independent engines compare complete legacy row snapshots before and after each startup. Between startups, the test creates one expired and one live run. The second startup interrupts only the expired row, preserves the live row, reinstalls current triggers and leaves every legacy row byte-for-byte equivalent at the selected columns. Behavioral writes prove owner identity and terminal rows remain immutable.
 
-## Hermes checkpoint and resume rehearsal
-A real Hermes session restart occurred after review of `cc9ebdcc191a6998e0b30f8e513e6d19fc60dd52`. Before resume: branch `milestone/vs4-b2c1-run-history`, existing PR #28, phase `review corrections required`, active-batch code-repair counters 0, and next action was the review correction handoff. On resume, Hermes read repository files plus live Git and PR state, confirmed the same branch at `cc9ebdc` and the same open PR #28, and preserved unrelated working-tree files. It continued on that branch and PR through `982dc01456dc4fbe8446abf01fce17c4cdae6ca0`, `9d5482cd065cad5e1ae62218b1c2fb97584fc65b` and `372d45eb39cb893e9e7ac11557d652ae51bb2c0a`. No duplicate branch, PR or replacement history was created. Code-repair attempts remained 0; one transient GitHub API/network retry occurred without redispatch. Session evidence: @session:default/20261002_141343_c17344.
+## Historical engineering continuity (not an active procedure)
 
-Limitation: the committed checkpoint at the original pause was stale and did not itself identify PR #28. Continuity is established by the resumed session's live branch/PR reconciliation and GitHub history. This revision records that limitation rather than replacing it with synthetic interruption evidence.
+The VS4-B2C1 review continued across a checked-in correction series on the same
+pull request. The final acceptance must be evaluated against its recorded
+commit and CI links below, rather than against an intermediate local checkpoint.
+This section preserves technical traceability without retaining internal
+developer-session transcripts, home-directory paths or work orchestration
+instructions.
 
 ## Final-revision evidence (verified)
 - Actual final 40-character PR head SHA: `21e1df78c0ea2a97388e372dfd4037808cc14a39` (single squashed correction+checkpoint commit; matches `git rev-parse HEAD` and live PR #28 `headRefOid`).
