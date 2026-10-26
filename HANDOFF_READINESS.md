@@ -1,46 +1,28 @@
-# OpenJM Enterprise AI — Handoff Readiness
+# Handoff readiness — scope and evidence
 
-Observed at accepted `main@6243f485ca535df9f619559ff1e03ba15e1e9142`.
+**Checked 2026-10-26.** This page distinguishes the qualified historical baseline from current **unmerged** development. Begin with [Developer Handoff](docs/DEVELOPER_HANDOFF.md).
 
-This page is the current handoff position. `docs/ZTK1_ACCEPTANCE.md` is the final
-zero-tribal-knowledge handoff evidence package.
+## Foundation delivered (candidate-specific)
 
-## Current position
+- Versioned platform/tenant permissions, knowledge and data governance, model gateway, reports, administration and OpenJM operator surfaces are described in [Acceptance Matrix](docs/ACCEPTANCE_MATRIX.md).
+- REL1 production installer/bundle, recovery and isolated production-host/browser qualification are documented in [REL1-B4 Acceptance](docs/REL1_B4_ACCEPTANCE.md), specifically frozen release artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`.
+- Independent operator handover evidence exists at [ZTK1](docs/ZTK1_ACCEPTANCE.md).
+- These completed qualifications do **not** automatically accept later `main` changes, an unmerged PR, a new deployment profile or an untested source/model.
 
-The broad post-VS8 functionality programme is substantially complete. Accepted main includes BV1-A/B/C, BV2, BV3-A/B/C, BV4, BV5-A/B/C, BV6-A/B, M1/M2/M3, INF1-A/B/C, E1/E2/E3, delegated support-content access, and REL1 preparation documentation.
+## Current handover scope
 
-See `docs/ACCEPTANCE_MATRIX.md` for the current evidence map.
+- Current accepted `main` observed: `8e09ab586113648f606b8927f22a8b444d3cb581`.
+- [#109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) workflow/administration safeguards and [#110](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/110) enterprise plan are **merged**.
+- [#113](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/113) EP-01A accessible UI prototypes are **unmerged** and latest exact-head CI failed. Pending component adoption/visual acceptance. See [Current Blockers](docs/BLOCKED.md).
+- Draft [#112](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/112), [#114](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/114), [#115](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/115), and stacked [#116](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/116) are pending review and are not part of `main`.
+- EP-01B/EP-01C and subsequent enterprise integrations remain planned. Rahkia application cutover is deferred.
 
-## Readiness checklist
+## Receiving-team readiness checks
 
-| Area | Status | Current position |
-| --- | --- | --- |
-| Core product functionality | COMPLETE | Major Issue #45 feature lanes (including #40-#44 surfaces) are accepted. |
-| Security/governance | COMPLETE | Tenant/group/classification enforcement, report/artifact authorization and delegated support have accepted automated evidence, plus bounded live sanity checks. |
-| Productization / installer | COMPLETE | REL1 implementation, package capability and the canonical production installer are accepted. |
-| Final browser journeys | COMPLETE | End-user, steward, client-admin and OpenJM-operator journeys executed against the production-installed artifact (frozen REL1 artifact `709ce47b`). |
-| Live OIDC/PostgreSQL support path | COMPLETE | Live Keycloak 26.7.4 OIDC authorization-code + PKCE against PostgreSQL 16.15 on a clean production host. |
-| Real vector/RAG authoritative-candidate path | COMPLETE | Knowledge ingestion/indexing, governed retrieval and the unauthorized negative are accepted. |
-| Detailed readiness under DB outage (D1) | COMPLETE | `/api/ready/detail` returns a bounded component report instead of 500; validated live and closed via Issue #105 / PR #106. |
-| Rahkia application cutover | DEFERRED | Deliberate product decision. The only explicitly deferred specialist phase. |
-| Workspace boundary | OK | Workspace remains a standalone repository/product. |
-| Release identity consistency | COMPLETE | Canonical runtime/backend/frontend/npm-lock version is normalized to 0.2.0 and machine-checked. |
-| Handoff qualification (ZTK1) | COMPLETE | Independent zero-tribal-knowledge examination; see `docs/ZTK1_ACCEPTANCE.md`. |
+- Can install a source development checkout without customer data or ambient developer-machine state.
+- Knows the three product authority planes and can describe tenant/read-only/evidence restrictions.
+- Can explain Python 3.11/Node 22, PostgreSQL/OIDC production prerequisite, runtime preflight and model-gateway isolation.
+- Can identify exact test runs, current PR failures, offline-release scope and which live tests are **NOT RUN** for a candidate.
+- Can propose an evidence-backed correction for the first pending EP package, with a recovery/rollback plan and no automatic merge.
 
-Issue status: **#79 CLOSED / COMPLETED** (clean production host + production-installed
-browser/persona qualification against frozen REL1 artifact `709ce47b`). **#105 CLOSED /
-COMPLETED** (D1 readiness correction). **#104** carries the ZTK1 handoff evidence.
-
-Evidence boundary: the REL1-B4 clean production/browser live qualification belongs to
-the frozen artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`. Later `main` commits do
-not automatically inherit that specific live-host qualification.
-
-## Remaining documentation
-
-- refreshed Rahkia specialist handoff when that phase starts (explicitly deferred);
-- ordinary doc upkeep as the product evolves.
-
-Reference set for an incoming operator: `README.md` (orientation),
-`docs/INSTALLATION.md`, `docs/CONFIGURATION.md`, `docs/OPERATIONS.md`,
-`docs/BACKUP_RESTORE.md`, `docs/UPGRADE_ROLLBACK.md`, `docs/SECURITY_POSTURE.md`,
-`docs/ACCEPTANCE_MATRIX.md`, `docs/ZTK1_ACCEPTANCE.md`.
+**Current status: documentation handover prepared; receiving-team live rehearsal NOT RUN.** Final acceptance belongs to the team/product owner after they verify the checkout/environment. Do not treat this page as a new live release test.
