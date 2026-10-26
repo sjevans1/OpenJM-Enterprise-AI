@@ -179,5 +179,5 @@ rm -rf backend/.venv frontend/node_modules frontend/dist
 #   PostgreSQL database (drop only with explicit intent)
 ```
 
-A release install does not depend on Hermes, developer home-directory state,
-ambient `.env` files, or previous test services.
+A release install does not depend on a contributor's personal automation tools,
+home-directory state, ambient `.env` files, or previous test services.

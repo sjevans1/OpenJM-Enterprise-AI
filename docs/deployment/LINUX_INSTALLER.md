@@ -12,7 +12,7 @@ code path. Grounded in `scripts/install-linux.sh`.
 - **Fail early.** A missing dependency, wrong version or missing prerequisite
   stops the run with a message before anything is installed.
 - **No source edits.** It never edits the checkout and never depends on a
-  developer home directory, Hermes state, ambient `.env` or a previous test
+  developer home directory, external tooling state, ambient `.env` or a previous test
   service.
 - **No service start.** It configures and validates but does not start a
   background service; serving is explicit (systemd unit or Compose).

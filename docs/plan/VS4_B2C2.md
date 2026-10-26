@@ -55,7 +55,7 @@ flowchart TD
    Tests and the isolated acceptance instance may explicitly enable it. Do not
    enable on an existing development/production instance as part of this PR.
    Default activation after acceptance is a separate operator decision, not a
-   change Hermes may infer. No background worker, scheduling or auto-run on read.
+   change a contributor or automated process may infer. No background worker, scheduling or auto-run on read.
 
 ## Required tests before review
 
