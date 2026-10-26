@@ -1,6 +1,6 @@
 # OpenJM Enterprise AI — Active Plan
 
-Planning snapshot: `main@b45ca8dad5fa79d12eba20fefd4d7d6c76df24b9` on 2026-10-15. New programme status: **PLANNED**, not implemented or accepted by this document.
+Repository handover snapshot: `main@8e09ab586113648f606b8927f22a8b444d3cb581` checked 2026-10-26. Foundation and EP-00 delivered; EP-01A prototyping is **unmerged and CI-failing**, while EP-01B–14 remain unaccepted. See [Developer Handoff](DEVELOPER_HANDOFF.md) and [current blockers](BLOCKED.md) for the current PR dispositions. Refresh GitHub before resuming.
 
 ## Active objective
 
@@ -15,8 +15,8 @@ Issue #45 and REL1 retain their historical acceptance. This is an explicitly req
 
 ## Execution order
 
-1. **EP-00:** [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) merged at `bc8f02e5662378a6c954871c042233c635e43e63`; record the exact post-merge STANDARD result and reconcile any residual behavior before declaring this baseline accepted.
-2. **EP-01–03:** first compare Watermelon UI, Radix/React Aria/Base UI/shadcn and existing code; approve the reuse/adapt/build ADR, component strategy and shared reference journeys; then migrate every existing workspace, tenant-admin and provider UI with rendered-state review.
+1. **EP-00:** [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) merged at `bc8f02e5662378a6c954871c042233c635e43e63` and its [post-merge main CI 38682526039](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38682526039) succeeded. Later roadmap merge [#110](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/110) also has successful [main CI 38689459332](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38689459332). Historical live SSO/source/model gates were not rerun for those changes.
+2. **EP-01–03:** first close [EP-01A PR #113](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/113) after fixing exact-head Chromium dialog accessibility failures and obtaining a component-choice/visual review. The Radix dialog recommendation is not yet adoption approval. Then implement EP-01B semantic shared primitives, EP-01C integrated reference journeys, and EP-02/03 migration across all existing UI surfaces.
 3. **EP-04–09:** versioned policy/effective access, tenant resource lifecycle, policy-first Knowledge intake, identity onboarding, common source contract and guided company setup. EP-09's common source contract precedes EP-08 setup acceptance; see the detailed dependencies.
 4. **EP-10–12:** qualify real SQL Server, MinIO/S3 and separately selected ERP/warehouse integrations. Support claims are per verified source/version/auth combination.
 5. **EP-13:** complete provider tenant, commercial/service and bounded-support journeys. It can follow EP-03/04 and the applicable identity package before all adapters finish.

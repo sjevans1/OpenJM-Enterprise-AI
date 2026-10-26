@@ -203,7 +203,7 @@ Prototype at least one consequential interaction (reviewed role/policy change) a
 
 ## 6. Execution, verification and review contract
 
-Use the repository's [CI tiers](../CI_TIERS.md) and [Hermes workflow](../CI_HERMES_WORKFLOW.md). The [OpenJM Framework experience doctrine](https://github.com/sjevans1/OpenJM-Development-Framework/blob/e35a2ec4f57a4919d0c4962a5f58b8067dcfd897/doctrine/PRODUCT_EXPERIENCE_AND_HANDOVER_COMMUNICATION.md) (v1.7.0 reference) informs the experience standard. This plan does not silently replace existing CI, model routing or orchestration. Reconcile a formal framework adoption separately if required before new implementation.
+Use the repository's [CI tiers](../CI_TIERS.md), [tool-neutral CI workflow](../CI_WORKFLOW.md), [contribution guide](../../CONTRIBUTING.md) and [Developer Handoff](../DEVELOPER_HANDOFF.md). The product UI quality standard and acceptance contract in this repository are authoritative. Do not silently replace security gates, model-serving routes or release constraints; propose and review any workflow-policy change independently.
 
 Every implementation packet must specify: package/requirement/journey IDs; accepted base and dependencies; named implementation/review/data owners; allowed scope and API contract; selected UI inventory rows and states; migration/compatibility effects; focused tests; live environments; handoff delta; evidence and stop boundary. No packet is ready if its material decisions above are unresolved.
 

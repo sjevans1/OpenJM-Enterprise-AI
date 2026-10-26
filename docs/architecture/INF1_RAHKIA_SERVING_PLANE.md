@@ -1,16 +1,15 @@
 # INF1 — Rahkia inference serving plane
 
-Status: architecture proposal for review; **not implemented or production-qualified**.
+**Historical 2026-10-08 architecture proposal.** This design text does not prove an implemented or production-qualified Rahkia cutover. For later accepted foundation and current scope, consult [STATUS](../STATUS.md), [ACCEPTANCE_MATRIX](../ACCEPTANCE_MATRIX.md) and [Developer Handoff](../DEVELOPER_HANDOFF.md).
 Prepared 2026-10-08 for [Issue #45](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45#issuecomment-6064270657).
 Metering/entitlements remain [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
 
 This package expands the agreed INF1 scope into implementation contracts. It does
 not start the runtime work: the gate it waited on (BV3-C PostgreSQL acceptance and
 integration of BV3-A/B/C) is now earned in `main` at `18cabaa2`, while the INF1
-runtime start still requires an explicit authorization. See
-[delivery and acceptance](../plan/INF1.md), the
-[data and adapter contracts](INF1_CONTRACTS.md), and the
-[executor handoff](../INF1_EXECUTION_PROMPT.md).
+runtime start still requires an explicit authorization. See the historical
+[delivery and acceptance](../plan/INF1.md) and
+[data and adapter contracts](INF1_CONTRACTS.md).
 
 ## 1. Product outcome and architecture decision
 
