@@ -139,7 +139,7 @@ committed-lock install on a real host is REL1-B4.
 
 ### Excluded from the payload
 
-`.git`, `.hermes` (Hermes state), real env/secret files (`.env`, `.env.*`), the
+VCS metadata, developer-local tool state (excluded by release assembly), real env/secret files (`.env`, `.env.*`), the
 committed config templates are retained (`.env.example`,
 `.env.production.example` — no secrets, and `install-linux.sh` copies one to
 create `.env`), developer virtualenvs (`.venv*`), `node_modules`, build output

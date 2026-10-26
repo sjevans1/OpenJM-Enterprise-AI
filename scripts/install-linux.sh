@@ -3,7 +3,7 @@
 #
 # Idempotent and fail-early. Never edits source, never overwrites an existing
 # .env or production data, and never depends on a developer home directory,
-# Hermes state or a previous test service.
+# local developer-tool state or a previous test service.
 #
 # Usage:
 #   scripts/install-linux.sh [--profile development|production] [--skip-frontend]
