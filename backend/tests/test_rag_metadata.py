@@ -207,7 +207,7 @@ def test_legacy_chunk_without_new_keys_is_supported():
 
 def test_sanitize_replaces_internal_path_in_source_with_title():
     cleaned = sanitize_for_evidence(
-        {"source": "/home/sjeva/openjm-enterprise-ai/data/uploads/abc_file.pdf"},
+        {"source": "/example/uploads/abc_file.pdf"},
         "file.pdf",
     )
     assert cleaned["source"] == "file.pdf"

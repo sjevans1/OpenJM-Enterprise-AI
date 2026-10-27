@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -52,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # are only visible where they are imported, which is why the other CA2 suites do the same.
 from test_vs7_connector_security import connector, provider  # noqa: E402,F401
 
-SCRATCH = Path("/home/sjeva/.hermes/cache/scratch/ca2-live")
+SCRATCH = Path(tempfile.mkdtemp(prefix="openjm-ca2-live-"))
 EVIDENCE_PATH = Path(__file__).with_name("ca2_live_evidence.json")
 
 # The phrase exists ONLY in the body of the document beyond the legacy window. No title and no
@@ -156,7 +157,7 @@ async def test_ca2_live_retrieval_beyond_the_legacy_window(
     record("embedding_model", settings.embedding_model)
     record("vector_backend", "chromadb persistent, local scratch path")
     record("llm_gateway", "not required by the retrieval path")
-    record("scratch_path", str(SCRATCH))
+    record("scratch_path", "[redacted-disposable-local-directory]")
 
     model_cache = (
         Path.home()
