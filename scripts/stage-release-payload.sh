@@ -12,7 +12,7 @@
 # source, scripts, deploy assets, docs, committed configuration templates).
 #
 # Excluded (must never cross the air gap):
-#   .git, .hermes (Hermes state), real env/secret files (.env, .env.local, ...),
+#   VCS metadata, local tooling state, real env/secret files (.env, .env.local, ...),
 #   developer virtualenvs (.venv*), node_modules, build output (dist), Python
 #   and test caches (__pycache__, *.pyc, .pytest_cache, .coverage, htmlcov),
 #   generated private data (data/, *.db, *.sqlite3), and compose secrets.

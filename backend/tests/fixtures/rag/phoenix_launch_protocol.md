@@ -24,5 +24,5 @@ should the code be shared outside the authorised launch team.
 4. The marketing embargo is lifted at T+0 hours.
 
 ## Contact
-Launch Director: ops@qalo.io
+Launch Director: launch@example.com
 Emergency: 911

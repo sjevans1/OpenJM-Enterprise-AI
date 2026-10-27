@@ -1,32 +1,33 @@
 # Current Repository Status
 
-Planning snapshot: `main@b45ca8dad5fa79d12eba20fefd4d7d6c76df24b9` on 2026-10-15. Read live GitHub state before resuming implementation; this snapshot is not a moving branch assertion.
+**Remote snapshot checked 2026-10-26, not a live feed.** Accepted `main` at `8e09ab586113648f606b8927f22a8b444d3cb581`; post-merge [CI 38689459332](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38689459332) succeeded. Refresh GitHub before beginning work.
 
-## Current phase
+## Accepted foundation
 
-The historical Issue #45 feature programme and REL1 release/handoff work form the accepted foundation. The owner's subsequent manual review opened an **enterprise workflow and UI consistency programme**, now documented and **PLANNED**.
+Historical Issue #45, VS/BV/M/INF/E capability foundations and REL1/ZTK1 handoff are accepted **at their documented candidates**. PR [#109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109) merged the reviewed administration/workflow corrections; PR [#110](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/110) merged the enterprise productization plan. Previous REL1 production/browser proof is specific to frozen artifact `709ce47bf3ae1b7135446c376bcf312b25606b5c`, not every later tree.
 
-Use [PLAN](PLAN.md) for execution order, the [package backlog](plan/ENTERPRISE_PRODUCTIZATION.md) for bounded implementation and the [UI standard](design/UI_QUALITY_STANDARD.md) for the whole-application quality contract. No new adapters or management journeys are implemented by this planning change.
+## Active work — not accepted
 
-## Current acceptance evidence
-
-- [ACCEPTANCE_MATRIX](ACCEPTANCE_MATRIX.md), [REL1-B4](REL1_B4_ACCEPTANCE.md) and [ZTK1](ZTK1_ACCEPTANCE.md) retain the original accepted heads/artifacts and live evidence. Later code does not automatically inherit those passes.
-- [PR #109](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/109), reviewed head `e3854d1e84230afb639cef4e3ed53a2ad515a203`, delivered the initial reviewed-action, policy-editor, source-setup, operator-pagination and mobile/readability corrections. It is **merged** as `bc8f02e5662378a6c954871c042233c635e43e63`. Its PR-tier CI passed; post-merge STANDARD should be recorded separately.
-- That candidate's [FAST CI run 38678716580](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38678716580) passed backend/frontend checks and three synthetic Chromium journeys. Live SSO/source/model acceptance was **NOT RUN for that change**.
-- New programme journeys in [ENTERPRISE_PRODUCT_ACCEPTANCE](qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md) are **NOT RUN**. Planning documents are not implementation evidence.
+- [Issue #111](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/111): EP-01 premium shared experience, component reuse and three product-plane journeys.
+- [PR #113](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/113): EP-01A prototypes at `ce7825950d97dcead97670aa38165bb3e6048b60`; **unmerged**. Latest exact-head FAST [38695599875](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38695599875) and STANDARD [38695596235](https://github.com/sjevans1/OpenJM-Enterprise-AI/actions/runs/38695596235) **FAILED** in Chromium component-dialog probes. Unit tests/build and backend jobs passed. The source comparison proposes Radix for its tested dialog pattern; no general component adoption has been accepted.
+- [#112](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/112) is a draft preliminary component survey; reconcile against #113's evidence, not a separate independent programme.
+- [#114](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/114) framework-version documentation, [#115](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/115) docs CI optimization and stacked [#116](https://github.com/sjevans1/OpenJM-Enterprise-AI/pull/116) CI workflow identities are **draft/unmerged**. Do not assume that their behavior is deployed.
 
 ## Next work
 
-1. EP-00: #109 is merged; confirm post-merge STANDARD and record the accepted correction baseline.
-2. EP-01: evaluate Watermelon UI and maintained accessible alternatives versus adapting existing code, prototype realistic interactions, approve the reuse ADR, shared primitives/tokens and three reference journeys; then EP-02/03 migrate every existing UI surface.
-3. Follow the explicit dependencies for governance, Knowledge intake, company setup, adapters and provider management. Resolve vendor/identity/publication decisions at the relevant package entry.
-4. Qualify the integrated candidate and handoff under EP-14. Keep implementation status and evidence truthful; merge/deploy only with explicit authority.
+1. Resolve the concrete #113 dialog probe failures at the actual head; prove keyboard, focus and accessible name/description behavior without loosening expected semantics. Qualify render and mock API behavior separately from production identity/data/model integration.
+2. Obtain explicit component decision and owner visual acceptance before EP-01B. Do not treat an ADR recommendation as adoption approval.
+3. Evaluate #112/#114–116 for duplication, stack order and maintenance cost; merge only approved, exact-head qualified work.
+4. Execute EP-01B shared tokens/primitives and EP-01C integrated journeys in bounded packages, then follow EP-02–14 dependency order.
 
-## Explicitly deferred
+Refer to [handoff](DEVELOPER_HANDOFF.md), [plan](PLAN.md), [blockers](BLOCKED.md), [enterprise scope](plan/ENTERPRISE_PRODUCTIZATION.md), [UI quality](design/UI_QUALITY_STANDARD.md) and [journey acceptance](qa/ENTERPRISE_PRODUCT_ACCEPTANCE.md).
 
-- Rahkia application cutover and production GPU/runtime qualification.
-- Per-object/table classification labels unless a concrete unsplittable mixed-sensitivity source requires them.
-- Implicit mode routing until it meets the established safety/quality bar.
-- Workspace implementation in this repository.
+## Explicitly deferred / not claimed
 
-Historical VS4 pilot checkpoints remain historical evidence and should not be interpreted as the live project state.
+- Rahkia application cutover and production GPU/model runtime qualification.
+- New real SQL Server, MinIO/S3 or individually selected ERP/warehouse connector support until qualified.
+- Implicit mode routing and expanded object/table classification without approved product decisions.
+- Workspace Platform implementation in this repository.
+- Customer-site live deployment, new release-artifact qualification and any new EP-01 journey not actually tested.
+
+Past pilot/checkpoint files are historical evidence and are not active team execution instructions.

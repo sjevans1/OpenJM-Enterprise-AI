@@ -339,7 +339,7 @@ def create_phoenix_protocol_md():
         "4. The marketing embargo is lifted at T+0 hours.",
         "",
         "## Contact",
-        "Launch Director: ops@qalo.io",
+        "Launch Director: launch@example.com",
         "Emergency: 911",
     ]
     (FIXTURE_DIR / "phoenix_launch_protocol.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

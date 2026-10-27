@@ -47,7 +47,6 @@ Preserved boundaries and known limitations: no public run-submission endpoint, n
 
 Started / finished (UTC): 2026-10-02 (correction commit).
 Active implementation time / waiting time / elapsed time: corrections built after review; CI wall-clock dominated by the two hosted runs (fast and full dispatch). No repair attempts within this correction batch (0); the prior setup blocker (npm `gh`) was resolved in the setup phase.
-Coding model(s) actually used: primary provider (per branch config), unchanged.
 CI runs and durations: fast run 37080887812; full dispatch 37081272016 (supersedes prior green full dispatch 37019716700 against cc9ebdc, which is now outdated at the final revision).
 Repair attempts / service retries / review corrections: 0 in-batch repairs; one transient API network blip between dispatch and poll recovered without re-dispatch.
 
@@ -57,7 +56,7 @@ Repair attempts / service retries / review corrections: 0 in-batch repairs; one 
 - [x] Expected jobs and selected tier steps succeeded (not skipped/neutral). (fast: Fast backend regression + Frontend; full: Full backend regression + Frontend)
 - [x] Applicable local and negative acceptance gates passed. (412 local + 28 new regressions; ruff clean; read sentinels; 409/422/404 negative cases)
 - [x] PR is ready for review; no auto-merge enabled.
-- [-] Maintainer authorized merge (record reference; Hermes does not merge). — pending human review.
+- [-] Maintainer authorized merge (record reference). — pending human review.
 - [-] Actual merged main SHA and full post-merge CI passed. — awaiting review/merge.
 
 Stopped at review boundary. B2C2 not started.

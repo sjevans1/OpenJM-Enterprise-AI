@@ -1,6 +1,6 @@
 # OpenJM Enterprise AI — Product Roadmap
 
-Planning snapshot: `main@b45ca8dad5fa79d12eba20fefd4d7d6c76df24b9` on 2026-10-15.
+Roadmap baseline: `main@8e09ab586113648f606b8927f22a8b444d3cb581`, checked 2026-10-26. Accepted EP-00 administration safety correction and roadmap documentation are on main; EP-01A prototypes, EP-01B/C and later enterprise packages are not accepted. See [Developer Handoff](DEVELOPER_HANDOFF.md) for current open PR dispositions.
 
 ## Current phase: enterprise workflows and consistent experience
 
@@ -14,7 +14,7 @@ The [active plan](PLAN.md) links the [bounded package backlog](plan/ENTERPRISE_P
 
 | Milestone | Outcome |
 | --- | --- |
-| M0 | Accept/reconcile the initial reviewed-action and workflow corrections in PR #109 |
+| M0 | Completed: PR #109 reviewed-action and administration workflow corrections merged, with main CI passed |
 | M1 | Shared premium experience across every existing UI surface, including mobile and failure states |
 | M2 | Versioned governance, tenant-wide resource lifecycle, policy-first Knowledge, real identity onboarding and resumable company setup |
 | M3 | Real SQL Server, MinIO/S3 and individually selected ERP/warehouse adapters with source-specific live qualification |

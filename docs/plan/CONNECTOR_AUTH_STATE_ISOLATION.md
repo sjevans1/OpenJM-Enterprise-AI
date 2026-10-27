@@ -3,7 +3,7 @@
 Plan revision: `connector-auth-1`
 Repository: **sjevans1/OpenJM-Enterprise-AI only**
 Base: `main` at `aacc9f2`
-Authorization: Shane Evans, 2026-10-11, direct owner directive (four decisions recorded below).
+Authorization: product owner, 2026-10-11, four decisions recorded below.
 Required CI: `Backend / Python 3.11` and `Frontend / Node 22`.
 
 ## Objective

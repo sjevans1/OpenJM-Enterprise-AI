@@ -15,7 +15,7 @@ Nothing here authorizes implementation. PR #94 remains draft under the owner int
 | CA1 prerequisite | merged as `a4e1e4f`, verified still in `main` history |
 | Retrieval stack | DB-GPT behind the OpenJM-owned interface, one Chroma collection per document, `sentence-transformers/all-MiniLM-L6-v2` |
 | Identity | own OIDC issuer/JWKS, Keycloak as reference; server-derived `Principal` |
-| Model layer | OpenAI-compatible gateway (Hermes / Ollama / vLLM) |
+| Model layer | OpenAI-compatible gateway (local/private serving such as Ollama or vLLM) |
 | Test environment | fixture-only, in-process, no network, no model calls, per the existing suite convention |
 | Fixture provider | the existing deterministic in-process connector provider pattern used by `tests/test_vs7_connector_security.py` |
 

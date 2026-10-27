@@ -6,7 +6,7 @@ Generated: 2026-10-06T20:54:55.136325+00:00
 
 - Workspace API base URL: http://127.0.0.1:4000
 - OpenJM base URL: http://127.0.0.1:8000
-- OpenJM DB path: /home/sjeva/.hermes/cache/scratch/vs7-live2/ojm.db
+- OpenJM DB: isolated disposable SQLite test database (operator-local path omitted from team-facing report)
 - Workspace git SHA: 9caa5e57b9b366b6c094c81ce9285986909235e1
 - OpenJM git SHA: c6f43e5db0b193380009d678ffd9a9d0f0394fb1 (branch feature/vs7-governed-connectors)
 - Marker v1: VS7-LIVE-MARKER-bb78ad98e439

@@ -11,7 +11,7 @@
         "metadata": {
           "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
           "Header2": "Executive Summary",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/long_report.md",
           "title": "long_report.md"
         },
         "content_len": 372,
@@ -24,7 +24,7 @@
         "metadata": {
           "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
           "Header2": "Market Dynamics",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/long_report.md",
           "title": "long_report.md"
         },
         "content_len": 337,
@@ -37,7 +37,7 @@
         "metadata": {
           "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
           "Header2": "Financial Performance",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/long_report.md",
           "title": "long_report.md"
         },
         "content_len": 426,
@@ -50,7 +50,7 @@
         "metadata": {
           "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
           "Header2": "Risk Assessment",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/long_report.md",
           "title": "long_report.md"
         },
         "content_len": 259,
@@ -63,7 +63,7 @@
         "metadata": {
           "Header1": "QALO Strategic Insights - Quarterly Report Q3 2024",
           "Header2": "Conclusion",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_report.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/long_report.md",
           "title": "long_report.md"
         },
         "content_len": 280,
@@ -85,7 +85,7 @@
         "metadata": {
           "Header1": "Project Atlas",
           "Header2": "Team Composition",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/heading_context.md",
           "title": "heading_context.md"
         },
         "content_len": 88,
@@ -98,7 +98,7 @@
         "metadata": {
           "Header1": "Project Atlas",
           "Header2": "Technical Stack",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/heading_context.md",
           "title": "heading_context.md"
         },
         "content_len": 102,
@@ -111,7 +111,7 @@
         "metadata": {
           "Header1": "Project Phoenix",
           "Header2": "Team Composition",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/heading_context.md",
           "title": "heading_context.md"
         },
         "content_len": 91,
@@ -124,7 +124,7 @@
         "metadata": {
           "Header1": "Project Phoenix",
           "Header2": "Technical Stack",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/heading_context.md",
           "title": "heading_context.md"
         },
         "content_len": 102,
@@ -137,7 +137,7 @@
         "metadata": {
           "Header1": "Project Orion",
           "Header2": "Team Composition",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/heading_context.md",
           "title": "heading_context.md"
         },
         "content_len": 87,
@@ -159,7 +159,7 @@
         "metadata": {
           "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
           "Header2": "Document Control",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
           "title": "phoenix_launch_protocol.md"
         },
         "content_len": 136,
@@ -172,7 +172,7 @@
         "metadata": {
           "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
           "Header2": "Launch Sequence Overview",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
           "title": "phoenix_launch_protocol.md"
         },
         "content_len": 327,
@@ -185,7 +185,7 @@
         "metadata": {
           "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
           "Header2": "Safety Protocol",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
           "title": "phoenix_launch_protocol.md"
         },
         "content_len": 267,
@@ -198,7 +198,7 @@
         "metadata": {
           "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
           "Header2": "Activation Criteria",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
           "title": "phoenix_launch_protocol.md"
         },
         "content_len": 273,
@@ -211,12 +211,12 @@
         "metadata": {
           "Header1": "PHOENIX Launch Protocol - Internal Distribution Only",
           "Header2": "Contact",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/phoenix_launch_protocol.md",
           "title": "phoenix_launch_protocol.md"
         },
         "content_len": 107,
-        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Contact\": Launch Director: ops@qalo.io\nEmergency: 911",
-        "content_tail": "\"PHOENIX Launch Protocol - Internal Distribution Only-Contact\": Launch Director: ops@qalo.io\nEmergency: 911"
+        "content_head": "\"PHOENIX Launch Protocol - Internal Distribution Only-Contact\": Launch Director: launch@example.com\nEmergency: 911",
+        "content_tail": "\"PHOENIX Launch Protocol - Internal Distribution Only-Contact\": Launch Director: launch@example.com\nEmergency: 911"
       }
     ],
     "chunk_count": 5
@@ -231,7 +231,7 @@
         "index": 0,
         "chunk_id": "8ccfbade-1c8f-4749-b9c7-fba5bc98e946",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/boundary_fact.txt"
         },
         "content_len": 508,
         "content_head": "This document contains general operational metadata for the quarterly review process. Each review is assigned a unique identifier that follows the pattern BR-NN",
@@ -241,7 +241,7 @@
         "index": 1,
         "chunk_id": "0924af1c-69c5-4d79-bbca-3bfac37250b4",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/boundary_fact.txt"
         },
         "content_len": 34,
         "content_head": "quarterly review ID is BR-7749-Q3.",
@@ -260,7 +260,7 @@
         "index": 0,
         "chunk_id": "201c56aa-f2aa-40fc-9b03-dafe2372e1db",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.docx"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/financial_table.docx"
         },
         "content_len": 479,
         "content_head": "Q3 2024 Financial Summary\n\nThe following financial highlights cover the period January through September 2024. Revenue exceeded expectations across all segments",
@@ -282,7 +282,7 @@
           "page": 1,
           "type": "excel",
           "title": "financial_table",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.pdf"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/financial_table.pdf"
         },
         "content_len": 263,
         "content_head": " KefirMango12.8%Medium  PPCrrooondjefuicdcteetndLcinReeOI Allfiguresarepreliminaryandsubjecttochange. ThisreportcoverstheQ32024ROIprojections. Q32024ProjectedRO",
@@ -304,7 +304,7 @@
           "page": 1,
           "type": "text",
           "title": "multi_page_report",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/multi_page_report.pdf"
         },
         "content_len": 281,
         "content_head": "RevenueforQ3wasJMD3,200,000. RevenueforQ2wasJMD2,800,000. RevenueforQ1wasJMD2,300,000. Eachprojecthasacodenameandadedicatedteam. Theorganisationhas15majorprojec",
@@ -317,7 +317,7 @@
           "page": 2,
           "type": "text",
           "title": "multi_page_report",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/multi_page_report.pdf"
         },
         "content_len": 232,
         "content_head": "IttargetstheKingstonmetropolitanmarket. ThePHOENIX-8822initiativewilllaunchinQ12025. -ProjectOrion:Planningphase -ProjectPHOENIX-8822:Inactivedevelopment -Proje",
@@ -330,7 +330,7 @@
           "page": 3,
           "type": "text",
           "title": "multi_page_report",
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/multi_page_report.pdf"
         },
         "content_len": 152,
         "content_head": "Forprojectdetailsseepages1and2. Noprojectcodenamesarelistedinthisappendix. AppendixC:ChangeLog AppendixB:ContactList AppendixA:Glossary Page3:Appendices",
@@ -349,7 +349,7 @@
         "index": 0,
         "chunk_id": "afa4cfca-acb6-43bb-b213-ab7285d8ed43",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/slide_context.pptx"
         },
         "content_len": 83,
         "content_head": "Q4 2024 Forecast ReviewThis presentation covers our Q4 projections and assumptions.",
@@ -359,7 +359,7 @@
         "index": 1,
         "chunk_id": "28fc6686-12f8-4801-a40c-7ea3c18fad73",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/slide_context.pptx"
         },
         "content_len": 63,
         "content_head": "Revenue OverviewTotal Q4 revenue is projected at JMD 3,500,000.",
@@ -369,7 +369,7 @@
         "index": 2,
         "chunk_id": "2d41e325-ed0c-415c-bc03-d0e8af7c872b",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/slide_context.pptx"
         },
         "content_len": 112,
         "content_head": "Customer Acquisition CostThe CAC ratio is 3.2 to 1, meaning we spend JMD 3.20 for every JMD 1.00 in new revenue.",
@@ -379,7 +379,7 @@
         "index": 3,
         "chunk_id": "e3860daa-e58a-4f26-bc11-a829ba3813c2",
         "metadata": {
-          "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx"
+          "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/slide_context.pptx"
         },
         "content_len": 63,
         "content_head": "ConclusionWe recommend proceeding with the Q4 plan as outlined.",

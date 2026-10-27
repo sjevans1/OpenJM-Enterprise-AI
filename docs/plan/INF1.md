@@ -1,14 +1,11 @@
 # INF1 delivery plan and acceptance gates
 
-Status: **architecture prepared; the agreed BV3 gate is closed, INF1 runtime implementation not started**.
+**Historical INF1 planning snapshot (2026-10-08), not current implementation status.** It records the scope and original gate before later INF1 milestones. Consult the [current status](../STATUS.md), [acceptance matrix](../ACCEPTANCE_MATRIX.md) and [handoff](../DEVELOPER_HANDOFF.md) before drawing conclusions about delivery; Rahkia application cutover remains separately deferred.
 Authority: [Issue #45 INF1 decision](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/45#issuecomment-6064270657),
 with commercial work under [Issue #46](https://github.com/sjevans1/OpenJM-Enterprise-AI/issues/46).
 
-Read the [architecture](../architecture/INF1_RAHKIA_SERVING_PLANE.md),
-[contract specification](../architecture/INF1_CONTRACTS.md) and
-[executor handoff](../INF1_EXECUTION_PROMPT.md). These documents are a reviewable
-proposal implementing the accepted direction; approval of this documentation
-does not mean any runtime acceptance case passed.
+Read the [architecture](../architecture/INF1_RAHKIA_SERVING_PLANE.md) and
+[contract specification](../architecture/INF1_CONTRACTS.md). These are dated design records, not a new runtime start authorization; acceptance must be read from its original execution evidence.
 
 ## Inspected baseline — 2026-10-08
 
@@ -43,7 +40,7 @@ flowchart TD
 Architecture preparation may be reviewed now. The BV3 integration and its
 required main regression are green at `18cabaa2`, so that precondition is met;
 runtime/schema changes still begin only when the start is explicitly authorized.
-Do not merge this package without Shane's explicit approval. Coordinate
+Do not merge this package without the designated product owner's explicit approval. Coordinate
 M2's read-only aggregation with A's attribution work; serialize changes to the
 same schema, usage-context or admin contract. Parallel work does not authorize
 competing migration heads or hidden integration debt.

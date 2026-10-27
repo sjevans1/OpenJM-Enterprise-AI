@@ -57,7 +57,7 @@ The browser communicates only with the OpenJM API.
                                     ▼
                     ┌────────────────────────────┐
                     │ Model Abstraction          │
-                    │ Hermes / Ollama / vLLM     │
+                    │ Ollama / vLLM / other     │
                     │ OpenAI-compatible endpoint │
                     └────────────────────────────┘
 ```

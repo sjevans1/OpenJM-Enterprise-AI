@@ -1,4 +1,19 @@
 .env
+# Local configuration and credentials — examples may be committed, values may not.
+.env.*
+!.env.example
+!.env.production.example
+!deploy/qa/.env.qa.example
+**/secrets/
+*.pem
+*.p12
+*.pfx
+*.key
+*.credentials
+tester-credentials
+db_password
+ops_token
+
 deploy/compose/secrets/
 .venv/
 .venv*/

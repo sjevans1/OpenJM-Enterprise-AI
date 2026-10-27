@@ -34,6 +34,6 @@ discovered architectural problem becomes a plan-change issue, not a last-minute
 rewrite or expansion into identity, migrations, Workspace or agents.
 
 After human-authorized merge, full main-push CI must pass before recording VS4
-accepted and closing parent checklists. Hermes may report this read-only result;
-it cannot merge, deploy or enable execution on an existing instance. Retain the
+accepted and closing parent checklists. The engineering team may report this read-only result;
+no unapproved workflow may merge, deploy or enable execution on an existing instance. Retain the
 single-dev-user, #6 lifecycle and #7 migration limitations explicitly.
