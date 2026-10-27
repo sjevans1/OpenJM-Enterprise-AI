@@ -27,7 +27,7 @@
       "heading_path": "Project Atlas > Team Composition",
       "document_id": "doc-heading-ctx",
       "next_chunk_id": "6c9227b6-1440-4afc-9abc-7c9fde5b0ab9",
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/heading_context.md",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/heading_context.md",
       "Header1": "Project Atlas",
       "ingestion_policy": "markdown_header_aware",
       "chunk_index": 0,
@@ -97,7 +97,7 @@
     ],
     "stored_metadata_sample": {
       "title": "multi_page_report",
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/multi_page_report.pdf",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/multi_page_report.pdf",
       "chunk_index": 0,
       "page_number": 1,
       "next_chunk_id": "47b1e131-e827-491e-88d3-f01b9a8b0575",
@@ -172,7 +172,7 @@
       "content_type": "text",
       "chunk_index": 0,
       "document_id": "doc-docx-table",
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.docx",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/financial_table.docx",
       "source_name": "financial_table.docx",
       "ingestion_policy": "docx_structure_preserve"
     },
@@ -227,7 +227,7 @@
       "ingestion_policy": "fallback_recursive_size_overlap",
       "next_chunk_id": "074a57d2-4c4e-44ce-b25f-4b11f1603408",
       "source_type": "document",
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/slide_context.pptx",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/slide_context.pptx",
       "slide_number": 1,
       "content_type": "text",
       "source_name": "slide_context.pptx",
@@ -290,7 +290,7 @@
       "type"
     ],
     "stored_metadata_sample": {
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/financial_table.pdf",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/financial_table.pdf",
       "content_type": "excel",
       "page": 1,
       "source_type": "document",
@@ -362,7 +362,7 @@
       "chunk_index": 0,
       "document_id": "doc-boundary-fact",
       "next_chunk_id": "b5104e86-e615-4234-a591-55074362965f",
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/boundary_fact.txt",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/boundary_fact.txt",
       "content_type": "text",
       "chunk_id": "c2758cd7-696f-48f7-ac8c-e19c0091a547",
       "source_name": "boundary_fact.txt",
@@ -416,7 +416,7 @@
       "source_type"
     ],
     "stored_metadata_sample": {
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/minimal_section.htm",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/minimal_section.htm",
       "source_type": "document",
       "chunk_id": "d5fe67ce-580b-4bcc-9fb8-bba4cdfaf884",
       "source_name": "minimal_section.htm",
@@ -483,7 +483,7 @@
       "title": "long_section.md",
       "source_name": "long_section.md",
       "chunk_id": "10fe971d-ed1a-49a4-98ea-b31ed86e3243",
-      "source": "/home/sjeva/openjm-enterprise-ai/backend/tests/fixtures/rag/long_section.md",
+      "source": "[REDACTED_CHECKOUT]/backend/tests/fixtures/rag/long_section.md",
       "Header1": "Long Single Section Report - Boundary Fact Investigation",
       "ingestion_policy": "markdown_header_aware",
       "source_type": "document"
