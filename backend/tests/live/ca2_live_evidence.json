@@ -34,7 +34,7 @@
     },
     {
       "environment": "scratch_path",
-      "value": "/home/sjeva/.hermes/cache/scratch/ca2-live"
+      "value": "[REDACTED_LOCAL_SCRATCH]/ca2-live"
     },
     {
       "environment": "embedding_model_cache_mb",
