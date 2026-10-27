@@ -53,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # are only visible where they are imported, which is why the other CA2 suites do the same.
 from test_vs7_connector_security import connector, provider  # noqa: E402,F401
 
-SCRATCH = Path(tempfile.mkdtemp(prefix="openjm-ca2-live-"))
+SCRATCH = Path(tempfile.gettempdir()) / f"openjm-ca2-live-{os.getpid()}"
 EVIDENCE_PATH = Path(__file__).with_name("ca2_live_evidence.json")
 
 # The phrase exists ONLY in the body of the document beyond the legacy window. No title and no
